@@ -104,7 +104,7 @@ Required environment variable names are documented in [docs/ARCHITECTURE.md](doc
 
 | Phase | Status |
 |-------|--------|
-| 0 — Requirements and Repository Foundation | In progress |
+| 0 — Requirements and Repository Foundation | Complete — awaiting review |
 | 1 — Project Scaffold and Early Deployment | Not started |
 | 2 — Database Schema and Migrations | Not started |
 | 3 — Authentication and Roles | Not started |
