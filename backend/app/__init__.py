@@ -1,0 +1,1 @@
+"""TrustVault FastAPI application package."""

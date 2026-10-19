@@ -253,3 +253,15 @@ graph TB
 | Stolen access token valid until expiry | Medium | Short TTL; consider token binding |
 | Credential stuffing without MFA | Medium | Evaluate MFA |
 | Application-level DoS | Medium | Rate limits, provider protections |
+
+---
+
+## 7. Phase 1 Implementation Notes (Verified)
+
+These notes record what is actually implemented in the Phase 1 scaffold. Planned mitigations elsewhere in this document are not active yet.
+
+- **CORS is configuration-driven.** Origins come from `CORS_ALLOWED_ORIGINS`; wildcards are rejected outside development. Automated tests confirm allowed origins receive CORS headers and untrusted origins do not.
+- **The health endpoint exposes no configuration.** `GET /health` returns only `status`, `service`, and `version`. It performs a process-level check and does **not** query PostgreSQL or Wasabi. A test asserts that configuration markers are absent.
+- **No authorization exists yet.** Authentication, document access, permissions, and audit persistence are not implemented in Phase 1. The threat mitigations that depend on them are planned, not verified.
+- **No production security headers yet.** CSP and HSTS are planned for Phase 10 deployment hardening.
+

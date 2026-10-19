@@ -61,6 +61,8 @@ docs: define TrustVault requirements and architecture
 
 ## Phase 1: Project Scaffold and Early Deployment
 
+**Status:** Complete — awaiting review. Verified locally; no live deployment was performed.
+
 **Objectives**
 Create the frontend and backend scaffolds, configure build tooling, and deploy empty shells to Vercel and Render to prove the deployment pipeline before feature work.
 

@@ -47,3 +47,38 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 - **Commit hash:** `87cea0ee21f5606871ba0183e3602ffd94974a35`
 - **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/87cea0ee21f5606871ba0183e3602ffd94974a35
 - **Human review and decision:** Awaiting human review and Phase 0 approval. Phase 1 must not begin until approval is given.
+
+---
+
+## 2026-10-19 — Phase 1: Application Scaffold, Tooling, Tests, and Deployment Preparation
+
+- **Date and phase:** 2026-10-19 — Phase 1 (Project Scaffold and Early Deployment)
+- **Objective:** Build the initial React/TypeScript/Vite frontend and FastAPI backend skeletons, establish development tooling and automated checks, prepare Vercel and Render configuration, and verify everything locally without implementing future-phase functionality.
+- **Prompt / instruction summary:** The human approved Phase 1 and provided a master prompt instructing the AI agent to act as a senior full-stack, FastAPI, React/TypeScript, DevOps, and application security engineer. Scope: create the frontend skeleton with React Router, Axios, Tailwind, shadcn/ui, React Hook Form, and Zod; create placeholder Login, Dashboard, Documents, and Not Found pages; centralize the Axios client behind `VITE_API_BASE_URL`; create a FastAPI skeleton with `GET /health`, CORS from settings, and OpenAPI docs; pin reproducible backend dependencies; add pytest tests for health, secret exposure, unknown routes, docs, and CORS; update documentation; and prepare Vercel/Render configuration. Explicitly excluded: database schema, authentication, documents, storage, permissions, audit persistence, and fake security features. Commit message: `chore: scaffold TrustVault application`.
+- **Files or code produced:**
+  - Frontend: Vite React/TypeScript scaffold under `frontend/`; Tailwind CSS v4 with the Vite plugin and shadcn/ui configuration (`components.json`, `cn`, Button/Card/Input primitives); React Router routes for `/login`, `/dashboard`, `/documents`, a root redirect, and a 404 page; centralized Axios client with configuration guard and consistent error extraction; React Hook Form + Zod login placeholder; responsive layout and branding; `vercel.json` SPA rewrites; `.env.example`.
+  - Backend: FastAPI application factory under `backend/app/` with `main.py`, `api/`, `core/`, `schemas/`, and `services/`; `GET /health` (process-only); settings via pydantic-settings; environment-driven CORS that rejects wildcards outside development; JSON error envelope for HTTP and validation errors; OpenAPI enabled; pinned `requirements.txt` / `requirements-dev.txt`; `.env.example`; `pytest.ini`.
+  - Tests: 7 backend tests across `tests/test_health.py` and `tests/test_cors.py`.
+  - Deployment: `render.yaml` for Render; Vercel configuration in `frontend/vercel.json`.
+  - Documentation: updated `README.md`, `docs/IMPLEMENTATION_PLAN.md` (Phase 1 status only), `THREATS.md` (verified Phase 1 notes), and this entry.
+- **Tests and verification performed:**
+  - `npm run typecheck` — passed.
+  - `npm run lint` (oxlint) — 0 warnings, 0 errors after restructuring button variants.
+  - `npm run build` — passed (TypeScript project build plus Vite production build).
+  - `pytest` — 7 passed. A Starlette deprecation warning recommends `httpx2`; it did not fail any test and was not hidden.
+  - Clean-environment check — created a temporary virtual environment outside the repository, installed `requirements-dev.txt`, and ran `pytest`: 7 passed.
+  - Live process check — started Uvicorn on `127.0.0.1:8123`; `/health` returned `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`, and `/docs` and `/openapi.json` returned HTTP 200.
+  - Not performed: Vercel/Render deployment (no deployment authorization or credentials were provided), database/storage checks (not implemented), and cross-user authorization tests (authentication does not exist).
+- **Issues discovered:**
+  - `@hookform/resolvers` v6 introduced an npm peer-dependency conflict involving `effect` and Zod. The dependency was removed rather than forcing an incompatible tree; the login placeholder validates with Zod `safeParse` and React Hook Form `setError`.
+  - TypeScript 7 removed the `baseUrl` compiler option, which broke the initial path alias configuration.
+  - Oxlint warned that `button.tsx` exported both a component and the `buttonVariants` constant, which affects React Fast Refresh.
+  - Starlette 1.9 emits a deprecation warning about using `httpx` with its TestClient.
+- **Corrections made:**
+  - Removed `@hookform/resolvers` and implemented explicit Zod validation in the login placeholder.
+  - Removed `baseUrl` and kept `paths` relative to `tsconfig.app.json`, which TypeScript 7 supports.
+  - Moved `buttonVariants` into `button-variants.ts` and updated consumers; lint now reports zero warnings.
+  - Left the Starlette warning visible and reported it rather than suppressing it or weakening tests.
+- **Commit hash:** pending
+- **GitHub link:** pending
+- **Human review and decision:** Awaiting human review and Phase 1 approval. Phase 2 must not begin until approval is given.

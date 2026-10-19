@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TrustVault shield">
+  <rect width="64" height="64" rx="14" fill="#0f766e"/>
+  <path d="M32 12l14 5v11c0 10-5.8 17.9-14 21-8.2-3.1-14-11-14-21V17l14-5z" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M25.5 31.5l4.6 4.6 9-9" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
