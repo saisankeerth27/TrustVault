@@ -98,33 +98,37 @@ feat: scaffold frontend and backend with early deployment
 
 ## Phase 2: Database Schema and Migrations
 
+**Status:** Complete — awaiting review. Verified against an isolated local PostgreSQL instance. The migration has **not** been applied to the Supabase project.
+
 **Objectives**
-Design and implement the relational schema with SQLAlchemy 2.x models and Alembic migrations. Prepare RLS policy scripts.
+Design and implement the relational schema with SQLAlchemy 2.x models and an Alembic migration, plus a connection/session module. Document the RLS strategy without enabling policies before authentication exists.
 
 **Deliverables**
-- SQLAlchemy models: `users`, `documents`, `document_permissions`, `audit_logs`, `categories`, `refresh_tokens`.
-- Alembic configuration and initial migration.
-- RLS policy SQL scripts (applied in later phases/deployment).
-- Database connection/session management module.
+- SQLAlchemy models: `users`, `documents`, `document_permissions`, `audit_events` (`docs/DATABASE.md`).
+- Alembic configuration (`backend/alembic.ini`, `backend/alembic/env.py`) and the initial migration `0001_initial_schema`.
+- Database connection/session module (`backend/app/db/`): URL normalization, lazy engine, session factory, FastAPI dependency.
+- RLS strategy documented in `docs/ARCHITECTURE.md` and `docs/DATABASE.md`. Policy scripts are deferred because RLS policy design depends on the Phase 3 authentication model.
+- `categories` and `refresh_tokens` tables are intentionally deferred: category is a nullable column on `documents` for now, and refresh tokens belong to Phase 3.
 
 **Dependencies**
 - Phase 1 approved.
 
 **Acceptance Criteria**
-- `alembic upgrade head` applies cleanly against a fresh database.
-- `alembic downgrade base` reverts cleanly.
-- Schema matches the architecture document (tables, keys, constraints, indexes).
-- Foreign keys and uniqueness constraints enforced (e.g., one permission per user/document pair).
-- Audit log table has no application-level update/delete path.
+- `alembic upgrade head` applies cleanly against a fresh PostgreSQL database.
+- `alembic downgrade base` reverts cleanly, and re-upgrading succeeds.
+- `alembic check` reports no drift between the migration and the SQLAlchemy metadata.
+- Foreign keys, check constraints, and partial unique indexes are enforced (for example, only one active permission per user/document pair).
+- `audit_events` has no application-level update/delete path; deletion of users/documents nulls audit references instead of removing history.
 
 **Tests**
-- Migration up/down test.
-- Model/schema validation test.
-- Constraint tests (duplicate permission rejected, cascade behavior verified).
+- Migration upgrade/`alembic check`/downgrade/re-upgrade test against a fresh database.
+- Model/schema validation tests for tables, columns, and indexes.
+- Constraint tests: unique email, normalized email, valid owner FK, non-negative file size, internal storage key, valid permission values, duplicate active grant rejected, regrant after revocation preserves history, audit retention via `ON DELETE SET NULL`, JSON object enforcement, hash format validation.
+- Database URL normalization and Supabase pooler/SSL detection tests.
 
 **Suggested Commit Message**
 ```
-feat: implement database schema and Alembic migrations
+feat(db): implement database schema and migrations
 ```
 
 ---

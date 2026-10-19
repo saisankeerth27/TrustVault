@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,17 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
     cors_allowed_origins: str = "http://localhost:5173"
+    database_url: str | None = None
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def empty_database_url_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
 
     @property
     def cors_origins(self) -> list[str]:

@@ -5,6 +5,8 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
+    # Apply migrations with `alembic upgrade head` from a trusted shell before or
+    # after deploys. Migrations are not run automatically at startup.
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -14,3 +16,9 @@ services:
         value: INFO
       - key: CORS_ALLOWED_ORIGINS
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "10"

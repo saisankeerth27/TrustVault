@@ -265,3 +265,18 @@ These notes record what is actually implemented in the Phase 1 scaffold. Planned
 - **No authorization exists yet.** Authentication, document access, permissions, and audit persistence are not implemented in Phase 1. The threat mitigations that depend on them are planned, not verified.
 - **No production security headers yet.** CSP and HSTS are planned for Phase 10 deployment hardening.
 
+---
+
+## 8. Phase 2 Implementation Notes (Verified)
+
+These notes record what the Phase 2 schema does and does not enforce. Planned mitigations elsewhere remain planned unless listed here.
+
+- **Schema constraints are enforced by PostgreSQL.** Unique, check, and partial-unique indexes are applied by the initial Alembic migration and exercised by tests against a real PostgreSQL instance. See `docs/DATABASE.md`.
+- **RLS is not enabled.** The backend connects with a single privileged database role that bypasses Row-Level Security, and policy design depends on the Phase 3 authentication model. Authorization is therefore **not** yet provided by the database, and Phase 2 must not be described as RLS-complete.
+- **Audit history is retained, not yet written.** `audit_events.actor_id` and `audit_events.document_id` use `ON DELETE SET NULL` so deleting a user or document preserves the event with its action and details. No application code writes audit rows yet (Phase 7), and the `event_hash`/`previous_hash` columns are not populated by any trust boundary yet.
+- **Audit immutability is not database-enforced.** A database immutability trigger or revoke-based policy would conflict with the `ON DELETE SET NULL` foreign keys and with the application-level design, so it is deferred to Phase 7 alongside the write path and hash-chain verification.
+- **Deletion semantics are deliberate.** `documents.owner_id` uses `ON DELETE RESTRICT`, `document_permissions` cascades from documents/users, and `documents.deleted_at` provides soft deletion. These choices are documented in `docs/DATABASE.md`.
+- **Only sanitized placeholders are committed.** `backend/.env.example` contains placeholders; `DATABASE_URL` is supplied through the environment. No production connection string or credential is stored in the repository, and the Phase 2 migration was never run against production.
+
+**Residual risk after Phase 2:** Medium, unchanged for authorization. The database is prepared but no access control path exists until Phase 3; database-level defense in depth is deferred.
+

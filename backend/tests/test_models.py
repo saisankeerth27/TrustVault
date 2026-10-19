@@ -1,0 +1,67 @@
+from app.db.base import Base
+from app.models import AuditEvent, Document, DocumentPermission, User  # noqa: F401
+
+
+def test_all_core_tables_are_registered() -> None:
+    assert set(Base.metadata.tables) == {
+        "users",
+        "documents",
+        "document_permissions",
+        "audit_events",
+    }
+
+
+def test_users_columns_and_uniqueness() -> None:
+    table = Base.metadata.tables["users"]
+
+    assert set(table.columns.keys()) == {
+        "id",
+        "name",
+        "email",
+        "password_hash",
+        "role",
+        "status",
+        "created_at",
+        "updated_at",
+    }
+    assert any(
+        constraint.name == "uq_users_email"
+        for constraint in table.constraints
+    )
+
+
+def test_documents_columns_and_constraints() -> None:
+    table = Base.metadata.tables["documents"]
+
+    assert {"owner_id", "storage_key", "checksum", "deleted_at"} <= set(
+        table.columns.keys()
+    )
+    constraint_names = {constraint.name for constraint in table.constraints}
+    assert "ck_documents_file_size_nonnegative" in constraint_names
+    assert "ck_documents_storage_key_not_url" in constraint_names
+
+    index_names = {index.name for index in table.indexes}
+    assert {
+        "ix_documents_owner_id",
+        "ix_documents_category",
+        "ix_documents_created_at",
+        "ix_documents_name_trgm",
+        "ix_documents_owner_active",
+    } <= index_names
+
+
+def test_permissions_prevent_duplicate_active_grants() -> None:
+    table = Base.metadata.tables["document_permissions"]
+    unique_indexes = {index.name for index in table.indexes if index.unique}
+
+    assert "uq_document_permissions_active" in unique_indexes
+
+
+def test_audit_events_use_set_null_foreign_keys() -> None:
+    table = Base.metadata.tables["audit_events"]
+    foreign_keys = {
+        fk.parent.name: fk.ondelete for fk in table.foreign_key_constraints for fk in fk.elements
+    }
+
+    assert foreign_keys["actor_id"] == "SET NULL"
+    assert foreign_keys["document_id"] == "SET NULL"
