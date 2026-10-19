@@ -115,6 +115,6 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Rewrote `docs/ARCHITECTURE.md` to describe the synchronous psycopg 3 implementation, the four real tables, the deferred `categories`/`refresh_tokens` tables, and the fact that RLS is not enabled; added `docs/DATABASE.md` for full schema detail.
   - Kept audit immutability out of the database on purpose (it would conflict with retention foreign keys), documenting the deferral to Phase 7.
   - Ensured only placeholder values were committed and no credential appears in any staged or generated file.
-- **Commit hash:** pending
-- **GitHub link:** pending
+- **Commit hash:** `f85c6633154dc08af547e184dc9a31f56d914c10`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/f85c6633154dc08af547e184dc9a31f56d914c10
 - **Human review and decision:** Awaiting human review and Phase 2 approval. Phase 3 must not begin until approval is given.
