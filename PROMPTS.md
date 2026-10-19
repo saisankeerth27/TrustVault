@@ -79,6 +79,6 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Removed `baseUrl` and kept `paths` relative to `tsconfig.app.json`, which TypeScript 7 supports.
   - Moved `buttonVariants` into `button-variants.ts` and updated consumers; lint now reports zero warnings.
   - Left the Starlette warning visible and reported it rather than suppressing it or weakening tests.
-- **Commit hash:** pending
-- **GitHub link:** pending
+- **Commit hash:** `73bb4c5862305f24158aa41792f183a7d170eb2b`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/73bb4c5862305f24158aa41792f183a7d170eb2b
 - **Human review and decision:** Awaiting human review and Phase 1 approval. Phase 2 must not begin until approval is given.
