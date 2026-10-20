@@ -1,4 +1,4 @@
-import { FileText, LayoutDashboard, LogOut, ShieldCheck } from 'lucide-react'
+import { FileText, LayoutDashboard, LogOut, Share2, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
@@ -10,6 +10,7 @@ import { formatRole } from '@/lib/roles'
 const baseNavItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/documents', label: 'Documents', icon: FileText },
+  { to: '/shared-with-me', label: 'Shared', icon: Share2 },
 ]
 
 const adminNavItem = { to: '/admin', label: 'Admin', icon: ShieldCheck }
@@ -89,8 +90,8 @@ export function AppLayout() {
 
       <footer className="border-t bg-muted/40">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <p>TrustVault &mdash; Phase 5 document management</p>
-          <p>Per-document permissions, audit history, and sharing arrive in later phases.</p>
+          <p>TrustVault &mdash; Phase 6 named-user permissions</p>
+          <p>Audit history and immutable event tracking arrive in Phase 7.</p>
         </div>
       </footer>
     </div>

@@ -221,7 +221,7 @@ feat(storage): implement secure document uploads
 
 ## Phase 5: Document Management and Search
 
-**Status:** Complete - awaiting review. Verified locally with a mocked Wasabi adapter; live download and object-deletion behavior was **not** verified because no credentials were supplied.
+**Status:** Complete — approved. Verified locally with a mocked Wasabi adapter; live download and object-deletion behavior was **not** verified because no credentials were supplied.
 
 **Objectives**
 Implement document listing, metadata editing, categorization, search, proxied download, and soft deletion with ownership/role scoping.
@@ -260,35 +260,41 @@ feat(documents): implement document management and search
 
 ## Phase 6: Document Permissions and Revocation
 
+**Status:** Complete — awaiting review. Verified locally with 146 backend tests and frontend lint/build; live Wasabi behavior remains unverified.
+
 **Objectives**
-Implement per-document, per-user READ/EDIT grants with owner/admin control and immediate revocation enforced on every endpoint.
+Implement named-user, per-document READ/EDIT grants with owner-only management and immediate revocation enforced on every document endpoint.
 
 **Deliverables**
-- Permission grant endpoint.
-- Permission revocation endpoint.
-- Permission listing endpoint.
-- Reusable authorization dependency used by all document endpoints.
+- Document-scoped permission grant, list, update, and revoke endpoints.
+- Shared-with-me listing endpoint.
+- Reusable centralized access checker used by all document endpoints.
+- Access-level reporting (`OWNER`, `EDIT`, `READ`, `ADMINISTRATOR`) in document responses.
+- Revoke-and-regrant level changes with retained history.
 - Immediate-effect enforcement (no stale permission caching).
+- Frontend shared-documents view, access-level badges, and owner-only permission manager.
 
 **Dependencies**
 - Phase 5 approved.
 
 **Acceptance Criteria**
-- Owners (and admins) can grant READ or EDIT to named users.
-- EDIT implies READ.
-- Only owners/admins can manage permissions; others receive 403.
-- Revocation takes effect on the very next request.
+- Owners grant READ or EDIT to active registered users by email and manage permissions only on their own documents.
+- EDIT implies READ; READ/EDIT cannot delete or manage permissions.
+- Administrators receive metadata oversight but no automatic content or mutation access.
+- Same-level grants are idempotent; conflicts return 409; cross-document permission IDs return 404.
+- Revocation takes effect on the very next request and remains visible as history.
 - All document endpoints enforce permissions independently of the frontend.
 
 **Tests**
-- Grant/revoke integration tests.
-- Immediate revocation test.
-- Non-owner permission-management denial tests.
-- Cross-user access tests for read/edit.
+- Grant/list/update/revoke integration tests, including history retention.
+- Immediate revocation and regrant tests.
+- Non-owner, cross-document, anonymous, and forged-identity denial tests.
+- READ/EDIT/administrator capability boundary tests.
+- Shared-listing exclusion tests for revoked and deleted documents.
 
 **Suggested Commit Message**
 ```
-feat: implement per-document permissions with immediate revocation
+feat(permissions): implement document access grants and revocation
 ```
 
 ---

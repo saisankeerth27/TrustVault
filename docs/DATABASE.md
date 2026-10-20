@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2 and 3 and used by the Phase 4 upload and Phase 5 document-management pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
+This document describes the PostgreSQL schema implemented across Phases 2 and 3 and used by the Phase 4 upload, Phase 5 document-management, and Phase 6 permission pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, and document list/update/soft-delete operations exist; document permission endpoints and the audit writer do not. Phase 5 adds no migration. Migrations have **not** been applied to the Supabase project.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, and owner-managed READ/EDIT grants exist; the audit writer does not. Phase 6 adds no migration. Migrations have **not** been applied to the Supabase project.
 
 ## Entity Relationships
 
@@ -135,7 +135,7 @@ erDiagram
 
 **Phase 4 metadata writes.** The upload service populates `owner_id` from the authenticated session, `name` from validated user metadata, `storage_key` from the generated key, `mime_type` from validated content, `file_size` from the received bytes, and `checksum` from the backend-computed SHA-256. Empty files are rejected, so uploads are positive-size. Upload is object-first then metadata; if the metadata commit fails, object deletion is attempted best-effort. There is no schema change or distributed transaction.
 
-**Phase 5 metadata writes.** Owner-only updates may change `name`, `category`, and `description`; `updated_at` is maintained by the database. Soft delete sets `deleted_at`. Ownership, storage key, MIME type, size, checksum, and creation time are never client-updatable. Listing/search uses the existing indexes plus the trigram index; no migration is required.
+**Phase 6 metadata writes.** Owners and EDIT recipients may change `name`, `category`, and `description`; `updated_at` is maintained by the database. Soft delete sets `deleted_at`. Ownership, storage key, MIME type, size, checksum, and creation time are never client-updatable. Listing/search and shared-document queries use the existing indexes plus the trigram index; no migration is required.
 
 **Indexes:**
 
@@ -171,7 +171,7 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 
 **Deletion semantics.** `document_id` and `user_id` cascade — if a document or user is hard-deleted, its grants are removed. `granted_by` uses `SET NULL` so the grant survives the deletion of the granting user, with attribution intentionally dropped rather than the row being removed.
 
-`EDIT` implies `READ`; that relationship is enforced in application logic (Phase 6), not in the schema.
+`EDIT` implies `READ`; that relationship is enforced by the centralized access policy in `app/services/document_access.py`, not by a database constraint. Phase 6 uses this table for owner-managed grants and keeps revocation history.
 
 **Indexes:** `ix_document_permissions_document_id`, `ix_document_permissions_user_id`, the partial unique `uq_document_permissions_active`, a partial `ix_document_permissions_active_user` for "documents shared with me" queries, and `ix_document_permissions_history` on `(document_id, created_at)`.
 
@@ -249,7 +249,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 127 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 146 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
 
 Run the suite:
 

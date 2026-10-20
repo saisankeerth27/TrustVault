@@ -7,11 +7,11 @@ import {
   Plus,
   RefreshCw,
   Search,
-  ShieldAlert,
   X,
 } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
+import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
 import { UploadDocumentPanel } from '@/components/documents/UploadDocumentPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
@@ -163,12 +163,12 @@ export function DocumentsPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 5"
+        eyebrow="Phase 6"
         title="Document library"
         description={
           canUpload
-            ? 'Search, filter, inspect, download, and manage documents you are authorized to access. The backend enforces ownership and role checks on every request.'
-            : 'Your account can sign in but cannot upload or manage documents. Documents assigned through per-document permissions will appear here after that workflow is implemented.'
+            ? 'Search, filter, inspect, download, and manage documents you own or that have been shared with you. Permission changes are enforced by the backend on every request.'
+            : 'Documents shared directly with your account appear here. READ grants allow viewing and downloads; EDIT grants also allow metadata updates.'
         }
         actions={
           canUpload ? (
@@ -194,23 +194,6 @@ export function DocumentsPage() {
           ) : undefined
         }
       />
-
-      {!canUpload ? (
-        <Card>
-          <CardContent className="flex flex-col items-start gap-4 px-6 py-8">
-            <span className="flex size-12 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-              <ShieldAlert className="size-6" aria-hidden="true" />
-            </span>
-            <div className="space-y-2">
-              <h2 className="text-lg font-semibold tracking-tight">Viewer access</h2>
-              <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-                Viewer accounts have no document-management permissions in the current phase.
-                Per-document sharing and revocation arrive in Phase 6.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
 
       {showUpload && canUpload ? (
         <UploadDocumentPanel
@@ -242,8 +225,8 @@ export function DocumentsPage() {
               <h2 className="text-lg font-semibold tracking-tight">Browse documents</h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 {user?.role === 'ADMINISTRATOR'
-                  ? 'Administrator accounts can review metadata across the library. Downloading, editing, and deleting remain owner-only.'
-                  : 'You can see metadata for documents you own.'}
+                  ? 'Administrator accounts can review metadata across the library. Content access still requires an explicit READ or EDIT grant from the owner.'
+                  : 'You can see documents you own and documents shared directly with your account.'}
               </p>
             </div>
             {hasFilters ? (
@@ -417,7 +400,7 @@ export function DocumentsPage() {
                     ? 'Adjust the search, category, or date filters and try again.'
                     : canUpload
                       ? 'Upload your first document to start building the library.'
-                      : 'No documents are currently visible to your account.'}
+                      : 'No documents have been shared with your account yet.'}
                 </p>
               </div>
               {hasFilters ? (
@@ -428,7 +411,7 @@ export function DocumentsPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-sm">
+              <table className="w-full min-w-[860px] text-sm">
                 <thead className="border-b bg-muted/40 text-left text-xs tracking-wide text-muted-foreground uppercase">
                   <tr>
                     <th scope="col" className="px-6 py-3 font-medium">
@@ -439,6 +422,9 @@ export function DocumentsPage() {
                     </th>
                     <th scope="col" className="px-4 py-3 font-medium">
                       Owner
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Your access
                     </th>
                     <th scope="col" className="px-4 py-3 font-medium">
                       Size
@@ -482,6 +468,9 @@ export function DocumentsPage() {
                         {documentRecord.owner_id === user?.id ? (
                           <span className="text-xs text-muted-foreground">You</span>
                         ) : null}
+                      </td>
+                      <td className="px-4 py-4">
+                        <AccessLevelBadge accessLevel={documentRecord.access_level} />
                       </td>
                       <td className="px-4 py-4 text-muted-foreground">
                         {formatBytes(documentRecord.file_size)}

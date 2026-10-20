@@ -65,17 +65,55 @@ export function formatDate(value) {
       })
 }
 
+export const ACCESS_LEVEL_META = {
+  OWNER: {
+    label: 'Owner',
+    shortLabel: 'Owner',
+    description: 'Full control, including sharing and deletion.',
+    tone: 'bg-primary/10 text-primary ring-primary/20',
+  },
+  EDIT: {
+    label: 'Can edit',
+    shortLabel: 'Edit',
+    description: 'Can view, download, and update document metadata.',
+    tone: 'bg-sky-50 text-sky-800 ring-sky-200',
+  },
+  READ: {
+    label: 'Can view',
+    shortLabel: 'View',
+    description: 'Can view metadata and download the document.',
+    tone: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  },
+  ADMINISTRATOR: {
+    label: 'Metadata only',
+    shortLabel: 'Metadata',
+    description: 'Administrator oversight without access to document content.',
+    tone: 'bg-amber-50 text-amber-900 ring-amber-200',
+  },
+}
+
 export function isDocumentManager(user) {
   return user?.role === 'ADMINISTRATOR' || user?.role === 'DOCUMENT_OWNER'
 }
 
-export function canManageDocument(user, documentRecord) {
-  return Boolean(
-    user?.id &&
-      documentRecord?.owner_id &&
-      user.id === documentRecord.owner_id &&
-      isDocumentManager(user),
-  )
+export function accessLevelOf(documentRecord) {
+  return documentRecord?.access_level ?? null
+}
+
+export function canReadDocument(documentRecord) {
+  return ['OWNER', 'EDIT', 'READ'].includes(accessLevelOf(documentRecord))
+}
+
+export function canEditDocument(documentRecord) {
+  return ['OWNER', 'EDIT'].includes(accessLevelOf(documentRecord))
+}
+
+export function canDeleteDocument(documentRecord) {
+  return accessLevelOf(documentRecord) === 'OWNER'
+}
+
+export function canManageDocumentPermissions(documentRecord) {
+  return accessLevelOf(documentRecord) === 'OWNER'
 }
 
 export function categoryChoices(currentCategory) {

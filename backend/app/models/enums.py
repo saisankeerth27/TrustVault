@@ -19,6 +19,15 @@ class PermissionLevel(StrEnum):
     EDIT = "EDIT"
 
 
+class DocumentAccessLevel(StrEnum):
+    """Effective access resolved for a user on a specific document."""
+
+    OWNER = "OWNER"
+    EDIT = "EDIT"
+    READ = "READ"
+    ADMINISTRATOR = "ADMINISTRATOR"
+
+
 class AuditOutcome(StrEnum):
     SUCCESS = "SUCCESS"
     DENIED = "DENIED"
@@ -37,5 +46,6 @@ class AuditAction(StrEnum):
     DOCUMENT_EDIT = "DOCUMENT_EDIT"
     DOCUMENT_DELETE = "DOCUMENT_DELETE"
     PERMISSION_GRANTED = "PERMISSION_GRANTED"
+    PERMISSION_UPDATED = "PERMISSION_UPDATED"
     PERMISSION_REVOKED = "PERMISSION_REVOKED"
     ACCESS_DENIED = "ACCESS_DENIED"

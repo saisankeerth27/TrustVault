@@ -10,8 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.document import Document
-from app.models.enums import UserRole
+from app.models.document_permission import DocumentPermission
 from app.models.user import User
+from app.services.document_access import annotate_access_levels, visible_document_scope
 from app.services.storage import (
     StorageConfigurationError,
     StorageObjectNotFoundError,
@@ -96,12 +97,6 @@ def store_document(
     return document
 
 
-def _visible_scope(user: User) -> list:
-    if user.role == UserRole.ADMINISTRATOR.value:
-        return []
-    return [Document.owner_id == user.id]
-
-
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -120,7 +115,7 @@ def list_documents(
     sort_by: str,
     order: str,
 ) -> tuple[list[Document], int]:
-    conditions = [Document.deleted_at.is_(None), *_visible_scope(user)]
+    conditions = [Document.deleted_at.is_(None), *visible_document_scope(user)]
 
     if q:
         conditions.append(
@@ -161,41 +156,46 @@ def list_documents(
             .limit(page_size)
         ).all()
     )
+    annotate_access_levels(session, user=user, documents=documents)
     return documents, int(total or 0)
 
 
-def get_visible_document(
+def list_shared_documents(
     session: Session,
     *,
     user: User,
-    document_id: UUID,
-) -> Document | None:
-    return session.scalar(
-        select(Document)
-        .where(
-            Document.id == document_id,
-            Document.deleted_at.is_(None),
-            *_visible_scope(user),
-        )
-        .options(selectinload(Document.owner))
+    page: int,
+    page_size: int,
+    sort_by: str,
+    order: str,
+) -> tuple[list[Document], int]:
+    conditions = [
+        Document.deleted_at.is_(None),
+        DocumentPermission.user_id == user.id,
+        DocumentPermission.revoked_at.is_(None),
+    ]
+    total = session.scalar(
+        select(func.count())
+        .select_from(Document)
+        .join(DocumentPermission, DocumentPermission.document_id == Document.id)
+        .where(*conditions)
     )
+    sort_column = _SORT_COLUMNS[sort_by]
+    direction = sort_column.asc() if order == "asc" else sort_column.desc()
 
-
-def get_owned_document(
-    session: Session,
-    *,
-    user: User,
-    document_id: UUID,
-) -> Document | None:
-    return session.scalar(
-        select(Document)
-        .where(
-            Document.id == document_id,
-            Document.owner_id == user.id,
-            Document.deleted_at.is_(None),
-        )
-        .options(selectinload(Document.owner))
+    documents = list(
+        session.scalars(
+            select(Document)
+            .join(DocumentPermission, DocumentPermission.document_id == Document.id)
+            .where(*conditions)
+            .options(selectinload(Document.owner))
+            .order_by(direction, Document.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
     )
+    annotate_access_levels(session, user=user, documents=documents)
+    return documents, int(total or 0)
 
 
 def update_document_metadata(

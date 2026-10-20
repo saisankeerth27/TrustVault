@@ -27,23 +27,44 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_roles
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models.enums import UserRole
+from app.models.document_permission import DocumentPermission
+from app.models.enums import DocumentAccessLevel, UserRole
 from app.models.user import User
 from app.schemas.document import (
     DocumentListResponse,
     DocumentResponse,
     DocumentUpdate,
+    PermissionGrantRequest,
+    PermissionListResponse,
+    PermissionResponse,
+    PermissionUpdateRequest,
+)
+from app.services.document_access import (
+    DocumentAccessDeniedError,
+    DocumentCapability,
+    DocumentNotFoundError,
+    authorize_document,
 )
 from app.services.documents import (
     DocumentDeletionError,
     DocumentPersistenceError,
     DocumentUpdateError,
-    get_owned_document,
-    get_visible_document,
     list_documents,
+    list_shared_documents,
     soft_delete_document,
     store_document,
     update_document_metadata,
+)
+from app.services.permissions import (
+    PermissionAlreadyExistsError,
+    PermissionNotFoundError,
+    PermissionOperationError,
+    PermissionRecipientIsOwnerError,
+    PermissionRecipientNotFoundError,
+    grant_permission,
+    list_permissions,
+    revoke_permission,
+    update_permission,
 )
 from app.services.storage import (
     StorageConfigurationError,
@@ -76,6 +97,53 @@ def _document_not_found() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=_NOT_FOUND_MESSAGE,
+    )
+
+
+def _access_denied() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to perform this action.",
+    )
+
+
+def _permission_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Permission not found.",
+    )
+
+
+def _permission_response(record: DocumentPermission) -> PermissionResponse:
+    return PermissionResponse(
+        id=record.id,
+        document_id=record.document_id,
+        user_id=record.user_id,
+        recipient_name=record.user.name,
+        recipient_email=record.user.email,
+        permission=record.permission,
+        granted_at=record.created_at,
+        revoked_at=record.revoked_at,
+        status="ACTIVE" if record.revoked_at is None else "REVOKED",
+    )
+
+
+def _document_list_response(
+    documents: list,
+    *,
+    total: int,
+    page: int,
+    page_size: int,
+) -> DocumentListResponse:
+    pages = (total + page_size - 1) // page_size
+    return DocumentListResponse(
+        items=[DocumentResponse.model_validate(document) for document in documents],
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=pages,
+        has_next=page < pages,
+        has_previous=page > 1 and pages > 0,
     )
 
 
@@ -211,6 +279,7 @@ def upload_document(
             detail="The upload could not be completed.",
         ) from exc
 
+    document.access_level = DocumentAccessLevel.OWNER.value
     return DocumentResponse.model_validate(document)
 
 
@@ -264,50 +333,87 @@ def list_document_metadata(
     )
 
 
+@router.get("/shared-with-me", response_model=DocumentListResponse)
+def list_shared_with_me(
+    response: Response,
+    page: Annotated[int, Query(ge=1, le=100_000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    sort_by: Literal[
+        "name",
+        "category",
+        "file_size",
+        "created_at",
+        "updated_at",
+    ] = "created_at",
+    order: Literal["asc", "desc"] = "desc",
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> DocumentListResponse:
+    documents, total = list_shared_documents(
+        session,
+        user=current_user,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        order=order,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return _document_list_response(
+        documents,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
 @router.get("/{document_id}", response_model=DocumentResponse)
 def get_document_metadata(
     document_id: UUID,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> DocumentResponse:
-    document = get_visible_document(
-        session,
-        user=current_user,
-        document_id=document_id,
-    )
-    if document is None:
-        logger.warning(
-            "Document metadata access denied for user %s.",
-            current_user.id,
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.METADATA,
         )
-        raise _document_not_found()
+    except DocumentNotFoundError as exc:
+        logger.warning("Document metadata access denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document metadata access denied for user %s.", current_user.id)
+        raise _access_denied() from exc
 
-    return DocumentResponse.model_validate(document)
+    return DocumentResponse.model_validate(authorized.document)
 
 
 @router.patch("/{document_id}", response_model=DocumentResponse)
 def update_document(
     document_id: UUID,
     payload: DocumentUpdate,
-    current_user: User = Depends(require_document_manager),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> DocumentResponse:
-    document = get_owned_document(
-        session,
-        user=current_user,
-        document_id=document_id,
-    )
-    if document is None:
-        logger.warning(
-            "Document metadata update denied for user %s.",
-            current_user.id,
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.EDIT,
         )
-        raise _document_not_found()
+    except DocumentNotFoundError as exc:
+        logger.warning("Document metadata update denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document metadata update denied for user %s.", current_user.id)
+        raise _access_denied() from exc
 
     try:
         updated = update_document_metadata(
             session,
-            document=document,
+            document=authorized.document,
             changes=payload.model_dump(exclude_unset=True),
         )
     except DocumentUpdateError as exc:
@@ -316,6 +422,7 @@ def update_document(
             detail="The document could not be updated.",
         ) from exc
 
+    updated.access_level = authorized.access_level.value
     logger.info(
         "Document metadata updated by user %s.",
         current_user.id,
@@ -326,22 +433,25 @@ def update_document(
 @router.get("/{document_id}/download")
 def download_document(
     document_id: UUID,
-    current_user: User = Depends(require_document_manager),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
     storage: WasabiStorage = Depends(get_storage_service),
 ) -> StreamingResponse:
-    document = get_owned_document(
-        session,
-        user=current_user,
-        document_id=document_id,
-    )
-    if document is None:
-        logger.warning(
-            "Document download denied for user %s.",
-            current_user.id,
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.READ,
         )
-        raise _document_not_found()
+    except DocumentNotFoundError as exc:
+        logger.warning("Document download denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document download denied for user %s.", current_user.id)
+        raise _access_denied() from exc
 
+    document = authorized.document
     try:
         body = storage.open_download(key=document.storage_key)
     except StorageObjectNotFoundError as exc:
@@ -382,26 +492,28 @@ def download_document(
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(
     document_id: UUID,
-    current_user: User = Depends(require_document_manager),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
     storage: WasabiStorage = Depends(get_storage_service),
 ) -> Response:
-    document = get_owned_document(
-        session,
-        user=current_user,
-        document_id=document_id,
-    )
-    if document is None:
-        logger.warning(
-            "Document deletion denied for user %s.",
-            current_user.id,
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.DELETE,
         )
-        raise _document_not_found()
+    except DocumentNotFoundError as exc:
+        logger.warning("Document deletion denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document deletion denied for user %s.", current_user.id)
+        raise _access_denied() from exc
 
     try:
         soft_delete_document(
             session,
-            document=document,
+            document=authorized.document,
             storage=storage,
         )
     except DocumentDeletionError as exc:
@@ -412,6 +524,186 @@ def delete_document(
 
     logger.info(
         "Document soft-deleted by user %s.",
+        current_user.id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+def _require_permission_manager(
+    session: Session,
+    *,
+    current_user: User,
+    document_id: UUID,
+):
+    try:
+        return authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.MANAGE_PERMISSIONS,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document permission access denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document permission access denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+
+
+@router.get(
+    "/{document_id}/permissions",
+    response_model=PermissionListResponse,
+)
+def list_document_permissions(
+    document_id: UUID,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> PermissionListResponse:
+    authorized = _require_permission_manager(
+        session,
+        current_user=current_user,
+        document_id=document_id,
+    )
+    records = list_permissions(session, document=authorized.document)
+    response.headers["Cache-Control"] = "no-store"
+    return PermissionListResponse(
+        items=[_permission_response(record) for record in records],
+        total=len(records),
+        active_total=sum(record.revoked_at is None for record in records),
+    )
+
+
+@router.post(
+    "/{document_id}/permissions",
+    response_model=PermissionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def grant_document_permission(
+    document_id: UUID,
+    payload: PermissionGrantRequest,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> PermissionResponse:
+    authorized = _require_permission_manager(
+        session,
+        current_user=current_user,
+        document_id=document_id,
+    )
+
+    try:
+        record, created = grant_permission(
+            session,
+            document=authorized.document,
+            recipient_email=str(payload.email),
+            permission=payload.permission,
+            granted_by=current_user,
+        )
+    except PermissionRecipientNotFoundError as exc:
+        logger.warning("Permission grant rejected for an unavailable recipient.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recipient account is not available.",
+        ) from exc
+    except PermissionRecipientIsOwnerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The document owner already has access.",
+        ) from exc
+    except PermissionAlreadyExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An active permission already exists; update it instead.",
+        ) from exc
+    except PermissionOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The permission could not be granted.",
+        ) from exc
+
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    response.headers["Cache-Control"] = "no-store"
+    logger.info("Document permission granted by user %s.", current_user.id)
+    return _permission_response(record)
+
+
+@router.patch(
+    "/{document_id}/permissions/{permission_id}",
+    response_model=PermissionResponse,
+)
+def update_document_permission(
+    document_id: UUID,
+    permission_id: UUID,
+    payload: PermissionUpdateRequest,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> PermissionResponse:
+    authorized = _require_permission_manager(
+        session,
+        current_user=current_user,
+        document_id=document_id,
+    )
+
+    try:
+        record, changed = update_permission(
+            session,
+            document=authorized.document,
+            permission_id=permission_id,
+            permission=payload.permission,
+            updated_by=current_user,
+        )
+    except PermissionNotFoundError as exc:
+        raise _permission_not_found() from exc
+    except PermissionOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The permission could not be updated.",
+        ) from exc
+
+    response.headers["Cache-Control"] = "no-store"
+    logger.info(
+        "Document permission %s by user %s.",
+        "updated" if changed else "unchanged",
+        current_user.id,
+    )
+    return _permission_response(record)
+
+
+@router.delete(
+    "/{document_id}/permissions/{permission_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def revoke_document_permission(
+    document_id: UUID,
+    permission_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> Response:
+    authorized = _require_permission_manager(
+        session,
+        current_user=current_user,
+        document_id=document_id,
+    )
+
+    try:
+        changed = revoke_permission(
+            session,
+            document=authorized.document,
+            permission_id=permission_id,
+        )
+    except PermissionNotFoundError as exc:
+        raise _permission_not_found() from exc
+    except PermissionOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The permission could not be revoked.",
+        ) from exc
+
+    logger.info(
+        "Document permission %s by user %s.",
+        "revoked" if changed else "already revoked",
         current_user.id,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

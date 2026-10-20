@@ -7,6 +7,7 @@ import {
   FileText,
   Fingerprint,
   HardDrive,
+  KeyRound,
   LoaderCircle,
   Pencil,
   RefreshCw,
@@ -19,12 +20,17 @@ import {
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { z } from 'zod'
 import { useAuth } from '@/auth/useAuth'
+import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  canManageDocument,
+  ACCESS_LEVEL_META,
+  canDeleteDocument,
+  canEditDocument,
+  canManageDocumentPermissions,
+  canReadDocument,
   categoryChoices,
   formatBytes,
   formatDateTime,
@@ -114,8 +120,12 @@ export function DocumentDetailsPage() {
     return () => controller.abort()
   }, [documentId, refreshKey, reset])
 
-  const canManage = canManageDocument(user, documentRecord)
-  const isAdministrator = user?.role === 'ADMINISTRATOR'
+  const canRead = canReadDocument(documentRecord)
+  const canEdit = canEditDocument(documentRecord)
+  const canDelete = canDeleteDocument(documentRecord)
+  const canManagePermissions = canManageDocumentPermissions(documentRecord)
+  const isMetadataOnly = documentRecord?.access_level === 'ADMINISTRATOR'
+  const accessMeta = ACCESS_LEVEL_META[documentRecord?.access_level]
   const isNotFound = loadError?.response?.status === 404
 
   const onSubmit = async (values) => {
@@ -253,9 +263,15 @@ export function DocumentDetailsPage() {
           documentRecord.file_size,
         )} · ${documentRecord.mime_type}`}
         actions={
-          canManage ? (
-            <>
-              <Button type="button" variant="outline" onClick={handleDownload} disabled={isDownloading}>
+          <>
+            <AccessLevelBadge accessLevel={documentRecord.access_level} />
+            {canRead ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleDownload}
+                disabled={isDownloading}
+              >
                 {isDownloading ? (
                   <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
                 ) : (
@@ -263,6 +279,8 @@ export function DocumentDetailsPage() {
                 )}
                 {isDownloading ? 'Preparing...' : 'Download'}
               </Button>
+            ) : null}
+            {canEdit ? (
               <Button
                 type="button"
                 variant="outline"
@@ -279,6 +297,17 @@ export function DocumentDetailsPage() {
                 )}
                 {isEditing ? 'Cancel edit' : 'Edit metadata'}
               </Button>
+            ) : null}
+            {canManagePermissions ? (
+              <Link
+                to={`/documents/${documentRecord.id}/permissions`}
+                className={buttonVariants({ variant: 'outline' })}
+              >
+                <KeyRound className="size-4" aria-hidden="true" />
+                Manage access
+              </Link>
+            ) : null}
+            {canDelete ? (
               <Button
                 type="button"
                 variant="destructive"
@@ -291,22 +320,17 @@ export function DocumentDetailsPage() {
                 <Trash2 className="size-4" aria-hidden="true" />
                 Delete
               </Button>
-            </>
-          ) : isAdministrator ? (
-            <span className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
-              <ShieldAlert className="size-3.5" aria-hidden="true" />
-              Owner-only actions
-            </span>
-          ) : null
+            ) : null}
+          </>
         }
       />
 
-      {isAdministrator && !canManage ? (
+      {isMetadataOnly ? (
         <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <p>
-            Administrator metadata review only. Document contents, metadata changes, and deletion
-            remain restricted to the owner.
+            Administrator metadata review only. Document content, metadata changes, deletion, and
+            sharing require an explicit READ or EDIT grant from the owner.
           </p>
         </div>
       ) : null}
@@ -329,7 +353,7 @@ export function DocumentDetailsPage() {
         </div>
       ) : null}
 
-      {confirmDelete ? (
+      {confirmDelete && canDelete ? (
         <Card className="border-destructive/30">
           <CardContent className="flex flex-col gap-4 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -411,25 +435,38 @@ export function DocumentDetailsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Access</CardTitle>
+            <CardTitle>Your access</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm leading-6 text-muted-foreground">
             <div className="flex items-start gap-3">
               <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-              <p>
-                Only the document owner can download the private object or change this metadata.
-                The backend checks your current database role and ownership on every request.
-              </p>
+              <div>
+                <p className="font-medium text-foreground">{accessMeta?.label ?? 'No access'}</p>
+                <p>{accessMeta?.description ?? 'Your account cannot access this document.'}</p>
+              </div>
             </div>
             <p>
-              Storage keys and private object URLs are never exposed by the API. Downloads are
-              proxied through the authenticated backend.
+              The backend resolves ownership and active grants from the database on every request.
+              Revoked access is denied immediately, including for downloads.
             </p>
+            <p>
+              Storage keys and private object URLs are never exposed. Downloads are proxied through
+              the authenticated API.
+            </p>
+            {canManagePermissions ? (
+              <Link
+                to={`/documents/${documentRecord.id}/permissions`}
+                className="inline-flex items-center gap-2 font-medium text-primary underline-offset-4 hover:underline"
+              >
+                <KeyRound className="size-4" aria-hidden="true" />
+                Manage document access
+              </Link>
+            ) : null}
           </CardContent>
         </Card>
       </div>
 
-      {isEditing && canManage ? (
+      {isEditing && canEdit ? (
         <Card>
           <CardHeader>
             <CardTitle>Edit metadata</CardTitle>

@@ -12,7 +12,7 @@ export function AdminPage() {
       <PageHeader
         eyebrow="Administration"
         title="Administrator area"
-        description="This route is gated by the ADMINISTRATOR role in the frontend and by the backend session checks. Account and permission management endpoints arrive in later phases."
+        description="This route is gated by the ADMINISTRATOR role in the frontend and by the backend session checks. Administrator activity and audit views arrive in Phase 7."
       />
 
       <div className="grid gap-5 md:grid-cols-2">

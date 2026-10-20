@@ -1,1 +1,1 @@
-"""Application services are introduced in later phases."""
+"""Application services for authentication, documents, storage, and permissions."""

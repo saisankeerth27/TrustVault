@@ -26,6 +26,14 @@ export async function listDocuments(params, signal) {
   return data
 }
 
+export async function listSharedDocuments(params, signal) {
+  const { data } = await apiClient.get('/api/v1/documents/shared-with-me', {
+    params,
+    signal,
+  })
+  return data
+}
+
 export async function getDocument(documentId, signal) {
   const { data } = await apiClient.get(`/api/v1/documents/${documentId}`, {
     signal,

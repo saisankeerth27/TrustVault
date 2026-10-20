@@ -252,6 +252,42 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Added safe streamed download headers and RFC 5987/ASCII fallback filename handling, including control-character neutralization.
   - Kept metadata/audit history by using `deleted_at`, excluded deleted rows from all normal reads, and made object cleanup non-fatal and auditable in logs.
   - Documented the administrator metadata-only policy, soft-delete cleanup gap, and Phase 7 audit dependency without claiming unimplemented permissions or audit writes.
-- **Commit hash:** pending final Phase 5 commit/push; recorded in the final response.
-- **GitHub link:** pending final Phase 5 commit/push.
-- **Human review and decision:** Phase 5 review pending; Phase 6 must not begin until approval is given.
+- **Commit hash:** `bacb149289edc59ea2e1195e6382969596ca7fc7`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/bacb149289edc59ea2e1195e6382969596ca7fc7
+- **Human review and decision:** Approved; Phase 6 was subsequently authorized.
+
+---
+
+## 2026-10-20 - Phase 6: Document Permissions and Revocation
+
+- **Date and phase:** 2026-10-20 - Phase 6 (Document Permissions and Revocation)
+- **Objective:** Implement Phase 6 only: named-user READ/EDIT document grants with owner-only management, immediate revocation, shared-document listing, permission-management UI, regression tests, and documentation; verify locally; make exactly one commit and push; stop before Phase 7.
+- **Prompt / instruction summary:** The human authorized Phase 6 and required document-level READ/EDIT permissions; owner-controlled grants and revocation; backend enforcement independent of the frontend; immediate revocation with fresh database checks; administrator metadata oversight without automatic content access; shared-documents and permission-management frontend; JavaScript/JSX only; no schema migration; preservation of uncommitted audit changes; all required documentation; exactly one final commit (`feat(permissions): implement document access grants and revocation`) and one push.
+- **Files or code produced:**
+  - Backend authorization: new `backend/app/services/document_access.py` with one capability resolver for metadata/read/edit/delete/manage; new `backend/app/services/permissions.py` for normalized-email recipient lookup, grant/list/update/revoke, and revoke-and-regrant history.
+  - Backend API/schema: `backend/app/api/documents.py` adds per-document permission endpoints and `GET /api/v1/documents/shared-with-me`; `backend/app/schemas/document.py` adds `access_level` and permission request/response models; `backend/app/models/enums.py` adds `DocumentAccessLevel` and `AuditAction.PERMISSION_UPDATED`.
+  - Backend scoping: `backend/app/services/documents.py` lists owned plus actively shared documents, annotates access levels, and excludes revoked/deleted rows from shared listings.
+  - Backend tests: updated `backend/tests/test_documents.py` for access levels, administrator metadata-only behavior, and viewer/grant denial; new `backend/tests/test_permissions.py` with 19 grant/revocation/IDOR/capability tests.
+  - Frontend: new `AccessLevelBadge.jsx`, `SharedDocumentsPage.jsx`, `DocumentPermissionsPage.jsx`, and `services/permissions.js`; updated document services, access helpers, router, navigation, dashboard, library, and details pages for access-aware actions.
+  - Documentation: `README.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/REQUIREMENTS.md`, `docs/IMPLEMENTATION_PLAN.md`, `THREATS.md`, and this entry.
+- **Tests and verification performed:**
+  - Full backend suite: **146 passed**, one Starlette/httpx deprecation warning. This includes all prior migration/auth/storage/document tests plus 19 Phase 6 tests.
+  - Phase 6 coverage: owner grant/list/update/revoke, idempotent same-level grants, 409 conflicts, forged fields, disabled/missing recipients, self-grants, READ/EDIT capability boundaries, immediate revocation, regrant history, shared-list exclusions, pagination, cross-document IDOR, anonymous denial, and metadata-only administrators.
+  - `npm run lint`: 0 warnings, 0 errors after fixing a set-state-in-effect warning in the shared-documents page.
+  - `npm run build`: Vite production build passed (existing chunk-size warning only); no TypeScript/TSX files.
+  - Not performed: audit event writes/views (Phase 7), live Wasabi verification, Supabase migration, Vercel/Render deployment, and browser-to-live-storage end-to-end testing. No migration was added.
+- **Issues discovered:**
+  - Earlier planning allowed administrators to manage permissions; the implemented and documented policy is owner-only, with administrators limited to metadata oversight unless explicitly granted.
+  - A user with no remaining access receives generic 404 after revocation rather than 403, to avoid confirming document existence.
+  - Existing Phase 5 tests encoded administrator content access and viewer listing behavior that no longer match the Phase 6 policy.
+  - Phase 5 commit details were still marked pending in this log even though the commit existed.
+  - `PROMPTS.md` cannot record its own final commit hash without creating another commit.
+- **Corrections made:**
+  - Centralized all document authorization instead of duplicating role/ownership checks, and made capability decisions explicit.
+  - Implemented revoke-and-regrant updates so permission history is retained under the existing partial unique index.
+  - Updated Phase 5 regression expectations and added 19 dedicated permission tests.
+  - Reconciled README, architecture, database, requirements, plan, and threat documentation with the owner-only sharing policy and metadata-only administrator boundary.
+  - Recorded the Phase 5 commit hash/link and left the Phase 6 hash/link pending for reporting after the single final commit.
+- **Commit hash:** pending final Phase 6 commit/push; reported in the final response.
+- **GitHub link:** pending final Phase 6 commit/push.
+- **Human review and decision:** Phase 6 review pending; Phase 7 must not begin until approval is given.

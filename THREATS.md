@@ -67,9 +67,9 @@ graph TB
 
 **Scenario:** A user guesses or enumerates document IDs and requests documents they were never granted access to.
 
-**Mitigation:** Phase 5 document endpoints resolve visibility from the current database role and ownership on every request. Owners are scoped to their own active documents; administrators may read active metadata; viewers see none. Update/download/delete require ownership. IDs are UUIDs (hard to enumerate but not relied upon for security), and inaccessible/missing IDs return the same generic 404.
+**Mitigation:** Phase 6 document endpoints resolve visibility from ownership and active grants on every request. Regular users see owned plus actively shared documents; administrators may read all active metadata. Edit, download, delete, and permission management are separately checked. IDs are UUIDs (hard to enumerate but not relied upon for security), and inaccessible/missing IDs return the same generic 404.
 
-**Verification:** Phase 5 tests request another owner's valid document ID and assert generic 404 denial for detail, update, download, and delete. Additional grant-based IDOR tests follow in Phases 6/8.
+**Verification:** Phase 5 tests established generic 404 IDOR denial. Phase 6 adds grant-based tests for unrelated documents, cross-document permission IDs, anonymous callers, and revoked access.
 
 **Residual Risk:** Low. UUIDs reduce discoverability but authorization does not depend on secrecy of IDs.
 
@@ -79,9 +79,9 @@ graph TB
 
 **Scenario:** A user attempts to download a document via a direct link, guessed storage key, or API manipulation.
 
-**Mitigation:** The bucket is intended to be private. Uploads never return a direct or presigned URL or the storage key. The Phase 5 download proxy authorizes the owner before reading from storage and streams the body without exposing the key or a direct URL. Storage-not-found and configuration/operation failures return generic responses. Successful/denied downloads are logged operationally but not yet audited.
+**Mitigation:** The bucket is intended to be private. Uploads never return a direct or presigned URL or the storage key. The download proxy authorizes OWNER, EDIT, or READ capability from current database state before reading from storage and streams the body without exposing the key or a direct URL. Storage-not-found and configuration/operation failures return generic responses. Successful/denied downloads are logged operationally but not yet audited.
 
-**Verification:** Phase 5 tests assert owner-only download, generic 404 denial for other owners/administrators/viewers, safe attachment/no-store headers, header-injection resistance, and no storage-key leakage. Upload tests continue to assert safe responses.
+**Verification:** Phase 5–6 tests assert owner/READ/EDIT download permissions, generic 404 denial for unrelated users and ungranted administrators, immediate post-revocation denial, safe attachment/no-store headers, header-injection resistance, and no storage-key leakage.
 
 **Residual Risk:** Low after the bucket policy is verified. The live Wasabi private policy and download behavior have **not** been verified. Files already downloaded before a revocation cannot be recalled — see 4.4.
 
@@ -91,7 +91,7 @@ graph TB
 
 **Scenario:** A viewer attempts to act as an owner or administrator by tampering with JWT claims, role fields in requests, or permission endpoints.
 
-**Mitigation:** Roles are stored server-side and derived from the authenticated identity, never trusted from client-supplied body or header fields. JWT signature validation prevents claim tampering. Permission-management endpoints check the caller is owner or admin.
+**Mitigation:** Roles are stored server-side and derived from the authenticated identity, never trusted from client-supplied body or header fields. JWT signature validation prevents claim tampering. Permission-management endpoints require document ownership; administrator status does not grant sharing or content access.
 
 **Verification:** Tests attempt role manipulation via JWT tampering and request body injection and assert denial. Audit records for denials remain Phase 7.
 
@@ -105,7 +105,7 @@ graph TB
 
 **Mitigation:** Permissions are checked on every request against current database state. No permission caching serves stale data. Revocation is immediate. The issued access token authorizes identity, not document access.
 
-**Verification:** Tests grant access, confirm success, revoke, then immediately re-request and assert 403.
+**Verification:** Phase 6 tests grant access, confirm success, revoke, then immediately assert 404 for detail/download/edit because the user no longer has any access, and confirm shared listings exclude the revoked document.
 
 **Residual Risk:** **Downloaded copies cannot be recalled.** Once a user has downloaded a file, revocation cannot remove it from their device. This is inherent to all document-sharing systems and must be communicated to users.
 
@@ -139,9 +139,9 @@ graph TB
 
 **Scenario:** A viewer or unrelated user grants themselves or others access to a document they do not own.
 
-**Mitigation:** Permission endpoints require the caller to be the document owner or an administrator. The target user and document are validated. Every change is audited.
+**Mitigation:** Permission endpoints require the caller to be the document owner. The recipient must be an active registered account, owner self-grants are rejected, client-supplied grantor/recipient IDs are rejected, and permission IDs must belong to the requested document. Audit writes are deferred to Phase 7.
 
-**Verification:** Tests attempt grants from non-owners and assert 403 plus audit records.
+**Verification:** Phase 6 tests attempt grants/list/update/revoke as unrelated owners, administrators, READ/EDIT recipients, and anonymous callers, and assert 403/404 denial without mutation. Audit records remain Phase 7.
 
 **Residual Risk:** Low.
 
@@ -253,7 +253,7 @@ graph TB
 | Live Wasabi bucket policy/connectivity unverified | Medium | Verify private policy, least-privilege keys, and upload/delete behavior before deployment |
 | Upload object and metadata are not transactional | Low–Medium | Best-effort cleanup only; monitor orphans and add reconciliation |
 | Soft-deleted metadata can outlive a failed object cleanup | Low–Medium | Cleanup is best-effort after commit; log and reconcile private orphans |
-| Document management actions are not audited yet | Medium | Phase 7 writes view/download/edit/delete/denied events |
+| Document and permission actions are not audited yet | Medium | Phase 7 writes view/download/edit/delete/permission/denied events |
 | Stolen access token valid until expiry | Medium | Short TTL; consider token binding |
 | Credential stuffing without MFA | Medium | Evaluate MFA |
 | Application-level DoS | Medium | Rate limits, provider protections |
@@ -320,13 +320,28 @@ These notes record the upload/storage controls that are actually implemented. Do
 
 ## 11. Phase 5 Implementation Notes (Verified with Mocked Storage)
 
-These notes record the document-management controls actually implemented. Permission grants and audit writes remain planned.
+These notes record the document-management controls implemented at Phase 5 completion. Permission grants and audit writes were still planned at that point.
 
-- **Metadata scoping:** Owners see only their active documents; administrators may read active metadata across the library; viewers see none. Update, download, and delete require ownership. Inaccessible and missing IDs both return generic 404.
+- **Metadata scoping at Phase 5 completion:** Owners saw only their active documents; administrators could read active metadata across the library; viewers saw none. Update, download, and delete required ownership. Inaccessible and missing IDs both return generic 404.
 - **Query safety:** Name search is parameterized and escapes `\`, `%`, and `_` so user input cannot become a wildcard. Category/owner/date filters are parameterized; sort columns are an allow-list; page size is bounded.
 - **Metadata integrity:** Only `name`, `category`, and `description` can be changed. Storage key, owner, MIME type, size, checksum, and timestamps are not client-updatable; extra fields are rejected.
 - **Download:** The backend authorizes ownership before reading from private storage and streams the object. Responses set an attachment filename, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`. Filenames are RFC 5987-encoded with sanitized ASCII fallbacks.
 - **Deletion:** Soft deletion sets `deleted_at` and excludes the row from all normal reads. Wasabi cleanup happens after the database commit and is best-effort; failure is logged, and metadata is retained.
 - **Failure handling:** Missing storage objects return generic 404; storage configuration/operation failures return generic 503. No storage key, URL, or credential is exposed to the client or logs.
-- **Verification:** 127 backend tests pass, including management authorization, filter/query safety, pagination, IDOR behavior, protected-field rejection, download headers/failures, soft delete, and cleanup failure. Frontend lint/build pass.
-- **Not implemented:** Explicit READ/EDIT grants, immediate revocation, audit events, live Wasabi download/delete verification, malware scanning, RLS, and deployment.
+- **Verification at Phase 5 completion:** 127 backend tests passed, including management authorization, filter/query safety, pagination, IDOR behavior, protected-field rejection, download headers/failures, soft delete, and cleanup failure. Frontend lint/build passed.
+- **Not implemented at Phase 5 completion:** Explicit READ/EDIT grants, immediate revocation, audit events, live Wasabi download/delete verification, malware scanning, RLS, and deployment.
+
+---
+
+## 12. Phase 6 Implementation Notes (Verified with Mocked Storage)
+
+These notes record the authorization controls actually implemented for named-user sharing. Audit writes and live storage verification remain outstanding.
+
+- **Central enforcement:** `app/services/document_access.py` resolves access from current ownership and active grants on every request and maps it to explicit metadata/read/edit/delete/manage capabilities. There is no authorization cache.
+- **Grant management:** Only the document owner can list, grant, update, or revoke access. Recipients must be active registered users identified by normalized email. Same-level grants are idempotent; conflicting levels return 409; cross-document permission IDs return 404.
+- **History:** Updates revoke the previous row and insert a replacement. Revocation is idempotent and retains the row. The partial unique index prevents multiple active grants.
+- **Administrator boundary:** Administrators can read metadata for all active documents but receive no content, edit, delete, or permission-management capability unless they own the document or receive an explicit grant.
+- **Shared listing:** /api/v1/documents/shared-with-me includes only active grants on active, non-deleted documents. The regular document list includes owned plus actively shared documents.
+- **Revocation semantics:** After revocation, content and edit requests return generic 404 because the user no longer has document visibility. Downloaded copies remain outside the system's control.
+- **Verification:** 146 backend tests pass, including 19 Phase 6 tests for owner-only management, READ/EDIT/administrator boundaries, forged fields, idempotency/conflicts, history retention, immediate revocation, shared-list exclusions, and cross-document IDOR. Frontend lint/build pass.
+- **Not implemented/verified:** Audit event writes/views, live Wasabi behavior, malware scanning, RLS, and deployment.

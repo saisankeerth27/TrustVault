@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -39,6 +40,7 @@ DOCUMENT_FIELDS = {
     "mime_type",
     "file_size",
     "checksum",
+    "access_level",
     "created_at",
     "updated_at",
 }
@@ -166,6 +168,7 @@ def test_authorized_roles_upload_with_server_metadata(
     assert payload["mime_type"] == "application/pdf"
     assert payload["file_size"] == len(PDF_BYTES)
     assert payload["checksum"] == hashlib.sha256(PDF_BYTES).hexdigest()
+    assert payload["access_level"] == "OWNER"
 
     assert len(fake_storage.uploads) == 1
     upload = fake_storage.uploads[0]
@@ -373,11 +376,13 @@ def _upload_ok(
     filename: str,
     category: str = "Finance",
     description: str = "Managed document",
+    content: bytes = PDF_BYTES,
 ) -> dict:
     response = _upload(
         api_client,
         token,
         filename=filename,
+        content=content,
         data={"category": category, "description": description},
     )
     assert response.status_code == 201
@@ -409,6 +414,7 @@ def test_document_listing_scopes_search_filters_and_pagination(
         owner_token,
         filename="Beta report.pdf",
         category="Legal",
+        content=PDF_BYTES + b"larger attachment body",
     )
     percent_document = _upload_ok(
         api_client,
@@ -436,6 +442,7 @@ def test_document_listing_scopes_search_filters_and_pagination(
     assert owner_page["has_previous"] is False
     assert owner_page["items"][0]["name"] == "100% audit.pdf"
     assert owner_page["items"][0]["owner_name"] == owner.name
+    assert owner_page["items"][0]["access_level"] == "OWNER"
     assert set(owner_page["items"][0]) == DOCUMENT_FIELDS
 
     second_page = api_client.get(
@@ -475,6 +482,37 @@ def test_document_listing_scopes_search_filters_and_pagination(
     assert category_filtered.json()["total"] == 1
     assert category_filtered.json()["items"][0]["name"] == "Beta report.pdf"
 
+    today = datetime.now(timezone.utc).date()
+    current_day = api_client.get(
+        "/api/v1/documents",
+        headers=bearer(owner_token),
+        params={
+            "created_from": today.isoformat(),
+            "created_to": today.isoformat(),
+            "page_size": 100,
+        },
+    )
+    assert current_day.status_code == 200
+    assert current_day.json()["total"] == 3
+
+    before_today = api_client.get(
+        "/api/v1/documents",
+        headers=bearer(owner_token),
+        params={"created_to": (today - timedelta(days=1)).isoformat()},
+    )
+    assert before_today.status_code == 200
+    assert before_today.json()["total"] == 0
+
+    size_sorted = api_client.get(
+        "/api/v1/documents",
+        headers=bearer(owner_token),
+        params={"sort_by": "file_size", "order": "desc", "page_size": 100},
+    )
+    assert size_sorted.status_code == 200
+    sorted_sizes = [item["file_size"] for item in size_sorted.json()["items"]]
+    assert sorted_sizes == sorted(sorted_sizes, reverse=True)
+    assert size_sorted.json()["items"][0]["name"] == "Beta report.pdf"
+
     other_owner_scoped = api_client.get(
         "/api/v1/documents",
         headers=bearer(owner_token),
@@ -508,6 +546,14 @@ def test_document_listing_scopes_search_filters_and_pagination(
     )
     assert admin_list.status_code == 200
     assert admin_list.json()["total"] == 4
+
+    admin_owner_filtered = api_client.get(
+        "/api/v1/documents",
+        headers=bearer(admin_token),
+        params={"owner_id": str(owner.id)},
+    )
+    assert admin_owner_filtered.status_code == 200
+    assert admin_owner_filtered.json()["total"] == 3
 
 
 def test_invalid_listing_parameters_are_rejected(
@@ -573,6 +619,7 @@ def test_document_metadata_visibility_and_management_boundaries(
     )
     assert admin_detail.status_code == 200
     assert admin_detail.json()["owner_id"] == document["owner_id"]
+    assert admin_detail.json()["access_level"] == "ADMINISTRATOR"
 
     assert api_client.get(
         f"/api/v1/documents/{document['id']}",
@@ -587,15 +634,15 @@ def test_document_metadata_visibility_and_management_boundaries(
         f"/api/v1/documents/{document['id']}",
         headers=bearer(admin_token),
         json={"name": "Admin rename.pdf"},
-    ).status_code == 404
+    ).status_code == 403
     assert api_client.get(
         f"/api/v1/documents/{document['id']}/download",
         headers=bearer(admin_token),
-    ).status_code == 404
+    ).status_code == 403
     assert api_client.delete(
         f"/api/v1/documents/{document['id']}",
         headers=bearer(admin_token),
-    ).status_code == 404
+    ).status_code == 403
     assert fake_storage.downloads == []
     assert fake_storage.deletions == []
 
@@ -681,7 +728,7 @@ def test_other_owner_and_viewer_cannot_update_document(
         f"/api/v1/documents/{document['id']}",
         headers=bearer(viewer_token),
         json={"name": "Viewer edit.pdf"},
-    ).status_code == 403
+    ).status_code == 404
 
 
 def test_owner_download_streams_safe_private_headers(
@@ -752,7 +799,7 @@ def test_download_disposition_rejects_header_injection(
     assert "filename*=UTF-8''report%22%0D%0AX-Injected%3A%20yes.pdf" in disposition
 
 
-def test_download_is_owner_only(
+def test_download_requires_authorized_access(
     api_client: TestClient,
     db_session: Session,
     fake_storage: FakeStorage,
@@ -773,7 +820,7 @@ def test_download_is_owner_only(
     assert api_client.get(
         f"/api/v1/documents/{document['id']}/download",
         headers=bearer(viewer_token),
-    ).status_code == 403
+    ).status_code == 404
     assert fake_storage.downloads == []
 
 
@@ -851,6 +898,11 @@ def test_owner_soft_deletes_document_and_removes_stored_object(
         f"/api/v1/documents/{document['id']}/download",
         headers=bearer(token),
     ).status_code == 404
+    assert api_client.patch(
+        f"/api/v1/documents/{document['id']}",
+        headers=bearer(token),
+        json={"name": "Renamed.pdf"},
+    ).status_code == 404
     assert api_client.delete(
         f"/api/v1/documents/{document['id']}",
         headers=bearer(token),
@@ -883,7 +935,7 @@ def test_delete_is_owner_only_and_cleanup_failure_is_nonfatal(
     assert api_client.delete(
         f"/api/v1/documents/{document['id']}",
         headers=bearer(viewer_token),
-    ).status_code == 403
+    ).status_code == 404
     assert fake_storage.deletions == []
 
     fake_storage.fail_delete = StorageOperationError("SECRET cleanup detail")

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+
+from app.models.enums import DocumentAccessLevel, PermissionLevel
 
 
 class DocumentResponse(BaseModel):
@@ -18,6 +21,7 @@ class DocumentResponse(BaseModel):
     mime_type: str
     file_size: int
     checksum: str
+    access_level: DocumentAccessLevel
     created_at: datetime
     updated_at: datetime
 
@@ -84,3 +88,39 @@ class DocumentUpdate(BaseModel):
         if "name" in self.model_fields_set and self.name is None:
             raise ValueError("Document name must not be null.")
         return self
+
+
+class PermissionGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    permission: PermissionLevel
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+
+class PermissionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    permission: PermissionLevel
+
+
+class PermissionResponse(BaseModel):
+    id: UUID
+    document_id: UUID
+    user_id: UUID
+    recipient_name: str
+    recipient_email: EmailStr
+    permission: PermissionLevel
+    granted_at: datetime
+    revoked_at: datetime | None
+    status: Literal["ACTIVE", "REVOKED"]
+
+
+class PermissionListResponse(BaseModel):
+    items: list[PermissionResponse]
+    total: int
+    active_total: int

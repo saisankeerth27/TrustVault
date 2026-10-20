@@ -10,7 +10,7 @@ Organizations need a secure, auditable document management system that enforces 
 
 **Description:** The system must support three distinct roles: **Administrator**, **Document Owner**, and **Viewer**. Users authenticate with secure credentials. Role assignment determines the scope of permitted actions.
 
-- Administrators can view all documents, audit logs, and manage users.
+- Administrators can review metadata for all active documents, view audit logs once Phase 7 is implemented, and manage users. Administrator identity does not automatically grant document content access.
 - Document Owners can upload, organize, share, and manage their own documents.
 - Viewers can only access documents explicitly shared with them.
 
@@ -33,16 +33,16 @@ Organizations need a secure, auditable document management system that enforces 
 **Description:** Document owners grant READ or EDIT access to specific named users on a per-document basis. Permissions are stored at the individual document-user level, not at group or role level. A user without explicit permission has no access.
 
 **Phase:** 6 (Document Permissions and Revocation)
-**Verification:** Tests confirming that only users with explicit grants can access or modify documents.
+**Verification:** Phase 6 tests confirm owner-only grants, READ/EDIT capability boundaries, immediate post-revocation denial, grant-history retention, and shared-document listing. Audit event creation remains Phase 7.
 
 ---
 
 ### MR-4: Owner-Controlled Permission Grants and Revocation
 
-**Description:** Only the document owner (or an administrator) can grant or revoke permissions. Revocation is immediate: the target user loses access on the next request. Granting or revoking a permission creates an audit record.
+**Description:** Only the document owner can grant or revoke permissions. Revocation is immediate: the target user loses access on the next request. Granting, updating, or revoking a permission must create an audit record once the Phase 7 audit writer exists.
 
 **Phase:** 6 (Document Permissions and Revocation)
-**Verification:** Tests confirming immediate denial after revocation; audit record creation tests.
+**Verification:** Phase 6 tests confirm immediate denial after revocation, owner-only management, cross-document permission-ID rejection, and retained grant history. Audit record creation is verified in Phase 7.
 
 ---
 
@@ -86,7 +86,7 @@ Each record includes: timestamp, acting user, target document, action type, outc
 Search results must be filtered by the requesting user's permissions — a user must never see documents they are not authorized to access.
 
 **Phase:** 5 (Document Management and Search)
-**Verification:** Phase 5 tests cover name search, category/owner/date filters, sorting, pagination, and owner/admin/viewer visibility scoping. Explicit grant-based visibility remains Phase 6.
+**Verification:** Phase 5 tests cover name search, category/owner/date filters, sorting, pagination, and initial visibility scoping. Phase 6 tests extend scoping to explicitly shared documents and revoked/deleted exclusions.
 
 ---
 
@@ -141,19 +141,19 @@ Administrators cannot modify or delete audit records through the application.
 
 | Capability                          | Administrator | Document Owner | Viewer |
 |-------------------------------------|:---:|:---:|:---:|
-| View all documents                  | Yes | Own only | Shared only |
+| View document metadata              | All active | Own + shared | Shared only |
 | Upload documents                    | Yes | Yes | No |
 | Delete own documents                | Yes | Yes | No |
-| Delete others' documents            | Yes | No  | No |
-| Grant/revoke per-document access    | Yes | Own only | No |
-| View audit logs                     | Yes | Own docs only | No |
+| Delete others' documents            | No  | No  | No |
+| Grant/revoke per-document access    | Own documents only | Own only | No |
+| View audit logs                     | Yes (Phase 7) | Own docs only (Phase 7) | No |
 | Manage users/roles                  | Yes | No  | No |
-| Search documents                    | All | Own + shared | Shared only |
-| Download documents                  | All with permission | Own + shared | Shared only |
-| Edit documents                      | With EDIT permission | Own + with EDIT | With EDIT only |
+| Search documents                    | All metadata | Own + shared | Shared only |
+| Download documents                  | Explicit grant only | Own + shared grants | Shared grants only |
+| Edit documents                      | Explicit EDIT only | Own + shared EDIT | Shared EDIT only |
 | Modify audit records via API        | No  | No  | No  |
 
-**Phase 5 authorization note:** administrators currently receive read-only metadata oversight of all active documents. Download, metadata updates, and deletion are owner-only. This deliberately avoids treating administrator identity as automatic document-content authorization; any broader administrator content access would require an explicit policy change in a later phase.
+**Phase 6 authorization note:** administrator identity grants metadata oversight of all active documents, not content access, editing, deletion, or permission management. Administrators can manage permissions only for documents they own. Content and mutation capabilities come from ownership or an explicit READ/EDIT grant. This deliberately avoids treating administrator identity as automatic document-content authorization.
 
 ### Phase 3 Implementation Status (Verified Locally)
 
@@ -177,9 +177,18 @@ Administrators cannot modify or delete audit records through the application.
 - **MR-2:** Implemented for owner-managed documents: list/search/filter/sort/paginate metadata, inspect details, update mutable metadata, download content, and soft delete. Live Wasabi behavior remains unverified.
 - **MR-5:** Document endpoints enforce authentication, current role, and ownership server-side; metadata visibility for administrators does not grant content or owner-only actions. Missing/inaccessible IDs return generic 404 responses.
 - **MR-7:** Name (partial, literal wildcards), owner ID, category, and created-date filters are implemented with pagination and allow-listed sorting. Results are owner-scoped; administrators can review all active metadata; viewers see none.
-- **FA-6 / FA-7 / FA-8:** Metadata is queryable/filterable; deletion marks `deleted_at` and attempts object cleanup; search results are scoped. Per-document sharing scoping is deferred to Phase 6.
+- **FA-6 / FA-7 / FA-8:** Metadata is queryable/filterable; deletion marks `deleted_at` and attempts object cleanup; search results are scoped. At Phase 5 completion, per-document sharing scoping was not implemented.
 - **Integrity / privacy:** Downloads are proxied through the authenticated backend with safe attachment headers and no storage key or presigned URL. Name search escapes SQL wildcard characters; sort fields are allow-listed.
-- **Not yet met:** explicit READ/EDIT grants, immediate revocation, audit events for view/download/edit/delete, live bucket verification, malware scanning, and deployment.
+- **Not yet met at Phase 5 completion:** explicit READ/EDIT grants, immediate revocation, audit events for view/download/edit/delete, live bucket verification, malware scanning, and deployment.
+
+### Phase 6 Implementation Status (Verified Locally with Mocked Storage)
+
+- **MR-3:** Implemented. Owners grant READ/EDIT to named active accounts by email; owner access is implicit. Grant/list/update/revoke endpoints are owner-only and reject forged recipient/grantor fields.
+- **MR-4:** Implemented except audit persistence. Same-level grants are idempotent, conflicts return 409, level updates retain history, revocation is idempotent, and access is rechecked from the database on every request.
+- **MR-5:** Document detail, edit, download, delete, and permission endpoints use centralized authorization with 404 for missing/unrelated resources and 403 for visible-but-insufficient capability. Metadata-only administrators are denied content access.
+- **MR-7:** Regular listing includes owned and actively shared documents; `/shared-with-me` excludes revoked grants and deleted documents. Administrators retain metadata oversight.
+- **Frontend:** Access-level badges, a shared-documents route, and an owner-only permission-management page with grant, update, revoke confirmation, and history are implemented.
+- **Not yet met:** permission/document audit events, live bucket verification, malware scanning, RLS, and deployment.
 
 ---
 
@@ -198,11 +207,11 @@ Administrators cannot modify or delete audit records through the application.
 - FA-8: Search results are scoped to the requesting user's permissions.
 
 ### Permissions
-- FA-9: A newly uploaded document is accessible only to the owner and administrators.
-- FA-10: Granting READ allows reading and downloading but not editing or deleting.
-- FA-11: Granting EDIT allows reading, downloading, and editing but not deleting or re-sharing.
+- FA-9: A newly uploaded document's content is accessible only to the owner; administrators may see metadata but require an explicit grant for content.
+- FA-10: Granting READ allows reading and downloading but not editing, deleting, re-sharing, or managing permissions.
+- FA-11: Granting EDIT allows reading, downloading, and editing but not deleting, re-sharing, or managing permissions.
 - FA-12: Revocation takes effect immediately.
-- FA-13: Permission changes are recorded in the audit trail.
+- FA-13: Permission changes are recorded in the audit trail once the Phase 7 audit writer is implemented. The permission history table already retains grant/revoke rows.
 
 ### Audit
 - FA-14: Every action listed in MR-6 produces exactly one audit record.
@@ -243,8 +252,8 @@ Administrators cannot modify or delete audit records through the application.
 |--------|------------------------------------------------|:--------------------:|----------------------------------------------|
 | MR-1   | Authentication with roles                      | Phase 3              | Unit + integration tests for role endpoints  |
 | MR-2   | Document upload, organization, search, mgmt    | Phase 4 (upload), 5  | Upload/library/CRUD/search tests pass with mocked storage; live Wasabi unverified |
-| MR-3   | Named-user per-document READ/EDIT permissions  | Phase 6              | Permission grant/deny integration tests      |
-| MR-4   | Owner-controlled grant and revocation          | Phase 6              | Immediate revocation tests + audit checks    |
+| MR-3   | Named-user per-document READ/EDIT permissions  | Phase 6 (implemented) | Permission grant/deny integration tests pass |
+| MR-4   | Owner-controlled grant and revocation          | Phase 6 (implemented); audit Phase 7 | Immediate revocation and history tests pass |
 | MR-5   | Backend enforcement of authorization           | Phase 5, 6, 8        | Direct API tests bypassing frontend          |
 | MR-6   | Audit records for all significant actions      | Phase 7              | Event-driven audit creation tests            |
 | MR-7   | Search by name, owner, category, date          | Phase 5              | Filtered search tests with permission scoping|
