@@ -2,8 +2,8 @@
 
 TrustVault is a secure, multi-tenant document vault that will let organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
-> **Status: Phase 4 — Private storage and validated uploads implemented and verified locally (awaiting review).**
-> Phases 0–4 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, and a private upload pipeline with server-side validation, generated storage keys, SHA-256 checksums, and failure cleanup. The upload path is tested with a mocked Wasabi adapter; **live Wasabi bucket connectivity was not verified** because no storage credentials were supplied. Document listing, downloads, permission endpoints, and audit writing are **not** implemented yet. There is no live deployment, and migrations have **not** been applied to the Supabase project.
+> **Status: Phase 5 — Document management and search implemented and verified locally (awaiting review).**
+> Phases 0–5 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, and an authenticated document library with search, filters, pagination, metadata review/editing, proxied downloads, and soft deletion. Storage behavior is tested with a mocked Wasabi adapter; **live Wasabi bucket connectivity, download, and object-deletion behavior were not verified** because no storage credentials were supplied. Per-document permissions and audit writing are **not** implemented yet. There is no live deployment, and migrations have **not** been applied to the Supabase project.
 
 ## Project Objective
 
@@ -38,12 +38,12 @@ TrustVault/
 │   │   ├── env.py
 │   │   └── script.py.mako
 │   ├── app/
-│   │   ├── api/            # Health, auth, and document upload routers
+│   │   ├── api/            # Health, auth, and document API routers
 │   │   ├── core/           # Settings, security, rate limiting, logging, errors
 │   │   ├── db/             # Base, URL helpers, engine/session management
 │   │   ├── models/         # SQLAlchemy models and enums
 │   │   ├── schemas/        # Pydantic request/response models
-│   │   ├── services/       # Auth, upload validation, Wasabi storage, persistence
+│   │   ├── services/       # Auth, validation, storage, document lifecycle
 │   │   └── main.py         # FastAPI application factory
 │   ├── scripts/            # Account provisioning and storage connectivity CLIs
 │   ├── tests/              # pytest suite
@@ -56,10 +56,10 @@ TrustVault/
 │   ├── src/
 │   │   ├── app/            # Router and application setup
 │   │   ├── auth/           # In-memory token store and auth provider
-│   │   ├── components/     # Layout, route guards, and UI primitives
-│   │   ├── lib/            # Shared utilities and role labels
-│   │   ├── pages/          # Login, Dashboard, Documents, Admin, Not Found
-│   │   └── services/       # Axios client, auth, and document upload functions
+│   │   ├── components/     # Layout, guards, upload panel, and UI primitives
+│   │   ├── lib/            # Shared utilities, roles, and document formatting
+│   │   ├── pages/          # Login, dashboard, library, details, admin, not found
+│   │   └── services/       # Axios client, auth, and document API functions
 │   ├── .env.example
 │   ├── components.json
 │   ├── package.json
@@ -169,7 +169,8 @@ The Vite development server is available at <http://localhost:5173>. `VITE_API_B
 |-------|---------|--------|
 | `/login` | Real login form and session bootstrap | Public |
 | `/dashboard` | Authenticated health/status dashboard | Any signed-in user |
-| `/documents` | Secure upload form for Owner/Admin; Viewer sees a restriction notice | Any signed-in user |
+| `/documents` | Searchable document library with filters, pagination, and upload for Owner/Admin | Any signed-in user; results are authorization-scoped |
+| `/documents/:documentId` | Metadata details, owner-only download/edit/delete, admin metadata review | Any signed-in user with metadata visibility |
 | `/admin` | Administrator area with role-gated route | `ADMINISTRATOR` only |
 | `/` | Redirects to `/dashboard` | Any signed-in user |
 | `*` | Not-found page | Any signed-in user |
@@ -191,23 +192,26 @@ Phase 3 implements:
 
 Public registration always creates a `VIEWER`. Use the CLI for `DOCUMENT_OWNER` or `ADMINISTRATOR` accounts.
 
-## Private Document Uploads
+## Document Management and Downloads
 
-Phase 4 implements `POST /api/v1/documents/upload`:
+Phase 5 implements the authenticated document library:
 
-- Only active `ADMINISTRATOR` and `DOCUMENT_OWNER` accounts may upload; `VIEWER` requests receive 403.
-- The backend ignores client-supplied `owner_id`, storage keys, and checksums. Ownership comes from the authenticated session, and the SHA-256 checksum is computed from the received bytes.
-- Files are limited to 10 MiB by default and restricted to PDF, TXT, DOCX, PNG, JPG, or JPEG. The extension, declared MIME type, and content signature must agree.
-- DOCX packages are checked for required OOXML members and bounded member count/uncompressed size to limit zip-bomb expansion. TXT files must be NUL-free UTF-8. These checks are not antivirus scanning.
-- Storage keys use the form `documents/{owner_uuid}/{random_uuid}.{extension}`; user filenames are metadata only.
-- The object is uploaded first and the `documents` row is committed second. If the database write fails, the backend attempts to delete the new object and returns a generic 500. If Wasabi fails, the endpoint returns 503 and creates no metadata row.
-- No download, listing, share, or preview endpoint exists yet. No direct or presigned Wasabi URL is exposed.
+- `GET /api/v1/documents` accepts `q`, `category`, `owner_id`, `created_from`, `created_to`, `page`, `page_size`, `sort_by`, and `order`. Search is name-based, category filtering is case-insensitive, date filters are inclusive UTC calendar days, and pagination is bounded to 100 items.
+- `DOCUMENT_OWNER` accounts see only their own active documents. Administrators can discover and review metadata for all active documents, but download, edit, and delete remain owner-only. Viewers have no document access until Phase 6.
+- `GET /api/v1/documents/{id}` returns safe metadata only; inaccessible and missing IDs return the same generic 404.
+- `PATCH /api/v1/documents/{id}` permits only `name`, `category`, and `description`. Protected fields such as `owner_id`, `storage_key`, `mime_type`, and `checksum` are rejected.
+- `GET /api/v1/documents/{id}/download` streams the private object through the backend. It authorizes the owner, sets an attachment filename, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`; it never returns a storage key or presigned URL.
+- `DELETE /api/v1/documents/{id}` marks `deleted_at` and removes the row from normal reads, then attempts to delete the Wasabi object. Metadata is retained for audit/history. Object cleanup is best-effort because it occurs after the database commit.
+- Upload remains `POST /api/v1/documents/upload` for active Owners and Administrators, with backend-decided ownership, generated keys, validated content, and a server-computed SHA-256 checksum.
+- No permission-grant endpoints and no audit-event writes exist yet. Successful download/update/delete requests are logged operationally, not written to `audit_events`.
 
-The upload path is verified with a mocked storage adapter. **Live Wasabi bucket policy and connectivity were not verified** because no credentials were supplied. The bucket must remain private.
+The frontend provides a searchable/filterable library, pagination, an upload panel, and a details page with owner-only download/edit/delete actions. Administrator metadata review is read-only.
+
+Storage behavior is verified with a mocked adapter. **Live Wasabi bucket policy, connectivity, download, and object deletion were not verified** because no credentials were supplied. The bucket must remain private.
 
 ## Database
 
-The schema has five tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Phase 4 writes `documents` rows but adds no migration. Highlighted decisions:
+The schema has five tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Phase 5 writes metadata updates and the `deleted_at` soft-delete marker but adds no migration. Highlighted decisions:
 
 - Roles and statuses are constrained strings; no native PostgreSQL enums.
 - Emails are stored lowercased and uniquely constrained.
@@ -281,14 +285,14 @@ cd backend
 pytest
 ```
 
-The suite currently has **101 tests**. It verifies:
+The suite currently has **127 tests**. It verifies:
 
 - Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
 - Database URL normalization and Supabase pooler/SSL detection.
 - Models, tables, columns, indexes, and constraints for all five tables.
 - Migration `0001` plus `0002`: `upgrade head`, `alembic check` for drift, `downgrade base`, and re-`upgrade`.
 - Registration, login, refresh rotation, reuse detection, logout, and current-user behavior.
-- Expired, tampered, wrong-issuer/audience, disabled-account, and revoked-session rejection.
+- Expired, tampered, wrong-issuer/audience/type, disabled-account, and revoked-session rejection.
 - Role authorization helpers and fail-closed unknown-role handling.
 - Login/registration rate limiting and `Retry-After` behavior.
 - Production authentication configuration validators.
@@ -297,6 +301,10 @@ The suite currently has **101 tests**. It verifies:
 - Owner/Admin upload success with server-decided ownership, generated storage keys, computed SHA-256 checksums, and persisted metadata.
 - Viewer and anonymous denial, storage failure mapping, database-failure object cleanup, and secret-safe errors/logs.
 - Wasabi configuration validators and safe storage error mapping without live network access.
+- Document list authorization/scoping, name search with literal wildcard escaping, category/owner/date filters, sorting, pagination boundaries, and invalid query parameters.
+- Owner/admin/viewer metadata visibility, owner-only updates, protected-field rejection, and generic 404 IDOR behavior.
+- Streamed download headers, UTF-8/header-injection-safe attachment names, storage-not-found/storage-failure mapping, and owner-only access.
+- Soft deletion, list/detail exclusion, retained metadata, mocked object cleanup, cleanup-failure logging, and repeat/other-user delete denial.
 
 Database tests start an **embedded PostgreSQL** instance in a temporary directory and never contact Supabase or read `DATABASE_URL`. Storage tests use a fake adapter; no test contacts Wasabi.
 
@@ -319,11 +327,16 @@ Both commands pass. The frontend is JavaScript/JSX only, and `npm run build` run
 - **Logout:** `POST /api/v1/auth/logout` → revokes the current refresh session and returns 204
 - **Current user:** `GET /api/v1/auth/me` → returns the authenticated user
 - **Upload:** `POST /api/v1/documents/upload` → validates and stores a document for an Owner/Admin and returns safe metadata (no storage key)
+- **List/search:** `GET /api/v1/documents` → scoped, filtered, sorted, paginated metadata (`items`, `total`, `page`, `page_size`, `pages`, `has_next`, `has_previous`)
+- **Details:** `GET /api/v1/documents/{id}` → safe metadata for the owner or an administrator
+- **Update:** `PATCH /api/v1/documents/{id}` → owner-only updates to `name`, `category`, and `description`
+- **Download:** `GET /api/v1/documents/{id}/download` → owner-only private object stream
+- **Delete:** `DELETE /api/v1/documents/{id}` → owner-only soft deletion and best-effort object cleanup; returns 204
 - **Errors:** JSON envelope `{"error":{"code":"...","message":"...","details":"..."}}` where applicable.
 - **CORS:** Loaded from `CORS_ALLOWED_ORIGINS`; production wildcards are rejected.
 - **OpenAPI:** Enabled at `/docs` and `/openapi.json`.
 
-No download, listing, permission, or audit endpoints exist yet.
+No permission-management or audit endpoints exist yet.
 
 ## Deployment Preparation
 
@@ -345,7 +358,7 @@ No deployment has been performed or verified, and no migration has been applied 
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - Health check path: `/health`
 - Environment: `APP_ENV=production`, `LOG_LEVEL=INFO`, `DATABASE_URL`, `JWT_SECRET`, a real `CORS_ALLOWED_ORIGINS`, the auth cookie/rate-limit settings, and the Wasabi/upload settings in `render.yaml`. Render supplies `PORT`.
-- Storage variables are marked `sync: false` in `render.yaml`; set them in the Render dashboard as secrets. Keep the bucket private and grant only the operations the API needs (`PutObject`, `HeadBucket`, `DeleteObject`; listing only if you use the connectivity check).
+- Storage variables are marked `sync: false` in `render.yaml`; set them in the Render dashboard as secrets. Keep the bucket private and grant only the operations the API needs (`PutObject`, `GetObject`, `HeadBucket`, `DeleteObject`; listing only if you use the connectivity check).
 - Migrations are **not** run automatically. Run `alembic upgrade head` from a trusted shell with the production `DATABASE_URL` before or after deploying schema changes.
 
 `render.yaml` configures `AUTH_COOKIE_SECURE=true` and `AUTH_COOKIE_SAMESITE=none` for cross-site Vercel → Render cookies. This configuration has **not** been deployed. Third-party cookie blocking, custom-domain requirements, and a shared rate limiter must be evaluated during deployment hardening.
@@ -366,11 +379,12 @@ See [THREATS.md](THREATS.md) for the full threat model.
 
 ## Current Limitations
 
-- Live Wasabi connectivity and bucket policy have not been verified; upload tests use a mocked adapter.
-- No document download, listing, search, or permission endpoints.
+- Live Wasabi connectivity and bucket policy have not been verified; upload/download/delete tests use a mocked adapter.
+- Per-document READ/EDIT permissions, sharing, and revocation are not implemented; viewers currently see no documents.
 - Uploads are not virus-scanned; validation covers type/signature/size/structure only.
 - Upload-to-database consistency is compensating, not transactional: a failed metadata commit triggers best-effort object deletion, which could itself fail.
-- No audit writing, hash chain, or administrator activity views.
+- Soft deletion excludes metadata from normal reads but object cleanup occurs after commit; a cleanup failure can leave a private orphan object for later reconciliation.
+- No audit writing, hash chain, or administrator activity views; document management actions are not yet recorded in `audit_events`.
 - RLS is not enabled; the backend uses a single privileged database role.
 - The `0002` migration has not been applied to Supabase, and no deployment has been verified.
 - Authentication rate limiting is in-memory and per process; a multi-instance deployment needs a shared store.
@@ -385,12 +399,12 @@ See [THREATS.md](THREATS.md) for the full threat model.
 | Phase | Status |
 |-------|--------|
 | 0 — Requirements and Repository Foundation | Complete |
-| 1 — Project Scaffold and Early Deployment | Complete — awaiting review |
+| 1 — Project Scaffold and Early Deployment | Partial — local scaffold complete; live deployment deferred to Phase 10 |
 | 2 — Database Schema and Migrations | Complete — awaiting review |
 | 3 — Authentication and Roles | Complete — awaiting review |
 | 4 — Private Storage and Validated Uploads | Complete — awaiting review |
-| 5 — Document Management and Search | Not started (next) |
-| 6 — Document Permissions and Revocation | Not started |
+| 5 — Document Management and Search | Complete — awaiting review |
+| 6 — Document Permissions and Revocation | Not started (next) |
 | 7 — Audit Trail and Administrator Activity | Not started |
 | 8 — Security Tests and Threat-Model Verification | Not started |
 | 9 — Complete Frontend | Not started |

@@ -67,9 +67,9 @@ graph TB
 
 **Scenario:** A user guesses or enumerates document IDs and requests documents they were never granted access to.
 
-**Mitigation:** Every document endpoint performs an object-level authorization check against `document_permissions`, ownership, and role. IDs are UUIDs (hard to enumerate but not relied upon for security). Unauthorized access returns 403 (or 404 without leaking existence).
+**Mitigation:** Phase 5 document endpoints resolve visibility from the current database role and ownership on every request. Owners are scoped to their own active documents; administrators may read active metadata; viewers see none. Update/download/delete require ownership. IDs are UUIDs (hard to enumerate but not relied upon for security), and inaccessible/missing IDs return the same generic 404.
 
-**Verification:** Dedicated IDOR tests in Phase 8 request documents with valid IDs belonging to other users and assert denial for GET, download, PUT, and DELETE.
+**Verification:** Phase 5 tests request another owner's valid document ID and assert generic 404 denial for detail, update, download, and delete. Additional grant-based IDOR tests follow in Phases 6/8.
 
 **Residual Risk:** Low. UUIDs reduce discoverability but authorization does not depend on secrecy of IDs.
 
@@ -79,11 +79,11 @@ graph TB
 
 **Scenario:** A user attempts to download a document via a direct link, guessed storage key, or API manipulation.
 
-**Mitigation:** The bucket is intended to be private, and Phase 4 never returns a direct or presigned URL or the storage key. Downloads are not implemented yet. The Phase 5 download proxy must authorize before reading from storage and must audit successful/denied attempts once the Phase 7 writer exists.
+**Mitigation:** The bucket is intended to be private. Uploads never return a direct or presigned URL or the storage key. The Phase 5 download proxy authorizes the owner before reading from storage and streams the body without exposing the key or a direct URL. Storage-not-found and configuration/operation failures return generic responses. Successful/denied downloads are logged operationally but not yet audited.
 
-**Verification:** Phase 4 tests assert that upload responses contain no storage key, URL, or credentials. Unauthorized-download and direct-bucket-denial tests belong to Phases 5/8 and the live deployment check.
+**Verification:** Phase 5 tests assert owner-only download, generic 404 denial for other owners/administrators/viewers, safe attachment/no-store headers, header-injection resistance, and no storage-key leakage. Upload tests continue to assert safe responses.
 
-**Residual Risk:** Low after the bucket policy is verified. The live Wasabi private policy has **not** been verified. Files already downloaded before a revocation cannot be recalled — see 4.4.
+**Residual Risk:** Low after the bucket policy is verified. The live Wasabi private policy and download behavior have **not** been verified. Files already downloaded before a revocation cannot be recalled — see 4.4.
 
 ---
 
@@ -93,7 +93,7 @@ graph TB
 
 **Mitigation:** Roles are stored server-side and derived from the authenticated identity, never trusted from client-supplied body or header fields. JWT signature validation prevents claim tampering. Permission-management endpoints check the caller is owner or admin.
 
-**Verification:** Tests attempt role manipulation via JWT tampering and request body injection and assert denial with audit records.
+**Verification:** Tests attempt role manipulation via JWT tampering and request body injection and assert denial. Audit records for denials remain Phase 7.
 
 **Residual Risk:** Low, provided the signing secret remains confidential.
 
@@ -115,7 +115,7 @@ graph TB
 
 **Scenario:** A user uploads malware, an executable disguised as an allowed type, a polyglot file, or a zip bomb.
 
-**Mitigation (implemented for upload):** Enforce a 10 MiB default size limit (including early `Content-Length` rejection), an extension and MIME allow-list, magic-byte/signature verification, filename validation, empty-file rejection, DOCX OOXML member limits, and NUL-free UTF-8 TXT validation. Executable types are not allowed. The backend computes the checksum, generates the storage key, and stores files privately. Uploaded content is never executed or rendered server-side. Download response headers and malware scanning are future work.
+**Mitigation (implemented for upload/download):** Enforce a 10 MiB default size limit (including early `Content-Length` rejection), an extension and MIME allow-list, magic-byte/signature verification, filename validation, empty-file rejection, DOCX OOXML member limits, and NUL-free UTF-8 TXT validation. Executable types are not allowed. The backend computes the checksum, generates the storage key, and stores files privately. Uploaded content is never executed or rendered server-side. Downloads are forced as attachments with `nosniff` and no-store headers. Malware scanning remains future work.
 
 **Verification:** Unit tests cover each validation rule; integration tests cover mismatched extensions/content, unsafe names, empty files, oversized requests, Viewer denial, storage failure, and metadata-failure cleanup.
 
@@ -163,9 +163,9 @@ graph TB
 
 **Scenario:** Error messages, search results, headers, or logs reveal document existence, ownership, or contents to unauthorized users.
 
-**Mitigation:** Phase 4 upload responses expose only safe metadata and never the storage key, URL, or credentials. Role denials and storage failures return generic messages; internal storage errors are logged without credentials. Future download responses must avoid leaking metadata to unauthorized callers and use `Content-Disposition` only after authorization.
+**Mitigation:** Upload and document responses expose only safe metadata and never the storage key, URL, or credentials. Role denials, missing/inaccessible IDs, and storage failures return generic messages; internal storage errors are logged without credentials. Phase 5 download authorization occurs before any content headers are returned, and attachment filenames are encoded with control characters neutralized.
 
-**Verification:** Tests assert generic storage/persistence errors and secret-safe logs, and assert upload responses omit storage details. Denied-download and log-review tests expand in later phases.
+**Verification:** Tests assert generic storage/persistence errors, secret-safe logs, metadata-only response fields, owner-only download denial, safe attachment encoding, and no storage-key leakage.
 
 **Residual Risk:** Low–Medium. Timing side channels and name leakage in shared contexts require ongoing review.
 
@@ -252,7 +252,8 @@ graph TB
 | Malware in uploaded files | Medium | Add antivirus scanning; validation is not scanning |
 | Live Wasabi bucket policy/connectivity unverified | Medium | Verify private policy, least-privilege keys, and upload/delete behavior before deployment |
 | Upload object and metadata are not transactional | Low–Medium | Best-effort cleanup only; monitor orphans and add reconciliation |
-| Uploads are not audited yet | Medium | Phase 7 writes `DOCUMENT_UPLOAD`/denied events |
+| Soft-deleted metadata can outlive a failed object cleanup | Low–Medium | Cleanup is best-effort after commit; log and reconcile private orphans |
+| Document management actions are not audited yet | Medium | Phase 7 writes view/download/edit/delete/denied events |
 | Stolen access token valid until expiry | Medium | Short TTL; consider token binding |
 | Credential stuffing without MFA | Medium | Evaluate MFA |
 | Application-level DoS | Medium | Rate limits, provider protections |
@@ -312,5 +313,20 @@ These notes record the upload/storage controls that are actually implemented. Do
 - **Failure behavior:** Missing/misconfigured storage or Wasabi failure returns generic 503 with no metadata row. A metadata commit failure after upload returns generic 500 and attempts best-effort object deletion.
 - **Secret handling:** Storage errors are logged without credentials or internal details; configuration is server-side only. Tests assert secret-safe logging and responses.
 - **Frontend migration:** TypeScript/TSX was removed in favor of JavaScript/JSX; lint and build pass.
-- **Verification:** 101 backend tests pass. Storage tests use a fake adapter; **no test contacted Wasabi**. Live bucket privacy, credentials, permissions, and connectivity remain unverified.
-- **Not implemented:** Download/listing, permission grants, audit writes, malware scanning, RLS, and deployment.
+- **Verification:** 107 backend tests passed at Phase 4 completion. Storage tests use a fake adapter; **no test contacted Wasabi**. Live bucket privacy, credentials, permissions, and connectivity remain unverified.
+- **Not implemented at Phase 4 completion:** Download/listing, permission grants, audit writes, malware scanning, RLS, and deployment.
+
+---
+
+## 11. Phase 5 Implementation Notes (Verified with Mocked Storage)
+
+These notes record the document-management controls actually implemented. Permission grants and audit writes remain planned.
+
+- **Metadata scoping:** Owners see only their active documents; administrators may read active metadata across the library; viewers see none. Update, download, and delete require ownership. Inaccessible and missing IDs both return generic 404.
+- **Query safety:** Name search is parameterized and escapes `\`, `%`, and `_` so user input cannot become a wildcard. Category/owner/date filters are parameterized; sort columns are an allow-list; page size is bounded.
+- **Metadata integrity:** Only `name`, `category`, and `description` can be changed. Storage key, owner, MIME type, size, checksum, and timestamps are not client-updatable; extra fields are rejected.
+- **Download:** The backend authorizes ownership before reading from private storage and streams the object. Responses set an attachment filename, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`. Filenames are RFC 5987-encoded with sanitized ASCII fallbacks.
+- **Deletion:** Soft deletion sets `deleted_at` and excludes the row from all normal reads. Wasabi cleanup happens after the database commit and is best-effort; failure is logged, and metadata is retained.
+- **Failure handling:** Missing storage objects return generic 404; storage configuration/operation failures return generic 503. No storage key, URL, or credential is exposed to the client or logs.
+- **Verification:** 127 backend tests pass, including management authorization, filter/query safety, pagination, IDOR behavior, protected-field rejection, download headers/failures, soft delete, and cleanup failure. Frontend lint/build pass.
+- **Not implemented:** Explicit READ/EDIT grants, immediate revocation, audit events, live Wasabi download/delete verification, malware scanning, RLS, and deployment.

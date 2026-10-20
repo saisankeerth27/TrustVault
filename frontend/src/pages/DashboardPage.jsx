@@ -82,9 +82,9 @@ export function DashboardPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 4"
+        eyebrow="Phase 5"
         title={user ? `Welcome back, ${user.name.split(' ')[0]}` : 'Application dashboard'}
-        description="You are signed in to TrustVault. Authentication and secure document uploads are live; document listing, sharing permissions, downloads, and the audit UI arrive in later phases."
+        description="You are signed in to TrustVault. Authentication, secure uploads, document search, metadata management, downloads, and deletion are live; named-user sharing permissions and audit history arrive in later phases."
         actions={
           <Link to="/documents" className={buttonVariants({ variant: 'outline' })}>
             View documents
@@ -161,7 +161,7 @@ export function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <CardTitle>Document access</CardTitle>
-              <StatusPill tone="success">Uploads live</StatusPill>
+              <StatusPill tone="success">Library live</StatusPill>
             </div>
             <CardDescription>
               Owner and Administrator accounts can upload supported files.
@@ -170,15 +170,15 @@ export function DashboardPage() {
           <CardContent className="space-y-3 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
               <FileText className="size-4" aria-hidden="true" />
-              Private Wasabi object storage with server-generated keys.
+              Searchable, filtered library with owner-scoped metadata.
             </div>
             <div className="flex items-center gap-2">
               <LockKeyhole className="size-4" aria-hidden="true" />
-              Server-side file type, size, and signature validation.
+              Authenticated download proxy with no exposed storage keys.
             </div>
             <div className="flex items-center gap-2">
               <KeyRound className="size-4" aria-hidden="true" />
-              SHA-256 checksums recorded in PostgreSQL.
+              SHA-256 checksums and soft deletion recorded in PostgreSQL.
             </div>
           </CardContent>
         </Card>
@@ -206,9 +206,9 @@ export function DashboardPage() {
               </p>
             </div>
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-              Current limitation: document listing, per-document permissions, downloads, and audit
-              views are not implemented. Uploads are private, but retrieval and sharing workflows
-              are not exposed yet.
+              Current limitation: per-document READ/EDIT grants, immediate revocation, and audit
+              history are not implemented. Administrators can review metadata, but document content
+              and owner actions remain owner-only.
             </p>
           </CardContent>
         </Card>

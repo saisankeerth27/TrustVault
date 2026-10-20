@@ -61,7 +61,7 @@ docs: define TrustVault requirements and architecture
 
 ## Phase 1: Project Scaffold and Early Deployment
 
-**Status:** Complete — awaiting review. Verified locally; no live deployment was performed.
+**Status:** Partial — awaiting review. Local scaffold, build, startup, and health checks are verified; live Vercel/Render deployment was not performed and is deferred to Phase 10.
 
 **Objectives**
 Create the frontend and backend scaffolds, configure build tooling, and deploy empty shells to Vercel and Render to prove the deployment pipeline before feature work.
@@ -210,7 +210,7 @@ Integrate private Wasabi S3 storage and implement a validated secure upload path
 - Unit tests for every validation rule and storage configuration.
 - Integration tests for authorized/denied upload, metadata persistence, failure paths, and cleanup.
 - Tests that responses and logs expose no storage key or secret.
-- 101 backend tests pass; frontend lint/build pass.
+- 107 backend tests pass; frontend lint/build pass.
 
 **Suggested Commit Message**
 ```
@@ -221,34 +221,39 @@ feat(storage): implement secure document uploads
 
 ## Phase 5: Document Management and Search
 
+**Status:** Complete - awaiting review. Verified locally with a mocked Wasabi adapter; live download and object-deletion behavior was **not** verified because no credentials were supplied.
+
 **Objectives**
-Implement document listing, metadata editing, categorization, deletion, and permission-scoped search.
+Implement document listing, metadata editing, categorization, search, proxied download, and soft deletion with ownership/role scoping.
 
 **Deliverables**
-- Backend-proxied download endpoint with safe headers; no direct/presigned storage URLs.
-- Document listing, metadata update, category management, and soft/hard-delete behavior with object cleanup.
-- Search endpoint with filters: name, owner, category, date range.
-- Pagination and sorting.
-- Permission scoping so users only see accessible documents (owner/admin/placeholder grants until Phase 6).
+- `GET /api/v1/documents` with name search, category/owner/date filters, pagination, and allow-listed sorting.
+- `GET /api/v1/documents/{id}` safe metadata details.
+- `PATCH /api/v1/documents/{id}` for owner-only `name`, `category`, and `description` updates; protected fields rejected.
+- `GET /api/v1/documents/{id}/download` as an owner-only backend proxy with safe attachment/no-store headers and no presigned URL.
+- `DELETE /api/v1/documents/{id}` owner-only soft deletion with best-effort Wasabi object cleanup after commit.
+- JavaScript/JSX library, filters, pagination, upload panel, and document details/edit/delete UI.
+- Administrator metadata review across active documents without content or owner-only actions.
 
 **Dependencies**
 - Phase 4 approved.
 
 **Acceptance Criteria**
-- Users can list, update, and delete documents they are entitled to manage.
-- Search respects permission scoping and supports all four filter dimensions.
-- Pagination and sorting behave correctly.
-- Deletion removes storage objects and updates metadata consistently.
+- Owners can list, inspect, update, download, and delete their active documents.
+- Administrators can list/inspect metadata for all active documents but cannot manage another owner's document.
+- Viewers see no documents until Phase 6 grants exist.
+- Search/filter/sort/pagination behave correctly and wildcard characters are treated literally.
+- Unauthorized or missing documents return a generic 404; protected metadata cannot be changed.
+- Downloads are authenticated and never expose storage keys or direct storage URLs.
+- Deletion excludes metadata from normal reads and attempts object cleanup; cleanup failure is logged.
 
 **Tests**
-- Integration tests for CRUD.
-- Search filter tests for each dimension.
-- Permission-scoping tests for search results.
-- Pagination boundary tests.
+- 127 backend tests pass, covering listing/scoping, all filters, wildcard escaping, sorting, pagination validation, IDOR behavior, protected-field rejection, safe download headers/failures, soft deletion, and cleanup failure.
+- Frontend lint/build pass; no TypeScript files remain.
 
 **Suggested Commit Message**
 ```
-feat: implement document management and search
+feat(documents): implement document management and search
 ```
 
 ---

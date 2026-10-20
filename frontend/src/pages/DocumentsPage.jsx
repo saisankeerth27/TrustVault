@@ -1,147 +1,198 @@
-import { useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  CheckCircle2,
+  ArrowLeft,
+  ArrowRight,
   FileText,
-  FileUp,
   LoaderCircle,
-  LockKeyhole,
+  Plus,
+  RefreshCw,
+  Search,
   ShieldAlert,
-  Upload,
+  X,
 } from 'lucide-react'
-import { z } from 'zod'
+import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
+import { UploadDocumentPanel } from '@/components/documents/UploadDocumentPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  CATEGORY_OPTIONS,
+  SORT_OPTIONS,
+  formatBytes,
+  formatDate,
+  isDocumentManager,
+} from '@/lib/documents'
+import { cn } from '@/lib/utils'
 import { getApiErrorMessage } from '@/services/api'
-import { uploadDocument } from '@/services/documents'
+import { listDocuments } from '@/services/documents'
 
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-const ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'png', 'jpg', 'jpeg']
-const CATEGORY_OPTIONS = [
-  'General',
-  'Contracts',
-  'Finance',
-  'Human resources',
-  'Legal',
-  'Other',
-]
-
-function isFile(value) {
-  return typeof File !== 'undefined' && value instanceof File
+const PAGE_SIZE = 10
+const EMPTY_RESULT = {
+  items: [],
+  total: 0,
+  page: 1,
+  page_size: PAGE_SIZE,
+  pages: 0,
+  has_next: false,
+  has_previous: false,
 }
 
-function extensionOf(filename) {
-  const parts = filename.toLowerCase().split('.')
-  return parts.length > 1 ? parts.pop() : ''
-}
+const fieldClassName =
+  'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
 
-function formatBytes(bytes) {
-  if (bytes < 1024) {
-    return `${bytes} B`
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+function isAbortError(error) {
+  return error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError'
 }
-
-const uploadSchema = z.object({
-  file: z
-    .custom(isFile, { message: 'Choose a file to upload.' })
-    .refine((file) => isFile(file) && file.size > 0, {
-      message: 'The selected file is empty.',
-    })
-    .refine((file) => isFile(file) && file.size <= MAX_UPLOAD_BYTES, {
-      message: 'The selected file must be 10 MB or smaller.',
-    })
-    .refine(
-      (file) => isFile(file) && ALLOWED_EXTENSIONS.includes(extensionOf(file.name)),
-      {
-        message: 'Choose a PDF, TXT, DOCX, PNG, or JPEG file.',
-      },
-    ),
-  category: z.string().max(100, { message: 'Category must be 100 characters or fewer.' }),
-  description: z
-    .string()
-    .max(2000, { message: 'Description must be 2,000 characters or fewer.' }),
-})
 
 export function DocumentsPage() {
   const { user } = useAuth()
-  const canUpload = user?.role === 'ADMINISTRATOR' || user?.role === 'DOCUMENT_OWNER'
-  const [file, setFile] = useState(null)
-  const [fileError, setFileError] = useState(null)
-  const [serverError, setServerError] = useState(null)
-  const [uploaded, setUploaded] = useState(null)
-  const [progress, setProgress] = useState(0)
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setError,
-    formState: { errors, isSubmitting },
-  } = useForm({
-    defaultValues: { category: 'General', description: '' },
-  })
+  const location = useLocation()
+  const canUpload = isDocumentManager(user)
+  const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [category, setCategory] = useState('')
+  const [sort, setSort] = useState(SORT_OPTIONS[0].value)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [page, setPage] = useState(1)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [result, setResult] = useState(EMPTY_RESULT)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(() => location.state?.notice ?? null)
+  const [showUpload, setShowUpload] = useState(false)
 
-  function handleFileChange(event) {
-    setFile(event.target.files?.[0] ?? null)
-    setFileError(null)
-    setServerError(null)
+  const hasFilters = Boolean(
+    query.trim() || category.trim() || dateFrom || dateTo || sort !== SORT_OPTIONS[0].value,
+  )
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query.trim())
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const [sortBy, order] = sort.split(':')
+    const params = {
+      page,
+      page_size: PAGE_SIZE,
+      sort_by: sortBy,
+      order,
+    }
+
+    if (debouncedQuery) {
+      params.q = debouncedQuery
+    }
+    if (category.trim()) {
+      params.category = category.trim()
+    }
+    if (dateFrom) {
+      params.created_from = dateFrom
+    }
+    if (dateTo) {
+      params.created_to = dateTo
+    }
+
+    listDocuments(params, controller.signal)
+      .then((payload) => {
+        setResult(payload)
+      })
+      .catch((requestError) => {
+        if (!isAbortError(requestError)) {
+          setError(getApiErrorMessage(requestError))
+          setResult(EMPTY_RESULT)
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsLoading(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [category, dateFrom, dateTo, debouncedQuery, page, refreshKey, sort])
+
+  const rangeLabel = useMemo(() => {
+    if (result.total === 0) {
+      return 'No documents'
+    }
+    const start = (result.page - 1) * result.page_size + 1
+    const end = Math.min(result.page * result.page_size, result.total)
+    return `Showing ${start}-${end} of ${result.total}`
+  }, [result])
+
+  function beginRequest() {
+    setError(null)
+    setIsLoading(true)
   }
 
-  const onSubmit = async (values, event) => {
-    setServerError(null)
-    setUploaded(null)
-    setProgress(0)
+  function updateQuery(value) {
+    beginRequest()
+    setQuery(value)
+    setPage(1)
+  }
 
-    const result = uploadSchema.safeParse({
-      file,
-      category: values.category,
-      description: values.description,
-    })
+  function clearFilters() {
+    beginRequest()
+    setQuery('')
+    setDebouncedQuery('')
+    setCategory('')
+    setSort(SORT_OPTIONS[0].value)
+    setDateFrom('')
+    setDateTo('')
+    setPage(1)
+  }
 
-    if (!result.success) {
-      setFileError(null)
-      for (const issue of result.error.issues) {
-        const field = issue.path[0]
-        if (field === 'file') {
-          setFileError(issue.message)
-        } else if (field === 'category' || field === 'description') {
-          setError(field, { type: 'manual', message: issue.message })
-        }
-      }
-      return
-    }
+  function retry() {
+    beginRequest()
+    setRefreshKey((key) => key + 1)
+  }
 
-    try {
-      const document = await uploadDocument(
-        result.data.file,
-        {
-          category: result.data.category,
-          description: result.data.description,
-        },
-        setProgress,
-      )
-      setUploaded(document)
-      setFile(null)
-      setFileError(null)
-      setProgress(100)
-      reset()
-      event?.target?.reset()
-    } catch (error) {
-      setServerError(getApiErrorMessage(error))
-    }
+  function handleUploaded(documentRecord) {
+    beginRequest()
+    setNotice(`${documentRecord.name} was uploaded successfully.`)
+    setPage(1)
+    setRefreshKey((key) => key + 1)
   }
 
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Documents"
-        title="Upload a document"
-        description="Upload a supported file to private Wasabi storage. The backend validates the content, generates the storage key, records a SHA-256 checksum, and enforces your account role."
+        eyebrow="Phase 5"
+        title="Document library"
+        description={
+          canUpload
+            ? 'Search, filter, inspect, download, and manage documents you are authorized to access. The backend enforces ownership and role checks on every request.'
+            : 'Your account can sign in but cannot upload or manage documents. Documents assigned through per-document permissions will appear here after that workflow is implemented.'
+        }
+        actions={
+          canUpload ? (
+            <Button
+              type="button"
+              onClick={() => {
+                setShowUpload((visible) => !visible)
+                setNotice(null)
+              }}
+            >
+              {showUpload ? (
+                <>
+                  <X className="size-4" aria-hidden="true" />
+                  Close upload
+                </>
+              ) : (
+                <>
+                  <Plus className="size-4" aria-hidden="true" />
+                  Upload document
+                </>
+              )}
+            </Button>
+          ) : undefined
+        }
       />
 
       {!canUpload ? (
@@ -151,230 +202,343 @@ export function DocumentsPage() {
               <ShieldAlert className="size-6" aria-hidden="true" />
             </span>
             <div className="space-y-2">
-              <h2 className="text-lg font-semibold tracking-tight">
-                Your role cannot upload documents
-              </h2>
+              <h2 className="text-lg font-semibold tracking-tight">Viewer access</h2>
               <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-                Viewer accounts can sign in but cannot upload. Ask an administrator to provision a
-                Document owner or Administrator account if you need upload access. The backend
-                rejects unauthorized uploads even if this interface is bypassed.
+                Viewer accounts have no document-management permissions in the current phase.
+                Per-document sharing and revocation arrive in Phase 6.
               </p>
             </div>
           </CardContent>
         </Card>
       ) : null}
 
-      {uploaded ? (
-        <Card>
-          <CardContent className="flex flex-col gap-4 px-6 py-6" role="status">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-600" aria-hidden="true" />
-              <div className="space-y-1">
-                <h2 className="font-semibold">Upload completed</h2>
-                <p className="text-sm text-muted-foreground">
-                  {uploaded.name} was stored privately. No download or sharing link is available
-                  yet.
-                </p>
-              </div>
-            </div>
-            <dl className="grid gap-3 rounded-lg border bg-muted/30 p-4 text-sm sm:grid-cols-2">
-              <div>
-                <dt className="text-muted-foreground">File size</dt>
-                <dd className="font-medium">{formatBytes(uploaded.file_size)}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">Category</dt>
-                <dd className="font-medium">{uploaded.category || 'Uncategorized'}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">MIME type</dt>
-                <dd className="font-medium">{uploaded.mime_type}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">Uploaded</dt>
-                <dd className="font-medium">
-                  {new Date(uploaded.created_at).toLocaleString()}
-                </dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="text-muted-foreground">SHA-256 checksum</dt>
-                <dd className="font-mono text-xs break-all">{uploaded.checksum}</dd>
-              </div>
-            </dl>
-          </CardContent>
-        </Card>
+      {showUpload && canUpload ? (
+        <UploadDocumentPanel
+          onUploaded={handleUploaded}
+          onCancel={() => setShowUpload(false)}
+        />
       ) : null}
 
-      {canUpload ? (
-        <div className="grid gap-5 lg:grid-cols-[2fr_1fr]">
-          <Card>
-            <CardContent className="px-6 py-6">
-              <form className="space-y-6" onSubmit={handleSubmit(onSubmit)} noValidate>
-                {serverError ? (
-                  <div
-                    role="alert"
-                    className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
-                  >
-                    {serverError}
-                  </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  <label htmlFor="document-file" className="text-sm font-medium">
-                    Document file
-                  </label>
-                  <input
-                    id="document-file"
-                    name="file"
-                    type="file"
-                    accept=".pdf,.txt,.docx,.png,.jpg,.jpeg"
-                    onChange={handleFileChange}
-                    disabled={isSubmitting}
-                    aria-invalid={fileError ? true : undefined}
-                    aria-describedby={fileError ? 'document-file-error' : 'document-file-help'}
-                    className="block w-full cursor-pointer rounded-lg border border-input bg-background px-3 py-3 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-medium file:text-primary-foreground hover:file:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-                  />
-                  <p id="document-file-help" className="text-xs leading-5 text-muted-foreground">
-                    PDF, TXT, DOCX, PNG, JPG, or JPEG. Maximum 10 MB.
-                  </p>
-                  {fileError ? (
-                    <p id="document-file-error" className="text-sm text-destructive">
-                      {fileError}
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="grid gap-5 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <label htmlFor="document-category" className="text-sm font-medium">
-                      Category
-                    </label>
-                    <select
-                      id="document-category"
-                      className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={isSubmitting}
-                      aria-invalid={errors.category ? true : undefined}
-                      aria-describedby={errors.category ? 'document-category-error' : undefined}
-                      {...register('category')}
-                    >
-                      {CATEGORY_OPTIONS.map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
-                    </select>
-                    {errors.category ? (
-                      <p id="document-category-error" className="text-sm text-destructive">
-                        {errors.category.message}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="space-y-2 sm:row-span-2">
-                    <label htmlFor="document-description" className="text-sm font-medium">
-                      Description <span className="font-normal text-muted-foreground">(optional)</span>
-                    </label>
-                    <textarea
-                      id="document-description"
-                      rows={4}
-                      maxLength={2000}
-                      placeholder="A short description for your own reference"
-                      className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive"
-                      disabled={isSubmitting}
-                      aria-invalid={errors.description ? true : undefined}
-                      aria-describedby={
-                        errors.description ? 'document-description-error' : undefined
-                      }
-                      {...register('description')}
-                    />
-                    {errors.description ? (
-                      <p id="document-description-error" className="text-sm text-destructive">
-                        {errors.description.message}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-
-                {isSubmitting ? (
-                  <div className="space-y-2" aria-live="polite">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Uploading securely...</span>
-                      <span>{progress}%</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-primary transition-all"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button type="submit" disabled={isSubmitting || !file}>
-                    {isSubmitting ? (
-                      <>
-                        <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-                        Uploading...
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="size-4" aria-hidden="true" />
-                        Upload document
-                      </>
-                    )}
-                  </Button>
-                  <span className="text-xs text-muted-foreground">
-                    The backend validates the selected file again.
-                  </span>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-
-          <div className="space-y-5">
-            <Card>
-              <CardContent className="space-y-4 px-6 py-6">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <LockKeyhole className="size-4 text-primary" aria-hidden="true" />
-                  Private by default
-                </div>
-                <p className="text-sm leading-6 text-muted-foreground">
-                  Files are stored in a private bucket. The server generates the object key and
-                  records the owner, size, MIME type, and checksum. The storage key is never sent
-                  to the browser.
-                </p>
-              </CardContent>
-            </Card>
-
-            {file ? (
-              <Card>
-                <CardContent className="space-y-2 px-6 py-6">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <FileUp className="size-4 text-primary" aria-hidden="true" />
-                    Selected file
-                  </div>
-                  <p className="truncate text-sm">{file.name}</p>
-                  <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
-                </CardContent>
-              </Card>
-            ) : null}
-          </div>
+      {notice ? (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-900"
+        >
+          <span>{notice}</span>
+          <button
+            type="button"
+            className="rounded-sm text-emerald-800 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setNotice(null)}
+          >
+            Dismiss
+          </button>
         </div>
       ) : null}
 
       <Card>
-        <CardContent className="flex flex-col items-start gap-3 px-6 py-6 text-sm text-muted-foreground">
-          <div className="flex items-center gap-2 font-medium text-foreground">
-            <FileText className="size-4" aria-hidden="true" />
-            Document library
+        <CardContent className="space-y-5 px-6 py-6">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight">Browse documents</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {user?.role === 'ADMINISTRATOR'
+                  ? 'Administrator accounts can review metadata across the library. Downloading, editing, and deleting remain owner-only.'
+                  : 'You can see metadata for documents you own.'}
+              </p>
+            </div>
+            {hasFilters ? (
+              <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
+                <X className="size-4" aria-hidden="true" />
+                Clear filters
+              </Button>
+            ) : null}
           </div>
-          <p className="max-w-3xl leading-6">
-            Listing, search, downloads, and per-document permissions are not available yet. This
-            page does not display sample documents or claim that those workflows exist.
-          </p>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr]">
+            <div className="space-y-2">
+              <label htmlFor="document-search" className="text-sm font-medium">
+                Search by name
+              </label>
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <input
+                  id="document-search"
+                  type="search"
+                  value={query}
+                  onChange={(event) => updateQuery(event.target.value)}
+                  placeholder="Search documents..."
+                  className={cn(fieldClassName, 'pl-9')}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="document-category-filter" className="text-sm font-medium">
+                Category
+              </label>
+              <input
+                id="document-category-filter"
+                type="text"
+                value={category}
+                list="document-category-filter-options"
+                maxLength={100}
+                placeholder="All categories"
+                onChange={(event) => {
+                  beginRequest()
+                  setCategory(event.target.value)
+                  setPage(1)
+                }}
+                className={fieldClassName}
+              />
+              <datalist id="document-category-filter-options">
+                {CATEGORY_OPTIONS.map((option) => (
+                  <option key={option} value={option} />
+                ))}
+              </datalist>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="document-date-from" className="text-sm font-medium">
+                Created from
+              </label>
+              <input
+                id="document-date-from"
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(event) => {
+                  const value = event.target.value
+                  beginRequest()
+                  setDateFrom(value)
+                  if (dateTo && value && value > dateTo) {
+                    setDateTo('')
+                  }
+                  setPage(1)
+                }}
+                className={fieldClassName}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="document-date-to" className="text-sm font-medium">
+                Created to
+              </label>
+              <input
+                id="document-date-to"
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(event) => {
+                  const value = event.target.value
+                  beginRequest()
+                  setDateTo(value)
+                  if (dateFrom && value && value < dateFrom) {
+                    setDateFrom('')
+                  }
+                  setPage(1)
+                }}
+                className={fieldClassName}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+            <label htmlFor="document-sort" className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Sort</span>
+              <select
+                id="document-sort"
+                value={sort}
+                onChange={(event) => {
+                  beginRequest()
+                  setSort(event.target.value)
+                  setPage(1)
+                }}
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-sm text-muted-foreground" aria-live="polite">
+              {isLoading ? 'Loading documents...' : rangeLabel}
+            </p>
+          </div>
         </CardContent>
       </Card>
+
+      {error ? (
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-4 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between"
+        >
+          <span>{error}</span>
+          <Button type="button" variant="outline" size="sm" onClick={retry}>
+            <RefreshCw className="size-4" aria-hidden="true" />
+            Retry
+          </Button>
+        </div>
+      ) : null}
+
+      <Card>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="space-y-3 px-6 py-6" aria-busy="true" aria-live="polite">
+              {[0, 1, 2].map((row) => (
+                <div key={row} className="flex items-center gap-3 rounded-lg border p-4">
+                  <div className="size-9 animate-pulse rounded-lg bg-muted" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3 w-1/3 animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-1/5 animate-pulse rounded bg-muted" />
+                  </div>
+                  <LoaderCircle
+                    className="size-4 animate-spin text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                </div>
+              ))}
+            </div>
+          ) : result.items.length === 0 && !error ? (
+            <div className="flex flex-col items-center gap-3 px-6 py-14 text-center">
+              <span className="flex size-12 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+                <FileText className="size-6" aria-hidden="true" />
+              </span>
+              <div className="space-y-1">
+                <h3 className="font-semibold">
+                  {hasFilters ? 'No documents match these filters' : 'No documents yet'}
+                </h3>
+                <p className="max-w-md text-sm text-muted-foreground">
+                  {hasFilters
+                    ? 'Adjust the search, category, or date filters and try again.'
+                    : canUpload
+                      ? 'Upload your first document to start building the library.'
+                      : 'No documents are currently visible to your account.'}
+                </p>
+              </div>
+              {hasFilters ? (
+                <Button type="button" variant="outline" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-sm">
+                <thead className="border-b bg-muted/40 text-left text-xs tracking-wide text-muted-foreground uppercase">
+                  <tr>
+                    <th scope="col" className="px-6 py-3 font-medium">
+                      Document
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Category
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Owner
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Size
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Updated
+                    </th>
+                    <th scope="col" className="px-6 py-3 text-right font-medium">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {result.items.map((documentRecord) => (
+                    <tr key={documentRecord.id} className="hover:bg-muted/30">
+                      <td className="max-w-72 px-6 py-4">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+                            <FileText className="size-4" aria-hidden="true" />
+                          </span>
+                          <div className="min-w-0">
+                            <Link
+                              to={`/documents/${documentRecord.id}`}
+                              className="block truncate font-medium hover:underline"
+                            >
+                              {documentRecord.name}
+                            </Link>
+                            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                              {documentRecord.mime_type}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4 text-muted-foreground">
+                        {documentRecord.category || 'Uncategorized'}
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="block max-w-40 truncate">
+                          {documentRecord.owner_name}
+                        </span>
+                        {documentRecord.owner_id === user?.id ? (
+                          <span className="text-xs text-muted-foreground">You</span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-4 text-muted-foreground">
+                        {formatBytes(documentRecord.file_size)}
+                      </td>
+                      <td className="px-4 py-4 text-muted-foreground">
+                        {formatDate(documentRecord.updated_at)}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <Link
+                          to={`/documents/${documentRecord.id}`}
+                          className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                        >
+                          View
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {!isLoading && result.pages > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              beginRequest()
+              setPage((current) => Math.max(1, current - 1))
+            }}
+            disabled={!result.has_previous}
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            Previous
+          </Button>
+          <p className="text-sm text-muted-foreground">
+            Page {result.page} of {result.pages}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              beginRequest()
+              setPage((current) => current + 1)
+            }}
+            disabled={!result.has_next}
+          >
+            Next
+            <ArrowRight className="size-4" aria-hidden="true" />
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

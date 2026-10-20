@@ -24,7 +24,7 @@ Organizations need a secure, auditable document management system that enforces 
 **Description:** Authenticated users with the Owner role can upload documents, organize them into categories, search across their documents, and perform CRUD operations. File metadata (name, category, upload date, size, MIME type) is stored in the database. Actual file content is stored in private object storage.
 
 **Phase:** 4 (Storage and Upload), 5 (Document Management and Search)
-**Verification:** Phase 4 has integration tests for validated upload and metadata persistence using a mocked storage adapter; live Wasabi connectivity is unverified. Retrieval, search, and deletion tests arrive in Phase 5.
+**Verification:** Phase 4 has integration tests for validated upload and metadata persistence. Phase 5 adds listing/search, metadata visibility/updates, streamed download, and soft deletion tests using a mocked storage adapter. Live Wasabi connectivity, download, and object deletion remain unverified.
 
 ---
 
@@ -86,7 +86,7 @@ Each record includes: timestamp, acting user, target document, action type, outc
 Search results must be filtered by the requesting user's permissions — a user must never see documents they are not authorized to access.
 
 **Phase:** 5 (Document Management and Search)
-**Verification:** Tests confirming search results respect permission boundaries; tests for each filter type.
+**Verification:** Phase 5 tests cover name search, category/owner/date filters, sorting, pagination, and owner/admin/viewer visibility scoping. Explicit grant-based visibility remains Phase 6.
 
 ---
 
@@ -151,7 +151,9 @@ Administrators cannot modify or delete audit records through the application.
 | Search documents                    | All | Own + shared | Shared only |
 | Download documents                  | All with permission | Own + shared | Shared only |
 | Edit documents                      | With EDIT permission | Own + with EDIT | With EDIT only |
-| Modify audit records via API        | No  | No  | No |
+| Modify audit records via API        | No  | No  | No  |
+
+**Phase 5 authorization note:** administrators currently receive read-only metadata oversight of all active documents. Download, metadata updates, and deletion are owner-only. This deliberately avoids treating administrator identity as automatic document-content authorization; any broader administrator content access would require an explicit policy change in a later phase.
 
 ### Phase 3 Implementation Status (Verified Locally)
 
@@ -165,11 +167,19 @@ Administrators cannot modify or delete audit records through the application.
 ### Phase 4 Implementation Status (Verified Locally with Mocked Storage)
 
 - **FA-5:** Implemented. Validated files are sent to a private Wasabi bucket via the backend only, with backend-generated storage keys and no direct/presigned URL exposure. The bucket policy and live connectivity have **not** been verified.
-- **MR-2 upload portion:** Implemented for Owner/Admin, with category/description metadata persisted in PostgreSQL. Listing, search, update, and delete remain Phase 5.
+- **MR-2 upload portion:** Implemented for Owner/Admin, with category/description metadata persisted in PostgreSQL.
 - **MR-8:** Implemented. Extension, declared MIME, magic-byte/signature, filename, empty-file, size, DOCX package, and TXT encoding checks are covered by tests. Files are not virus-scanned.
 - **Role enforcement:** Viewers and anonymous callers are denied; Owner/Admin ownership is derived from the authenticated session, not client input.
 - **Integrity:** The backend computes SHA-256; a database failure after upload triggers best-effort object deletion.
-- **Not yet met:** live bucket verification, download/listing/search/delete, permissions, and audit events.
+
+### Phase 5 Implementation Status (Verified Locally with Mocked Storage)
+
+- **MR-2:** Implemented for owner-managed documents: list/search/filter/sort/paginate metadata, inspect details, update mutable metadata, download content, and soft delete. Live Wasabi behavior remains unverified.
+- **MR-5:** Document endpoints enforce authentication, current role, and ownership server-side; metadata visibility for administrators does not grant content or owner-only actions. Missing/inaccessible IDs return generic 404 responses.
+- **MR-7:** Name (partial, literal wildcards), owner ID, category, and created-date filters are implemented with pagination and allow-listed sorting. Results are owner-scoped; administrators can review all active metadata; viewers see none.
+- **FA-6 / FA-7 / FA-8:** Metadata is queryable/filterable; deletion marks `deleted_at` and attempts object cleanup; search results are scoped. Per-document sharing scoping is deferred to Phase 6.
+- **Integrity / privacy:** Downloads are proxied through the authenticated backend with safe attachment headers and no storage key or presigned URL. Name search escapes SQL wildcard characters; sort fields are allow-listed.
+- **Not yet met:** explicit READ/EDIT grants, immediate revocation, audit events for view/download/edit/delete, live bucket verification, malware scanning, and deployment.
 
 ---
 
@@ -232,7 +242,7 @@ Administrators cannot modify or delete audit records through the application.
 | Req ID | Requirement                                    | Implementation Phase | Verification Method                          |
 |--------|------------------------------------------------|:--------------------:|----------------------------------------------|
 | MR-1   | Authentication with roles                      | Phase 3              | Unit + integration tests for role endpoints  |
-| MR-2   | Document upload, organization, search, mgmt    | Phase 4 (upload), 5  | Upload tests pass with mocked storage; CRUD/search pending |
+| MR-2   | Document upload, organization, search, mgmt    | Phase 4 (upload), 5  | Upload/library/CRUD/search tests pass with mocked storage; live Wasabi unverified |
 | MR-3   | Named-user per-document READ/EDIT permissions  | Phase 6              | Permission grant/deny integration tests      |
 | MR-4   | Owner-controlled grant and revocation          | Phase 6              | Immediate revocation tests + audit checks    |
 | MR-5   | Backend enforcement of authorization           | Phase 5, 6, 8        | Direct API tests bypassing frontend          |

@@ -189,7 +189,69 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Implemented backend-generated `documents/{owner_uuid}/{random_uuid}.{ext}` keys, computed checksums, safe response schemas, and role-restricted upload.
   - Added failure-path cleanup and secret-safe logging, and documented the non-transactional residual risk.
   - Corrected all docs to distinguish **verified with mocked storage** from **live Wasabi unverified**, and updated test counts, routes, env names, key format, phases, threats, and limitations.
-  - Preserved the one-commit constraint by updating docs before the single Phase 4 commit; commit hash remains pending until that commit is created.
+  - Preserved the one-commit constraint by updating docs before the single Phase 4 commit; the resulting commit and push are recorded below.
+- **Commit hash:** `7d0d57cfd094a91a45ca73ce6318dae3071a193e`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/7d0d57cfd094a91a45ca73ce6318dae3071a193e
+- **Human review and decision:** Approved; Phase 5 was subsequently authorized.
+
+---
+
+## 2026-10-20 - Phase 0-4 Verification Audit
+
+- **Date and phase:** 2026-10-20 - Verification audit for Phases 0-4 (no new phase started)
+- **Objective:** Verify every locally testable requirement and acceptance criterion through Phase 4, close gaps in regression coverage and documentation, and identify externally blocked acceptance items without changing application behavior.
+- **Prompt / instruction summary:** The human asked to verify all requirements implemented so far and complete the verification. Scope was limited to the existing Phase 0-4 implementation; no Phase 5 functionality, deployment, production migration, or live storage operation was authorized.
+- **Files or code produced:**
+  - `backend/tests/test_auth.py`: permanent regression coverage for expired, wrong-issuer, wrong-audience, and wrong-type access tokens.
+  - `backend/tests/test_upload_validation.py`: coverage for excessively long filenames and control characters.
+  - Documentation corrections in `README.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `THREATS.md`, and this log.
+- **Tests and verification performed:**
+  - Full backend suite passed with **107 tests** and one Starlette/httpx deprecation warning.
+  - Frontend `npm run lint` reported 0 warnings and 0 errors; `npm run build` passed.
+  - Uvicorn started and `GET /health` returned 200 with the expected payload.
+  - Git commit history, clean working tree, local Markdown links, threat categories, ignored secret files, and high-confidence credential scans were checked.
+- **Issues discovered:**
+  - Phase 1 was labeled complete although live Vercel/Render deployment had not occurred; its status now distinguishes local completion from deployment deferred to Phase 10.
+  - The Phase 4 commit hash had not been recorded in this log.
+  - Access-token expiry/issuer/audience/type rejection was implemented but not permanently covered by the test suite.
+  - Live Wasabi, Supabase migration, Vercel/Render deployment, and cross-site refresh-cookie behavior remain externally unverified.
+- **Corrections made:**
+  - Added the missing auth and filename regression tests and updated current test counts and coverage claims.
+  - Recorded the Phase 4 commit hash/link and corrected the Phase 1 status documentation.
+  - No application code behavior was changed.
 - **Commit hash:** pending
 - **GitHub link:** pending
-- **Human review and decision:** Awaiting human review and Phase 4 approval. Phase 5 must not begin until approval is given.
+- **Human review and decision:** Verification complete; Phase 5 was subsequently authorized.
+
+---
+
+## 2026-10-20 - Phase 5: Document Management and Search
+
+- **Date and phase:** 2026-10-20 - Phase 5 (Document Management and Search)
+- **Objective:** Implement Phase 5 only: authenticated document listing/search/filtering/pagination/sorting, metadata details and owner-only updates, streamed private downloads, soft deletion with object cleanup, and the corresponding JavaScript/JSX library/details UI; verify locally and stop after one final commit and push for approval.
+- **Prompt / instruction summary:** The human authorized Phase 5 and required backend-proxied downloads with safe headers, no direct/presigned storage URLs, enforced role/ownership checks for list/details/update/download/delete, administrator metadata access, owner-only management, search by name/owner/category/date, pagination and sorting, frontend document management, all required documentation updates, JavaScript/JSX only, exactly one commit (`feat(documents): implement document management and search`) and one push, then stop before Phase 6.
+- **Files or code produced:**
+  - Backend API/schema: `backend/app/api/documents.py`, `backend/app/schemas/document.py` with list/search, details, update, download, and delete endpoints; allow-listed sorting, bounded pagination, escaped name search, generic 404s, and owner-only management.
+  - Backend services/models: `backend/app/services/documents.py`, `backend/app/services/storage.py`, and `backend/app/models/document.py` for scoped queries, metadata updates, soft deletion, safe owner display, and private streamed download.
+  - Backend tests: `backend/tests/test_documents.py` and `backend/tests/test_storage.py` for management authorization, filters, pagination, IDOR, protected fields, download headers/failures, soft deletion, cleanup failure, and safe storage errors.
+  - Frontend: `frontend/src/pages/DocumentsPage.jsx`, new `frontend/src/pages/DocumentDetailsPage.jsx`, new `frontend/src/components/documents/UploadDocumentPanel.jsx`, new `frontend/src/lib/documents.js`, `frontend/src/services/documents.js`, `frontend/src/app/App.jsx`, `frontend/src/components/AppLayout.jsx`, and `frontend/src/pages/DashboardPage.jsx`.
+  - Documentation: `README.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/REQUIREMENTS.md`, `docs/IMPLEMENTATION_PLAN.md`, `THREATS.md`, and this entry. The prior Phase 0-4 verification corrections were still uncommitted when Phase 5 began and are included in the same final Phase 5 commit.
+- **Tests and verification performed:**
+  - Full backend suite: **127 passed**, one Starlette/httpx deprecation warning. Embedded PostgreSQL migration/model/auth/upload/document tests all pass.
+  - `npm run lint`: 0 warnings, 0 errors.
+  - `npm run build`: Vite production build passed; no TypeScript/TSX files.
+  - Tests cover owner/admin/viewer scoping, literal wildcard search, category/owner/date filters, sorting, invalid pagination, generic 404 IDOR behavior, protected-field rejection, owner-only downloads, safe/encoded attachment headers, storage failure mapping, soft deletion, and cleanup-failure logging.
+  - Not performed: live Wasabi download/delete/object-policy verification, Supabase migration, Vercel/Render deployment, or browser-to-live-storage end-to-end testing. No storage credentials were supplied or committed. No migration was added.
+- **Issues discovered:**
+  - The Phase 5 prompt requires administrator metadata access while keeping document content and owner actions protected; the implementation therefore scopes administrators to read-only metadata and leaves download/update/delete owner-only.
+  - Soft deletion and Wasabi cleanup cannot be atomic: the database commit happens first, followed by best-effort object deletion. A cleanup failure leaves a private orphan object.
+  - Audit events are not implemented in Phase 5; document view/download/edit/delete actions currently produce operational logs only.
+  - No frontend browser/e2e test harness exists, so frontend verification is lint/build plus implementation review.
+- **Corrections made:**
+  - Added reusable role/ownership scoping and generic 404 behavior instead of leaking document existence.
+  - Added safe streamed download headers and RFC 5987/ASCII fallback filename handling, including control-character neutralization.
+  - Kept metadata/audit history by using `deleted_at`, excluded deleted rows from all normal reads, and made object cleanup non-fatal and auditable in logs.
+  - Documented the administrator metadata-only policy, soft-delete cleanup gap, and Phase 7 audit dependency without claiming unimplemented permissions or audit writes.
+- **Commit hash:** pending final Phase 5 commit/push; recorded in the final response.
+- **GitHub link:** pending final Phase 5 commit/push.
+- **Human review and decision:** Phase 5 review pending; Phase 6 must not begin until approval is given.

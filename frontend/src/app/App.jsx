@@ -5,6 +5,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { RequireRole } from '@/components/RequireRole'
 import { AdminPage } from '@/pages/AdminPage'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { DocumentDetailsPage } from '@/pages/DocumentDetailsPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
@@ -20,6 +21,7 @@ export function App() {
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/documents" element={<DocumentsPage />} />
+              <Route path="/documents/:documentId" element={<DocumentDetailsPage />} />
               <Route element={<RequireRole role="ADMINISTRATOR" />}>
                 <Route path="/admin" element={<AdminPage />} />
               </Route>

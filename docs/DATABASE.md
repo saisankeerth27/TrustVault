@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2 and 3 and used by the Phase 4 upload pipeline: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
+This document describes the PostgreSQL schema implemented across Phases 2 and 3 and used by the Phase 4 upload and Phase 5 document-management pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles and validated document upload metadata writes exist; document permission endpoints, listing/download, and the audit writer do not. Phase 4 adds no migration. Migrations have **not** been applied to the Supabase project.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, and document list/update/soft-delete operations exist; document permission endpoints and the audit writer do not. Phase 5 adds no migration. Migrations have **not** been applied to the Supabase project.
 
 ## Entity Relationships
 
@@ -129,11 +129,13 @@ erDiagram
 | `created_at` / `updated_at` | TIMESTAMPTZ | Not null, defaults `now()` |
 | `deleted_at` | TIMESTAMPTZ | Nullable; soft-delete marker |
 
-**Deletion strategy.** `owner_id` uses `ON DELETE RESTRICT`, so an owner cannot be deleted while documents reference them; ownership must be transferred or documents removed first. Documents use soft deletion (`deleted_at`) so metadata and history survive, while hard deletion and Wasabi object cleanup are defined in Phase 5. Permission rows cascade when a document is hard-deleted.
+**Deletion strategy.** `owner_id` uses `ON DELETE RESTRICT`, so an owner cannot be deleted while documents reference them; ownership must be transferred or documents removed first. Phase 5 uses soft deletion (`deleted_at`) so metadata and history survive and excludes soft-deleted rows from list/detail/update/download/delete. It then attempts best-effort Wasabi object cleanup after the database commit. Hard deletion remains out of scope; permission rows cascade only if a document is later hard-deleted.
 
 **Storage keys are internal.** The `storage_key` must begin with `documents/` and must not contain `://`, so a backend bug cannot accidentally persist a public URL in the column that identifies a private object. Phase 4 writes generated keys of the form `documents/{owner_uuid}/{random_uuid}.{ext}` and never uses the user filename as the key.
 
 **Phase 4 metadata writes.** The upload service populates `owner_id` from the authenticated session, `name` from validated user metadata, `storage_key` from the generated key, `mime_type` from validated content, `file_size` from the received bytes, and `checksum` from the backend-computed SHA-256. Empty files are rejected, so uploads are positive-size. Upload is object-first then metadata; if the metadata commit fails, object deletion is attempted best-effort. There is no schema change or distributed transaction.
+
+**Phase 5 metadata writes.** Owner-only updates may change `name`, `category`, and `description`; `updated_at` is maintained by the database. Soft delete sets `deleted_at`. Ownership, storage key, MIME type, size, checksum, and creation time are never client-updatable. Listing/search uses the existing indexes plus the trigram index; no migration is required.
 
 **Indexes:**
 
@@ -145,11 +147,11 @@ erDiagram
 | `ix_documents_owner_created_at` | `owner_id, created_at` | Owner-scoped listing |
 | `ix_documents_category_created_at` | `category, created_at` | Category-scoped listing |
 | `ix_documents_owner_active` | `owner_id` WHERE `deleted_at IS NULL` | Active documents per owner |
-| `ix_documents_name_trgm` | `name` using `gin_trgm_ops` | Case-insensitive/partial name search (Phase 5) |
+| `ix_documents_name_trgm` | `name` using `gin_trgm_ops` | Case-insensitive/partial name search (implemented in Phase 5) |
 
 The trigram index requires the `pg_trgm` extension, created by the migration before the index.
 
-**Why `category` is a column and not a table.** Categories have not yet required independent identity, ownership, or lifecycle, so a nullable string keeps Phase 2 small. Phase 5 will decide whether to promote it to a lookup table.
+**Why `category` is a column and not a table.** Categories have not required independent identity, ownership, or lifecycle, so a nullable string keeps the schema small. Phase 5 continues to treat it as free-form metadata with case-insensitive filtering; promotion to a lookup table remains a future decision.
 
 ## `document_permissions`
 
@@ -247,7 +249,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 101 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; upload storage is faked.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 127 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
 
 Run the suite:
 

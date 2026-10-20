@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.services.storage import (
     StorageConfigurationError,
+    StorageObjectNotFoundError,
     StorageOperationError,
     WasabiStorage,
 )
@@ -121,6 +122,68 @@ def test_storage_connection_check_is_wrapped_safely() -> None:
         storage.check_connection()
 
     assert "SECRET-BUCKET-DETAIL" not in str(exc_info.value)
+
+
+def test_storage_download_returns_private_object_body() -> None:
+    body = object()
+
+    class FakeClient:
+        def get_object(self, **kwargs):
+            assert kwargs == {
+                "Bucket": "trustvault-test",
+                "Key": "documents/test/report.pdf",
+            }
+            return {"Body": body}
+
+    storage = WasabiStorage(configured_settings())
+    storage._client = FakeClient()
+
+    assert storage.open_download(key="documents/test/report.pdf") is body
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_exception"),
+    [
+        ("NoSuchKey", StorageObjectNotFoundError),
+        ("404", StorageObjectNotFoundError),
+        ("AccessDenied", StorageOperationError),
+    ],
+)
+def test_storage_download_errors_are_safe(
+    code: str,
+    expected_exception: type[Exception],
+    caplog,
+) -> None:
+    client_error = ClientError(
+        {"Error": {"Code": code, "Message": "SECRET-OBJECT-DETAIL"}},
+        "GetObject",
+    )
+
+    class FailingClient:
+        def get_object(self, **kwargs):
+            raise client_error
+
+    storage = WasabiStorage(configured_settings())
+    storage._client = FailingClient()
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(expected_exception):
+            storage.open_download(key="documents/test/report.pdf")
+
+    assert code in caplog.text
+    assert "SECRET-OBJECT-DETAIL" not in caplog.text
+
+
+def test_storage_download_without_body_fails_closed() -> None:
+    class FakeClient:
+        def get_object(self, **kwargs):
+            return {}
+
+    storage = WasabiStorage(configured_settings())
+    storage._client = FakeClient()
+
+    with pytest.raises(StorageOperationError):
+        storage.open_download(key="documents/test/report.pdf")
 
 
 def test_storage_metadata_returns_only_safe_fields() -> None:

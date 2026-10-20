@@ -213,6 +213,42 @@ def test_current_user_requires_a_valid_access_token(
     )
 
 
+@pytest.mark.parametrize(
+    ("claim", "value"),
+    [
+        ("exp", datetime.now(timezone.utc) - timedelta(minutes=1)),
+        ("iss", "wrong-issuer"),
+        ("aud", "wrong-audience"),
+        ("type", "refresh"),
+    ],
+)
+def test_access_token_rejects_invalid_expiry_issuer_audience_and_type(
+    api_client: TestClient,
+    claim: str,
+    value: object,
+) -> None:
+    registered = register(api_client, email=unique_email("claims"))
+    token = registered.json()["access_token"]
+    settings = get_settings()
+    payload = jwt.decode(
+        token,
+        settings.require_jwt_secret(),
+        algorithms=[settings.jwt_algorithm],
+        audience=settings.jwt_audience,
+        issuer=settings.jwt_issuer,
+    )
+    payload[claim] = value
+    invalid = jwt.encode(
+        payload,
+        settings.require_jwt_secret(),
+        algorithm=settings.jwt_algorithm,
+    )
+
+    response = api_client.get("/api/v1/auth/me", headers=bearer(invalid))
+
+    assert response.status_code == 401
+
+
 def test_refresh_rotates_and_reuse_revokes_the_family(
     api_client: TestClient, db_session: Session
 ) -> None:

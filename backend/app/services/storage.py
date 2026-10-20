@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from typing import IO
 
 import boto3
 from botocore.config import Config
@@ -18,6 +19,8 @@ from app.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
+_MISSING_OBJECT_CODES = {"404", "NoSuchKey", "NotFound"}
+
 
 class StorageConfigurationError(Exception):
     """Raised when required Wasabi settings are missing or unsafe."""
@@ -25,6 +28,10 @@ class StorageConfigurationError(Exception):
 
 class StorageOperationError(Exception):
     """Raised when Wasabi cannot complete an operation."""
+
+
+class StorageObjectNotFoundError(StorageOperationError):
+    """Raised when a requested private object does not exist."""
 
 
 def _safe_error_code(exc: Exception) -> str:
@@ -110,6 +117,26 @@ class WasabiStorage:
         except (BotoCoreError, ClientError) as exc:
             logger.warning("Wasabi upload failed with code %s.", _safe_error_code(exc))
             raise StorageOperationError("Document storage is temporarily unavailable.") from exc
+
+    def open_download(self, *, key: str) -> IO[bytes]:
+        _, _, bucket, _, _ = self._configuration()
+        try:
+            response = self._get_client().get_object(Bucket=bucket, Key=key)
+        except ClientError as exc:
+            code = _safe_error_code(exc)
+            logger.warning("Wasabi download failed with code %s.", code)
+            if code in _MISSING_OBJECT_CODES:
+                raise StorageObjectNotFoundError("Document content is unavailable.") from exc
+            raise StorageOperationError("Document storage is temporarily unavailable.") from exc
+        except BotoCoreError as exc:
+            logger.warning("Wasabi download failed with code %s.", _safe_error_code(exc))
+            raise StorageOperationError("Document storage is temporarily unavailable.") from exc
+
+        body = response.get("Body")
+        if body is None:
+            logger.error("Wasabi download response did not include a body.")
+            raise StorageOperationError("Document storage is temporarily unavailable.")
+        return body
 
     def delete_object(self, *, key: str) -> None:
         _, _, bucket, _, _ = self._configuration()

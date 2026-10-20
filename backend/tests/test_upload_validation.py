@@ -101,7 +101,19 @@ def test_unsupported_allowed_extension_fails_closed() -> None:
         )
 
 
-@pytest.mark.parametrize("filename", ["", ".", "..", "../doc.pdf", r"..\doc.pdf", "a\x00.pdf"])
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "",
+        ".",
+        "..",
+        "../doc.pdf",
+        r"..\doc.pdf",
+        "a\x00.pdf",
+        "a" * 252 + ".pdf",
+        "bad\x1f.pdf",
+    ],
+)
 def test_rejects_unsafe_filenames(filename: str) -> None:
     with pytest.raises(UploadValidationError) as exc_info:
         validate_upload(

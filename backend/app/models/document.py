@@ -105,5 +105,9 @@ class Document(Base):
         passive_deletes=True,
     )
 
+    @property
+    def owner_name(self) -> str:
+        return self.owner.name
+
     def __repr__(self) -> str:
         return f"Document(id={self.id!r}, name={self.name!r}, owner_id={self.owner_id!r})"
