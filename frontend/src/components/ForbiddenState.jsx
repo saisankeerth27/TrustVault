@@ -4,7 +4,7 @@ import { useAuth } from '@/auth/useAuth'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { formatRole } from '@/lib/roles'
 
-export function ForbiddenState({ requiredRole }: { requiredRole: string }) {
+export function ForbiddenState({ requiredRole }) {
   const { user } = useAuth()
 
   return (

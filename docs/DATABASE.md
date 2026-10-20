@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2 and 3: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
+This document describes the PostgreSQL schema implemented across Phases 2 and 3 and used by the Phase 4 upload pipeline: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance, including the Phase 3 `refresh_tokens` table. Authentication and role enforcement exist; document permission endpoints and the audit writer do not. Migrations have **not** been applied to the Supabase project.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles and validated document upload metadata writes exist; document permission endpoints, listing/download, and the audit writer do not. Phase 4 adds no migration. Migrations have **not** been applied to the Supabase project.
 
 ## Entity Relationships
 
@@ -131,7 +131,9 @@ erDiagram
 
 **Deletion strategy.** `owner_id` uses `ON DELETE RESTRICT`, so an owner cannot be deleted while documents reference them; ownership must be transferred or documents removed first. Documents use soft deletion (`deleted_at`) so metadata and history survive, while hard deletion and Wasabi object cleanup are defined in Phase 5. Permission rows cascade when a document is hard-deleted.
 
-**Storage keys are internal.** The `storage_key` must begin with `documents/` and must not contain `://`, so a backend bug cannot accidentally persist a public URL in the column that identifies a private object.
+**Storage keys are internal.** The `storage_key` must begin with `documents/` and must not contain `://`, so a backend bug cannot accidentally persist a public URL in the column that identifies a private object. Phase 4 writes generated keys of the form `documents/{owner_uuid}/{random_uuid}.{ext}` and never uses the user filename as the key.
+
+**Phase 4 metadata writes.** The upload service populates `owner_id` from the authenticated session, `name` from validated user metadata, `storage_key` from the generated key, `mime_type` from validated content, `file_size` from the received bytes, and `checksum` from the backend-computed SHA-256. Empty files are rejected, so uploads are positive-size. Upload is object-first then metadata; if the metadata commit fails, object deletion is attempted best-effort. There is no schema change or distributed transaction.
 
 **Indexes:**
 
@@ -245,7 +247,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 55 tests and never reads `DATABASE_URL` or contacts Supabase.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 101 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; upload storage is faked.
 
 Run the suite:
 

@@ -77,7 +77,7 @@ export function AdminPage() {
             </span>
             <div>
               <CardTitle>Account management</CardTitle>
-              <CardDescription>No administration APIs are exposed in Phase 3.</CardDescription>
+              <CardDescription>Account administration APIs are not exposed yet.</CardDescription>
             </div>
           </div>
         </CardHeader>

@@ -3,9 +3,8 @@ import { useAuth } from '@/auth/useAuth'
 import { AuthLoadingScreen } from '@/components/AuthLoadingScreen'
 import { ForbiddenState } from '@/components/ForbiddenState'
 import { formatRole } from '@/lib/roles'
-import type { UserRole } from '@/types/auth'
 
-export function RequireRole({ role }: { role: UserRole }) {
+export function RequireRole({ role }) {
   const { status, user } = useAuth()
 
   if (status === 'loading') {

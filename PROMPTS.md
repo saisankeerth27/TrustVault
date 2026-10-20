@@ -151,6 +151,45 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Split the auth context definition/hook into `useAuth.ts`, leaving `AuthContext.tsx` exporting only the provider; typecheck, lint, and build now pass cleanly.
   - Updated the page title and Phase 3 UI copy, removing stale Phase 1 placeholders.
   - Preserved the one-commit constraint: commit hash and GitHub link remain pending in this entry and are reported in the final response after the single commit is created.
+- **Commit hash:** `c1892b8ae1589322f33689c21ab5fffad87b1d1b`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/c1892b8ae1589322f33689c21ab5fffad87b1d1b
+- **Human review and decision:** Approved; Phase 4 was authorized. Phase 5 must not begin until Phase 4 is reviewed and approved.
+
+---
+
+## 2026-10-20 - Phase 4: Private Storage and Validated Uploads
+
+- **Date and phase:** 2026-10-20 - Phase 4 (Private Storage and Validated Uploads)
+- **Objective:** Implement a private, server-mediated Wasabi storage path and secure document upload endpoint; enforce upload validation, backend-decided ownership, generated storage keys, SHA-256 integrity metadata, role restrictions, safe errors, and failure cleanup; migrate the frontend to plain JavaScript/JSX; verify locally; update documentation; and stop after one commit and push for human review before Phase 5.
+- **Prompt / instruction summary:** The human approved Phase 4 and required a README comparison against the actual repository; a JavaScript-only frontend with no TypeScript; a private Wasabi bucket accessed only by the backend; exact server-side Wasabi environment names; upload validation for extension, MIME, magic bytes, empty/oversized files, filenames, DOCX structure, and TXT encoding; generated keys and backend-computed checksums; Owner/Admin-only upload with Viewer denial; safe errors and no storage-key leakage; tests with mocked storage; mandatory docs updates; and exactly one final commit (`feat(storage): implement secure document uploads`) followed by one push. No live Wasabi credentials were supplied, so live integration was explicitly constrained to remain unverified.
+- **Files or code produced:**
+  - Storage configuration and service: `backend/app/core/config.py`, `backend/app/services/storage.py`, `backend/scripts/check_storage.py`, with lazy cached boto3 client, Wasabi endpoint/path-style setup, safe errors, and a `head_bucket` connectivity CLI.
+  - Upload validation and persistence: `backend/app/services/upload_validation.py`, `backend/app/services/documents.py`, `backend/app/schemas/document.py`, and `backend/app/api/documents.py` for `POST /api/v1/documents/upload`.
+  - Authorization/router wiring: `backend/app/api/router.py`, `backend/app/main.py`; upload restricted to active `ADMINISTRATOR`/`DOCUMENT_OWNER`, with ownership derived from the session.
+  - Dependencies/config: `backend/requirements.txt` (`boto3==1.43.115`, `python-multipart==0.0.32`), `backend/.env.example`, and `render.yaml` with exact `WASABI_*`, upload-size, and extension settings.
+  - Tests: `backend/tests/test_documents.py`, `test_upload_validation.py`, and `test_storage.py`, using a fake adapter and embedded PostgreSQL.
+  - Frontend migration: renamed all `.tsx`/`.ts` application files to `.jsx`/`.js`; renamed `vite.config.ts` to `vite.config.js`; removed `tsconfig.json`, `tsconfig.app.json`, `tsconfig.node.json`, and `src/types/`; updated `package.json`, `components.json`, and `index.html`; removed TypeScript and `@types/*` dependencies and the `typecheck` script.
+  - Upload UI/API: `frontend/src/services/documents.js` and `frontend/src/pages/DocumentsPage.jsx` with file/category/description inputs, progress, errors, success metadata, and Viewer restriction.
+  - Documentation: `README.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/REQUIREMENTS.md`, `docs/IMPLEMENTATION_PLAN.md`, `THREATS.md`, and this entry; Phase 3 commit details recorded above.
+- **Tests and verification performed:**
+  - `pytest` - **101 passed, 1 warning**. The warning is the Starlette/httpx deprecation. Tests cover upload authorization, role denial, owner derivation, generated keys, SHA-256 metadata, extension/MIME/signature validation, unsafe filenames, empty/oversized files, DOCX/TXT checks, storage failure mapping, metadata-failure cleanup, configuration validation, and secret-safe errors/logs.
+  - Embedded PostgreSQL retained: migration upgrade/check/downgrade/re-upgrade and all prior auth/schema tests still pass.
+  - `npm run lint` - 0 warnings, 0 errors after removing residual TypeScript references.
+  - `npm run build` - Vite production build passed; no TypeScript project build remains.
+  - Verified no application `.ts`/`.tsx` files or `tsconfig*.json` remain.
+  - Not performed: live Wasabi connection/upload, bucket-policy verification, Supabase migration, deployment, or real end-to-end browser-to-Wasabi verification. No storage credential was supplied, used, or committed.
+- **Issues discovered:**
+  - The frontend was still TypeScript-based despite the Phase 4 JavaScript-only requirement, requiring a full file rename and removal of TypeScript tooling.
+  - Existing README/docs described Wasabi as planned, listed only 55 tests, and used placeholder/incorrect Wasabi variable names and a storage-key layout that did not match the implementation.
+  - Upload validation needed careful status mapping: invalid type/signature is 415, oversized is 413, and malformed input is 400/422.
+  - Object upload followed by metadata commit is not atomic; cleanup cannot be guaranteed if object deletion fails.
+  - No live Wasabi credentials/connectivity were available, so the master acceptance criterion for a real bucket upload cannot be claimed.
+- **Corrections made:**
+  - Migrated all frontend code to JavaScript/JSX and removed TypeScript configs, packages, and types; updated build/lint docs accordingly.
+  - Implemented backend-generated `documents/{owner_uuid}/{random_uuid}.{ext}` keys, computed checksums, safe response schemas, and role-restricted upload.
+  - Added failure-path cleanup and secret-safe logging, and documented the non-transactional residual risk.
+  - Corrected all docs to distinguish **verified with mocked storage** from **live Wasabi unverified**, and updated test counts, routes, env names, key format, phases, threats, and limitations.
+  - Preserved the one-commit constraint by updating docs before the single Phase 4 commit; commit hash remains pending until that commit is created.
 - **Commit hash:** pending
 - **GitHub link:** pending
-- **Human review and decision:** Awaiting human review and Phase 3 approval. Phase 4 must not begin until approval is given.
+- **Human review and decision:** Awaiting human review and Phase 4 approval. Phase 5 must not begin until approval is given.

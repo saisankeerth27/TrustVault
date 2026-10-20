@@ -15,8 +15,9 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         description=(
-            "TrustVault API. Authentication is available under /api/v1/auth. "
-            "Document, permission, storage, and audit endpoints arrive in later phases."
+            "TrustVault API. Authentication is available under /api/v1/auth and secure "
+            "document uploads under /api/v1/documents. Permission, listing, download, "
+            "and audit endpoints arrive in later phases."
         ),
     )
 

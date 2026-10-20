@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
+    wasabi_endpoint_url: str | None = None
+    wasabi_region: str = "us-east-1"
+    wasabi_bucket_name: str | None = None
+    wasabi_access_key_id: SecretStr | None = None
+    wasabi_secret_access_key: SecretStr | None = None
+    max_upload_size_bytes: int = 10 * 1024 * 1024
+    allowed_upload_extensions: str = "pdf,txt,docx,png,jpg,jpeg"
+
     jwt_secret: SecretStr | None = None
     jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = "trustvault"
@@ -44,6 +52,65 @@ class Settings(BaseSettings):
             stripped = value.strip()
             return stripped or None
         return value
+
+    @field_validator(
+        "wasabi_endpoint_url",
+        "wasabi_bucket_name",
+        mode="before",
+    )
+    @classmethod
+    def empty_storage_string_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("wasabi_access_key_id", "wasabi_secret_access_key", mode="before")
+    @classmethod
+    def empty_storage_secret_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("wasabi_endpoint_url")
+    @classmethod
+    def secure_wasabi_endpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.rstrip("/")
+        if not normalized.startswith("https://"):
+            raise ValueError("WASABI_ENDPOINT_URL must use HTTPS.")
+        return normalized
+
+    @field_validator("wasabi_region")
+    @classmethod
+    def valid_wasabi_region(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("WASABI_REGION must not be blank.")
+        return stripped
+
+    @field_validator("max_upload_size_bytes")
+    @classmethod
+    def reasonable_upload_limit(cls, value: int) -> int:
+        if not 1 <= value <= 100 * 1024 * 1024:
+            raise ValueError("MAX_UPLOAD_SIZE_BYTES must be between 1 and 104857600.")
+        return value
+
+    @field_validator("allowed_upload_extensions")
+    @classmethod
+    def normalize_upload_extensions(cls, value: str) -> str:
+        extensions = {
+            extension.strip().lower().lstrip(".")
+            for extension in value.split(",")
+            if extension.strip()
+        }
+        if not extensions:
+            raise ValueError("ALLOWED_UPLOAD_EXTENSIONS must contain at least one extension.")
+        if any(not extension.isalnum() for extension in extensions):
+            raise ValueError("Upload extensions must contain only letters and numbers.")
+        return ",".join(sorted(extensions))
 
     @field_validator("jwt_access_token_expire_minutes", "jwt_refresh_token_expire_days")
     @classmethod
@@ -69,6 +136,14 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_upload_extension_set(self) -> set[str]:
+        return {
+            extension.strip()
+            for extension in self.allowed_upload_extensions.split(",")
+            if extension.strip()
+        }
 
     @model_validator(mode="after")
     def validate_security_configuration(self) -> "Settings":

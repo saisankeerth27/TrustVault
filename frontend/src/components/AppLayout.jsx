@@ -89,8 +89,8 @@ export function AppLayout() {
 
       <footer className="border-t bg-muted/40">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <p>TrustVault &mdash; Phase 3 authenticated application</p>
-          <p>Documents, permissions, storage, and audit UI arrive in later phases.</p>
+          <p>TrustVault &mdash; Phase 4 secure uploads</p>
+          <p>Document listing, permissions, downloads, and audit UI arrive in later phases.</p>
         </div>
       </footer>
     </div>

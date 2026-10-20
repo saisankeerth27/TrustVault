@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowRight,
   CheckCircle2,
@@ -15,20 +15,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { cn } from '@/lib/utils'
 import { formatRole } from '@/lib/roles'
 import { apiBaseUrl, apiClient, getApiErrorMessage, isApiConfigured } from '@/services/api'
-import type { HealthResponse } from '@/types/api'
 
-type HealthState = {
-  status: 'loading' | 'online' | 'offline' | 'unconfigured'
-  message: string
-}
-
-function StatusPill({
-  tone,
-  children,
-}: {
-  tone: 'success' | 'warning' | 'neutral'
-  children: ReactNode
-}) {
+function StatusPill({ tone, children }) {
   return (
     <span
       className={cn(
@@ -54,7 +42,7 @@ function StatusPill({
 
 export function DashboardPage() {
   const { user } = useAuth()
-  const [health, setHealth] = useState<HealthState>(() =>
+  const [health, setHealth] = useState(() =>
     isApiConfigured
       ? { status: 'loading', message: 'Checking backend health...' }
       : { status: 'unconfigured', message: 'VITE_API_BASE_URL is not configured.' },
@@ -68,7 +56,7 @@ export function DashboardPage() {
     let active = true
 
     apiClient
-      .get<HealthResponse>('/health')
+      .get('/health')
       .then(({ data }) => {
         if (active) {
           setHealth({
@@ -77,7 +65,7 @@ export function DashboardPage() {
           })
         }
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         if (active) {
           setHealth({ status: 'offline', message: getApiErrorMessage(error) })
         }
@@ -94,9 +82,9 @@ export function DashboardPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 3"
+        eyebrow="Phase 4"
         title={user ? `Welcome back, ${user.name.split(' ')[0]}` : 'Application dashboard'}
-        description="You are signed in to TrustVault. Authentication, session rotation, and role enforcement are live; document storage, permissions, and the audit UI arrive in later phases."
+        description="You are signed in to TrustVault. Authentication and secure document uploads are live; document listing, sharing permissions, downloads, and the audit UI arrive in later phases."
         actions={
           <Link to="/documents" className={buttonVariants({ variant: 'outline' })}>
             View documents
@@ -173,22 +161,24 @@ export function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <CardTitle>Document access</CardTitle>
-              <StatusPill tone="warning">Not available</StatusPill>
+              <StatusPill tone="success">Uploads live</StatusPill>
             </div>
-            <CardDescription>No documents can be stored or retrieved yet.</CardDescription>
+            <CardDescription>
+              Owner and Administrator accounts can upload supported files.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
               <FileText className="size-4" aria-hidden="true" />
-              Document APIs arrive in Phases 4 and 5.
+              Private Wasabi object storage with server-generated keys.
             </div>
             <div className="flex items-center gap-2">
               <LockKeyhole className="size-4" aria-hidden="true" />
-              Per-document permission enforcement arrives in Phase 6.
+              Server-side file type, size, and signature validation.
             </div>
             <div className="flex items-center gap-2">
               <KeyRound className="size-4" aria-hidden="true" />
-              Authentication and baseline roles are active now.
+              SHA-256 checksums recorded in PostgreSQL.
             </div>
           </CardContent>
         </Card>
@@ -216,9 +206,9 @@ export function DashboardPage() {
               </p>
             </div>
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-              Current limitation: document APIs, per-document permissions, and audit views are not
-              implemented. Do not treat this dashboard as evidence that those features are secure
-              or available.
+              Current limitation: document listing, per-document permissions, downloads, and audit
+              views are not implemented. Uploads are private, but retrieval and sharing workflows
+              are not exposed yet.
             </p>
           </CardContent>
         </Card>

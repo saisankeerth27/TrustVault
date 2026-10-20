@@ -2,8 +2,8 @@
 
 TrustVault is a secure, multi-tenant document vault that will let organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
-> **Status: Phase 3 — Authentication and roles implemented and verified locally (awaiting review).**
-> Phases 0–3 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, and database-backed authentication with role enforcement. Document upload/download, permission endpoints, audit writing, and real document data are **not** implemented yet. There is no live deployment, and migrations have **not** been applied to the Supabase project.
+> **Status: Phase 4 — Private storage and validated uploads implemented and verified locally (awaiting review).**
+> Phases 0–4 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, and a private upload pipeline with server-side validation, generated storage keys, SHA-256 checksums, and failure cleanup. The upload path is tested with a mocked Wasabi adapter; **live Wasabi bucket connectivity was not verified** because no storage credentials were supplied. Document listing, downloads, permission endpoints, and audit writing are **not** implemented yet. There is no live deployment, and migrations have **not** been applied to the Supabase project.
 
 ## Project Objective
 
@@ -13,7 +13,7 @@ Provide a document management system where authorization is guaranteed by the ba
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | React, TypeScript, Vite, Tailwind CSS, shadcn/ui |
+| Frontend | React, JavaScript/JSX, Vite, Tailwind CSS, shadcn/ui |
 | Routing | React Router |
 | HTTP client | Axios |
 | Forms / validation | React Hook Form, Zod |
@@ -21,10 +21,10 @@ Provide a document management system where authorization is guaranteed by the ba
 | Database | Supabase PostgreSQL |
 | ORM / migrations | SQLAlchemy 2.x (psycopg 3), Alembic |
 | Authentication | bcrypt, PyJWT (HS256), rotating refresh tokens |
-| Object storage (planned) | Wasabi private S3-compatible storage |
+| Object storage | Wasabi private S3-compatible storage (`boto3`) |
 | Frontend hosting | Vercel |
 | Backend hosting | Render |
-| Testing | pytest, FastAPI TestClient, embedded-postgres, frontend build/type checks |
+| Testing | pytest, FastAPI TestClient, embedded-postgres, oxlint, Vite build |
 
 ## Repository Structure
 
@@ -38,14 +38,14 @@ TrustVault/
 │   │   ├── env.py
 │   │   └── script.py.mako
 │   ├── app/
-│   │   ├── api/            # Health and auth routers, authentication dependencies
+│   │   ├── api/            # Health, auth, and document upload routers
 │   │   ├── core/           # Settings, security, rate limiting, logging, errors
 │   │   ├── db/             # Base, URL helpers, engine/session management
 │   │   ├── models/         # SQLAlchemy models and enums
 │   │   ├── schemas/        # Pydantic request/response models
-│   │   ├── services/       # Authentication service
+│   │   ├── services/       # Auth, upload validation, Wasabi storage, persistence
 │   │   └── main.py         # FastAPI application factory
-│   ├── scripts/            # Account provisioning CLI
+│   ├── scripts/            # Account provisioning and storage connectivity CLIs
 │   ├── tests/              # pytest suite
 │   ├── .env.example
 │   ├── alembic.ini
@@ -59,8 +59,7 @@ TrustVault/
 │   │   ├── components/     # Layout, route guards, and UI primitives
 │   │   ├── lib/            # Shared utilities and role labels
 │   │   ├── pages/          # Login, Dashboard, Documents, Admin, Not Found
-│   │   ├── services/       # Axios client and auth API functions
-│   │   └── types/          # Shared TypeScript types
+│   │   └── services/       # Axios client, auth, and document upload functions
 │   ├── .env.example
 │   ├── components.json
 │   ├── package.json
@@ -107,10 +106,28 @@ Set `DATABASE_URL` to your Supabase direct connection string (port 5432) and gen
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Use the generated value for `JWT_SECRET` in `backend/.env`. Apply migrations:
+Use the generated value for `JWT_SECRET` in `backend/.env`. Configure `DATABASE_URL` with the direct connection for migrations and fill the Wasabi settings in `backend/.env`:
+
+```env
+WASABI_ENDPOINT_URL=https://s3.us-east-1.wasabisys.com
+WASABI_REGION=us-east-1
+WASABI_BUCKET_NAME=your-private-bucket
+WASABI_ACCESS_KEY_ID=your-access-key
+WASABI_SECRET_ACCESS_KEY=your-secret-key
+MAX_UPLOAD_SIZE_BYTES=10485760
+ALLOWED_UPLOAD_EXTENSIONS=pdf,txt,docx,png,jpg,jpeg
+```
+
+Apply migrations:
 
 ```powershell
 alembic upgrade head
+```
+
+Check the bucket connection without printing credentials. The check requires bucket-level `HeadBucket`/list permission:
+
+```powershell
+python -m scripts.check_storage
 ```
 
 Start the API:
@@ -123,7 +140,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - OpenAPI documentation: <http://127.0.0.1:8000/docs>
 - OpenAPI schema: <http://127.0.0.1:8000/openapi.json>
 
-The health endpoint reports **process health only**. It does not check the database or object storage.
+The health endpoint reports **process health only**. It does not check the database or object storage; use `python -m scripts.check_storage` for a server-side Wasabi connectivity check.
 
 ### 3. Provision an account
 
@@ -152,7 +169,7 @@ The Vite development server is available at <http://localhost:5173>. `VITE_API_B
 |-------|---------|--------|
 | `/login` | Real login form and session bootstrap | Public |
 | `/dashboard` | Authenticated health/status dashboard | Any signed-in user |
-| `/documents` | Intentional empty state; no document APIs yet | Any signed-in user |
+| `/documents` | Secure upload form for Owner/Admin; Viewer sees a restriction notice | Any signed-in user |
 | `/admin` | Administrator area with role-gated route | `ADMINISTRATOR` only |
 | `/` | Redirects to `/dashboard` | Any signed-in user |
 | `*` | Not-found page | Any signed-in user |
@@ -174,9 +191,23 @@ Phase 3 implements:
 
 Public registration always creates a `VIEWER`. Use the CLI for `DOCUMENT_OWNER` or `ADMINISTRATOR` accounts.
 
+## Private Document Uploads
+
+Phase 4 implements `POST /api/v1/documents/upload`:
+
+- Only active `ADMINISTRATOR` and `DOCUMENT_OWNER` accounts may upload; `VIEWER` requests receive 403.
+- The backend ignores client-supplied `owner_id`, storage keys, and checksums. Ownership comes from the authenticated session, and the SHA-256 checksum is computed from the received bytes.
+- Files are limited to 10 MiB by default and restricted to PDF, TXT, DOCX, PNG, JPG, or JPEG. The extension, declared MIME type, and content signature must agree.
+- DOCX packages are checked for required OOXML members and bounded member count/uncompressed size to limit zip-bomb expansion. TXT files must be NUL-free UTF-8. These checks are not antivirus scanning.
+- Storage keys use the form `documents/{owner_uuid}/{random_uuid}.{extension}`; user filenames are metadata only.
+- The object is uploaded first and the `documents` row is committed second. If the database write fails, the backend attempts to delete the new object and returns a generic 500. If Wasabi fails, the endpoint returns 503 and creates no metadata row.
+- No download, listing, share, or preview endpoint exists yet. No direct or presigned Wasabi URL is exposed.
+
+The upload path is verified with a mocked storage adapter. **Live Wasabi bucket policy and connectivity were not verified** because no credentials were supplied. The bucket must remain private.
+
 ## Database
 
-The Phase 3 schema has five tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Highlighted decisions:
+The schema has five tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Phase 4 writes `documents` rows but adds no migration. Highlighted decisions:
 
 - Roles and statuses are constrained strings; no native PostgreSQL enums.
 - Emails are stored lowercased and uniquely constrained.
@@ -222,8 +253,15 @@ Templates are committed; real values are not.
 | `AUTH_COOKIE_SAMESITE` | `lax`, `strict`, or `none` (`none` requires Secure) | No (default `lax`) |
 | `AUTH_RATE_LIMIT_ATTEMPTS` | Attempts per sliding window | No (default `10`) |
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Sliding-window length | No (default `60`) |
+| `WASABI_ENDPOINT_URL` | HTTPS endpoint for the bucket's Wasabi region | Yes for uploads |
+| `WASABI_REGION` | Bucket region | Yes for uploads |
+| `WASABI_BUCKET_NAME` | Private bucket name | Yes for uploads |
+| `WASABI_ACCESS_KEY_ID` | Server-side Wasabi access key ID | Yes for uploads |
+| `WASABI_SECRET_ACCESS_KEY` | Server-side Wasabi secret access key | Yes for uploads |
+| `MAX_UPLOAD_SIZE_BYTES` | Upload limit, 1–104,857,600 bytes | No (default `10485760`) |
+| `ALLOWED_UPLOAD_EXTENSIONS` | Comma-separated extension allow-list | No (default `pdf,txt,docx,png,jpg,jpeg`) |
 
-`CORS_ALLOWED_ORIGINS` defaults to `http://localhost:5173`. A wildcard is rejected outside `development`. Wasabi and Supabase API variables remain documented as future-phase placeholders.
+`CORS_ALLOWED_ORIGINS` defaults to `http://localhost:5173`. A wildcard is rejected outside `development`. Wasabi credentials are server-side only and must never be placed in `VITE_*` variables.
 
 ### Frontend — `frontend/.env.example`
 
@@ -243,7 +281,7 @@ cd backend
 pytest
 ```
 
-The suite currently has **55 tests**. It verifies:
+The suite currently has **101 tests**. It verifies:
 
 - Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
 - Database URL normalization and Supabase pooler/SSL detection.
@@ -255,19 +293,22 @@ The suite currently has **55 tests**. It verifies:
 - Login/registration rate limiting and `Retry-After` behavior.
 - Production authentication configuration validators.
 - Auth logging that does not include passwords, tokens, or email addresses.
+- Upload validation for supported file types, MIME/signature mismatches, unsafe filenames, empty files, and oversized requests.
+- Owner/Admin upload success with server-decided ownership, generated storage keys, computed SHA-256 checksums, and persisted metadata.
+- Viewer and anonymous denial, storage failure mapping, database-failure object cleanup, and secret-safe errors/logs.
+- Wasabi configuration validators and safe storage error mapping without live network access.
 
-Database tests start an **embedded PostgreSQL** instance in a temporary directory and never contact Supabase or read `DATABASE_URL`.
+Database tests start an **embedded PostgreSQL** instance in a temporary directory and never contact Supabase or read `DATABASE_URL`. Storage tests use a fake adapter; no test contacts Wasabi.
 
 ### Frontend
 
 ```powershell
 cd frontend
-npm run typecheck
 npm run lint
 npm run build
 ```
 
-All three commands pass. `npm run build` runs the TypeScript project build and the Vite production build.
+Both commands pass. The frontend is JavaScript/JSX only, and `npm run build` runs the Vite production build.
 
 ## API Baseline
 
@@ -277,11 +318,12 @@ All three commands pass. `npm run build` runs the TypeScript project build and t
 - **Refresh:** `POST /api/v1/auth/refresh` → rotates the refresh session and returns a new access token
 - **Logout:** `POST /api/v1/auth/logout` → revokes the current refresh session and returns 204
 - **Current user:** `GET /api/v1/auth/me` → returns the authenticated user
+- **Upload:** `POST /api/v1/documents/upload` → validates and stores a document for an Owner/Admin and returns safe metadata (no storage key)
 - **Errors:** JSON envelope `{"error":{"code":"...","message":"...","details":"..."}}` where applicable.
 - **CORS:** Loaded from `CORS_ALLOWED_ORIGINS`; production wildcards are rejected.
 - **OpenAPI:** Enabled at `/docs` and `/openapi.json`.
 
-No document, permission, or audit endpoints exist yet.
+No download, listing, permission, or audit endpoints exist yet.
 
 ## Deployment Preparation
 
@@ -302,7 +344,8 @@ No deployment has been performed or verified, and no migration has been applied 
 - Build command: `pip install -r requirements.txt`
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - Health check path: `/health`
-- Environment: `APP_ENV=production`, `LOG_LEVEL=INFO`, `DATABASE_URL`, `JWT_SECRET`, a real `CORS_ALLOWED_ORIGINS`, and the auth cookie/rate-limit settings in `render.yaml`. Render supplies `PORT`.
+- Environment: `APP_ENV=production`, `LOG_LEVEL=INFO`, `DATABASE_URL`, `JWT_SECRET`, a real `CORS_ALLOWED_ORIGINS`, the auth cookie/rate-limit settings, and the Wasabi/upload settings in `render.yaml`. Render supplies `PORT`.
+- Storage variables are marked `sync: false` in `render.yaml`; set them in the Render dashboard as secrets. Keep the bucket private and grant only the operations the API needs (`PutObject`, `HeadBucket`, `DeleteObject`; listing only if you use the connectivity check).
 - Migrations are **not** run automatically. Run `alembic upgrade head` from a trusted shell with the production `DATABASE_URL` before or after deploying schema changes.
 
 `render.yaml` configures `AUTH_COOKIE_SECURE=true` and `AUTH_COOKIE_SAMESITE=none` for cross-site Vercel → Render cookies. This configuration has **not** been deployed. Third-party cookie blocking, custom-domain requirements, and a shared rate limiter must be evaluated during deployment hardening.
@@ -323,7 +366,10 @@ See [THREATS.md](THREATS.md) for the full threat model.
 
 ## Current Limitations
 
-- No document upload, download, search, storage integration, or permission endpoints.
+- Live Wasabi connectivity and bucket policy have not been verified; upload tests use a mocked adapter.
+- No document download, listing, search, or permission endpoints.
+- Uploads are not virus-scanned; validation covers type/signature/size/structure only.
+- Upload-to-database consistency is compensating, not transactional: a failed metadata commit triggers best-effort object deletion, which could itself fail.
 - No audit writing, hash chain, or administrator activity views.
 - RLS is not enabled; the backend uses a single privileged database role.
 - The `0002` migration has not been applied to Supabase, and no deployment has been verified.
@@ -342,8 +388,8 @@ See [THREATS.md](THREATS.md) for the full threat model.
 | 1 — Project Scaffold and Early Deployment | Complete — awaiting review |
 | 2 — Database Schema and Migrations | Complete — awaiting review |
 | 3 — Authentication and Roles | Complete — awaiting review |
-| 4 — Private Storage and Validated Uploads | Not started (next) |
-| 5 — Document Management and Search | Not started |
+| 4 — Private Storage and Validated Uploads | Complete — awaiting review |
+| 5 — Document Management and Search | Not started (next) |
 | 6 — Document Permissions and Revocation | Not started |
 | 7 — Audit Trail and Administrator Activity | Not started |
 | 8 — Security Tests and Threat-Model Verification | Not started |

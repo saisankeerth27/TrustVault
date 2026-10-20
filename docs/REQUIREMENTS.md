@@ -24,7 +24,7 @@ Organizations need a secure, auditable document management system that enforces 
 **Description:** Authenticated users with the Owner role can upload documents, organize them into categories, search across their documents, and perform CRUD operations. File metadata (name, category, upload date, size, MIME type) is stored in the database. Actual file content is stored in private object storage.
 
 **Phase:** 4 (Storage and Upload), 5 (Document Management and Search)
-**Verification:** Integration tests for upload, retrieval, search, and deletion flows.
+**Verification:** Phase 4 has integration tests for validated upload and metadata persistence using a mocked storage adapter; live Wasabi connectivity is unverified. Retrieval, search, and deletion tests arrive in Phase 5.
 
 ---
 
@@ -100,8 +100,8 @@ Search results must be filtered by the requesting user's permissions — a user 
 - Malicious file name patterns rejected (path traversal, null bytes, excessively long names)
 - Files are stored with system-generated names; original names are metadata only
 
-**Phase:** 4 (Private Storage and Validated Uploads)
-**Verification:** Unit tests for each validation rule; integration tests attempting to upload invalid files.
+**Phase:** 4 (Private Storage and Validated Uploads) — implemented
+**Verification:** Unit and integration tests cover each validation rule, invalid file uploads, generated storage keys, and safe metadata. Live Wasabi integration remains unverified.
 
 ---
 
@@ -162,6 +162,15 @@ Administrators cannot modify or delete audit records through the application.
 - **Additional controls:** auth POSTs enforce an Origin allow-list; auth endpoints are rate limited in-process; logout, disablement, and reuse detection invalidate access through database session checks.
 - **Not yet met:** MFA, account lockout, a shared multi-instance rate limiter, per-session CSRF tokens, and production deployment verification.
 
+### Phase 4 Implementation Status (Verified Locally with Mocked Storage)
+
+- **FA-5:** Implemented. Validated files are sent to a private Wasabi bucket via the backend only, with backend-generated storage keys and no direct/presigned URL exposure. The bucket policy and live connectivity have **not** been verified.
+- **MR-2 upload portion:** Implemented for Owner/Admin, with category/description metadata persisted in PostgreSQL. Listing, search, update, and delete remain Phase 5.
+- **MR-8:** Implemented. Extension, declared MIME, magic-byte/signature, filename, empty-file, size, DOCX package, and TXT encoding checks are covered by tests. Files are not virus-scanned.
+- **Role enforcement:** Viewers and anonymous callers are denied; Owner/Admin ownership is derived from the authenticated session, not client input.
+- **Integrity:** The backend computes SHA-256; a database failure after upload triggers best-effort object deletion.
+- **Not yet met:** live bucket verification, download/listing/search/delete, permissions, and audit events.
+
 ---
 
 ## 4. Functional Acceptance Criteria
@@ -212,7 +221,7 @@ Administrators cannot modify or delete audit records through the application.
 
 | Component       | Provider   | Notes                                      |
 |-----------------|------------|--------------------------------------------|
-| Frontend        | Vercel     | React/TypeScript/Vite SPA                  |
+| Frontend        | Vercel     | React/JavaScript/JSX/Vite SPA              |
 | Backend API     | Render     | FastAPI, Python 3.11+                      |
 | Database        | Supabase   | PostgreSQL with RLS                        |
 | Object Storage  | Wasabi     | S3-compatible, private buckets             |
@@ -223,13 +232,13 @@ Administrators cannot modify or delete audit records through the application.
 | Req ID | Requirement                                    | Implementation Phase | Verification Method                          |
 |--------|------------------------------------------------|:--------------------:|----------------------------------------------|
 | MR-1   | Authentication with roles                      | Phase 3              | Unit + integration tests for role endpoints  |
-| MR-2   | Document upload, organization, search, mgmt    | Phase 4, 5           | Integration tests for CRUD and search        |
+| MR-2   | Document upload, organization, search, mgmt    | Phase 4 (upload), 5  | Upload tests pass with mocked storage; CRUD/search pending |
 | MR-3   | Named-user per-document READ/EDIT permissions  | Phase 6              | Permission grant/deny integration tests      |
 | MR-4   | Owner-controlled grant and revocation          | Phase 6              | Immediate revocation tests + audit checks    |
 | MR-5   | Backend enforcement of authorization           | Phase 5, 6, 8        | Direct API tests bypassing frontend          |
 | MR-6   | Audit records for all significant actions      | Phase 7              | Event-driven audit creation tests            |
 | MR-7   | Search by name, owner, category, date          | Phase 5              | Filtered search tests with permission scoping|
-| MR-8   | File upload validation                         | Phase 4              | Unit tests for validation rules              |
+| MR-8   | File upload validation                         | Phase 4              | Implemented; validation/unit tests pass      |
 | MR-9   | Administrator activity and permission views    | Phase 7              | Admin endpoint access + restriction tests    |
 | MR-10  | Automated cross-user access denial tests       | Phase 8              | Dedicated cross-user test suite              |
 

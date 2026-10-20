@@ -4,7 +4,7 @@
 
 TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and Wasabi S3-compatible private object storage. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 3):** authentication, database-backed roles, rotating refresh sessions, and the protected frontend routes are implemented and verified locally. Document storage, document APIs, permission endpoints, and the audit write path are **not** implemented. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
+> **Implementation status (Phase 4):** authentication, database-backed roles, rotating refresh sessions, the protected JavaScript frontend, and a private validated upload pipeline are implemented and verified locally. Upload tests use a mocked Wasabi adapter; **live Wasabi connectivity and bucket policy have not been verified**. Download, listing, permission endpoints, and the audit write path are **not** implemented. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
 
 ### Architecture Diagram
 
@@ -12,7 +12,7 @@ TrustVault is a secure document vault consisting of four primary components: a R
 graph TB
     subgraph "Client Zone — Untrusted"
         Browser["User Browser"]
-        ReactSPA["React SPA<br/>TypeScript + Vite<br/>Tailwind CSS + shadcn/ui<br/><i>Hosted on Vercel</i>"]
+        ReactSPA["React SPA<br/>JavaScript/JSX + Vite<br/>Tailwind CSS + shadcn/ui<br/><i>Hosted on Vercel</i>"]
     end
 
     subgraph "API Zone — Trust Boundary"
@@ -20,7 +20,7 @@ graph TB
         AuthMW["JWT Auth + Session Checks<br/>Phase 3"]
         PermCheck["Permission Checker — Phase 6"]
         AuditSvc["Audit Writer — Phase 7"]
-        FileVal["File Validator — Phase 4"]
+        FileVal["File Validator — Phase 4<br/>implemented"]
     end
 
     subgraph "Data Zone — Trusted"
@@ -35,7 +35,7 @@ graph TB
     API --- AuditSvc
     API --- FileVal
     API -->|"SQLAlchemy + psycopg 3"| DB
-    API -->|"boto3 (Phase 4)"| S3
+    API -->|"boto3 (Phase 4, mock-tested)"| S3
 
     style Browser fill:#f9f,stroke:#333
     style ReactSPA fill:#bbf,stroke:#333
@@ -58,8 +58,8 @@ graph TB
 | 1 | Frontend/backend scaffold, health endpoint, CORS, tests | Complete |
 | 2 | Database models, initial migration, connection module | Complete (verified locally) |
 | 3 | Authentication, roles, refresh tokens | Complete (verified locally) |
-| 4 | Wasabi storage, validated uploads, proxied downloads | Planned |
-| 5 | Document management and search | Planned |
+| 4 | Private Wasabi storage and validated uploads | Complete (verified locally with mocked storage; live Wasabi unverified) |
+| 5 | Document listing, download proxy, management, and search | Next |
 | 6 | Permissions and revocation | Planned |
 | 7 | Audit write path, hash chain, admin activity | Planned |
 | 8 | Security tests and threat-model verification | Planned |
@@ -108,11 +108,17 @@ The backend is the **intended sole enforcement point** for security. It is respo
 - The checker resolves access as: administrator → allowed; document owner → allowed; explicit active `READ`/`EDIT` grant → allowed; otherwise denied.
 - Denials return 403 (without leaking document existence or metadata) and will create an `ACCESS_DENIED` audit event once Phase 7 exists.
 
-### Document Operations (planned — Phases 4–5)
-- Upload: validate file, store in Wasabi with a UUID-based key, create metadata.
-- Download: verify permission, stream from Wasabi. Direct storage URLs are never exposed.
-- List/Search: query PostgreSQL with permission filtering. `documents.name` has a `pg_trgm` index to support case-insensitive search in Phase 5.
-- Update metadata and soft delete.
+### Document Operations
+**Upload (implemented — Phase 4):**
+- `POST /api/v1/documents/upload` accepts multipart `file`, `name`, optional `category`, and optional `description`.
+- Requires an active `ADMINISTRATOR` or `DOCUMENT_OWNER`. Ownership comes from the authenticated user; client-supplied owner, storage key, and checksum are ignored.
+- Validates the extension, declared MIME type, content signature, filename, empty content, and size. DOCX OOXML structure and TXT encoding are checked. The checksum is computed by the backend.
+- Stores with a generated key and commits metadata only after the object upload succeeds. A database failure triggers best-effort object deletion.
+
+**Download, listing, metadata updates, and soft delete (planned — Phase 5):**
+- Download will verify access and stream from Wasabi; direct storage URLs are never exposed.
+- List/Search will query PostgreSQL with permission filtering. `documents.name` has a `pg_trgm` index for case-insensitive search.
+- Update metadata and soft delete will be added with download/listing.
 
 ### Audit Logging (schema in Phase 2; write path planned — Phase 7)
 - Persist an event for every significant action into `audit_events`.
@@ -129,13 +135,13 @@ The backend is the **intended sole enforcement point** for security. It is respo
 ### Error Handling (implemented — Phase 1)
 - Structured JSON error responses.
 - Sensitive details (stack traces, SQL) are logged server-side and never returned to clients.
-- Documented status codes: 400, 401, 403, 404, 409, 422, 429, 500, 503.
+- Documented status codes: 400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 503.
 
 ---
 
 ## 5. Database Architecture (Implemented)
 
-The Phase 3 schema contains five tables. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
+The schema contains five tables. Phase 4 writes `documents` rows without a schema change. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
 
 | Table | Purpose |
 |-------|---------|
@@ -152,8 +158,8 @@ The Phase 3 schema contains five tables. Full column, constraint, and index deta
 - **Email normalization.** `users.email` is stored lowercase and must already be lowercase (check constraint), with a unique constraint. Normalization happens before insert; the database guarantees no mixed-case duplicates.
 - **Required `password_hash`.** The column is `NOT NULL`; Phase 3 always stores a bcrypt hash, so an account can never exist without a credential.
 - **Explicit owner FK.** `documents.owner_id` references `users.id` with `ON DELETE RESTRICT`; a user who owns documents cannot be deleted until ownership is transferred.
-- **Internal storage keys only.** `documents.storage_key` is unique, must start with `documents/`, and must not contain a URL scheme, preventing accidental public-URL storage.
-- **Required checksum.** `documents.checksum` is a required SHA-256 hex string for integrity checks in later phases.
+- **Internal storage keys only.** `documents.storage_key` is unique, must start with `documents/`, and must not contain a URL scheme. Phase 4 generates keys as `documents/{owner_uuid}/{random_uuid}.{ext}`; the user filename is metadata only.
+- **Required checksum.** `documents.checksum` is a required SHA-256 hex string computed by the backend from the received bytes during upload.
 - **Soft delete.** `documents.deleted_at` marks deletion without removing history; hard-delete and storage cleanup behavior is defined in Phase 5.
 - **Permission history with a single active grant.** A partial unique index (`WHERE revoked_at IS NULL`) allows only one active grant per `(document_id, user_id)`. Revoking sets `revoked_at`; re-granting inserts a new row, preserving audit history. `granted_by` uses `ON DELETE SET NULL`.
 - **Owner access is implicit.** Owners are not represented in `document_permissions`; ownership comes from `documents.owner_id`. The permissions table records grants to *other* users.
@@ -171,32 +177,33 @@ The schema is applied only through Alembic. The initial migration `0001_initial_
 
 ---
 
-## 6. Wasabi Private Storage Responsibilities (Planned — Phase 4)
+## 6. Wasabi Private Storage Responsibilities (Implemented — Phase 4)
 
-Wasabi will provide S3-compatible object storage for document content.
+Wasabi provides S3-compatible object storage for document content.
 
-- Bucket is **private** — no public access policy.
+- Bucket is **private**; no public access policy or direct frontend access.
 - All access goes through the FastAPI backend using `boto3`.
-- `WASABI_ACCESS_KEY` and `WASABI_SECRET_KEY` are environment variables; they are never committed.
+- Server-side settings are `WASABI_ENDPOINT_URL`, `WASABI_REGION`, `WASABI_BUCKET_NAME`, `WASABI_ACCESS_KEY_ID`, and `WASABI_SECRET_ACCESS_KEY`. They are never committed or exposed to Vite.
+- The client is configured for the Wasabi endpoint with path-style addressing. Missing configuration maps to 503; storage errors are logged without credentials or internal detail.
+- `python -m scripts.check_storage` performs a safe `head_bucket` check for operators.
 
 ### File Organization
 
 ```
 documents/
-  {document_uuid}/
-    {version}/
-      {sanitized_filename}
+  {owner_uuid}/
+    {random_uuid}.{ext}
 ```
 
-Storage keys are system-generated UUID paths; the user-supplied filename is metadata only.
+Storage keys are system-generated; the user-supplied filename is metadata only. The random UUID prevents collisions and does not encode authorization.
 
 ### Access Pattern
 
-1. **Upload:** backend validates → `put_object()` → records the storage key.
-2. **Download:** backend verifies permission → `get_object()` and streams. Presigned URLs, if used at all, must be very short-lived and are not part of the initial design.
-3. **Delete:** backend verifies ownership → deletes from Wasabi → updates metadata.
+1. **Upload (implemented):** backend validates → `put_object()` → commits the `documents` row. If the commit fails, the backend attempts `delete_object()`.
+2. **Download (Phase 5):** backend verifies permission → `get_object()` and streams. Presigned URLs are not part of the initial design.
+3. **Delete (Phase 5):** backend verifies ownership → deletes from Wasabi → updates metadata.
 
-The frontend **never** receives a direct Wasabi URL.
+The frontend **never** receives a direct or presigned Wasabi URL. The live bucket policy has not been verified.
 
 ---
 
@@ -239,6 +246,7 @@ sequenceDiagram
 ### Token Details (Implemented)
 
 - **Access token:** HS256 JWT, 15-minute default lifetime, with `sub`, `role`, `sid`, `type=access`, `iat`, `nbf`, `exp`, and `jti`. Issuer and audience are validated.
+- **CORS/origin:** exact-origin CORS with credentials (no wildcard) and Origin allow-list checks on auth POSTs; there is no per-session CSRF token.
 - **Refresh token:** 256-bit opaque value, stored only as `sha256:<64 hex>`, 7-day default lifetime, single-use rotation within a family. Reuse revokes the family.
 - **Cookie:** `trustvault_refresh`, `HttpOnly`, path `/api/v1/auth`, `SameSite`/`Secure` from configuration. Production requires Secure; cross-site Vercel/Render needs `SameSite=None`.
 - **Password hashing:** bcrypt with configurable cost (default 12). Passwords must be 12–72 UTF-8 bytes.
@@ -260,25 +268,26 @@ flowchart TD
     G -->|Yes| I[Execute endpoint]
 ```
 
-The backend verifies identity and session state on **every** protected request. Role checks use the current database value and fail closed for unknown roles. Document-level ownership and READ/EDIT grants are not implemented yet; those checks arrive with the document endpoints in Phases 5–6.
+The backend verifies identity and session state on **every** protected request. Role checks use the current database value and fail closed for unknown roles. Upload additionally enforces owner/admin roles and derives ownership from the session. Document-level READ/EDIT grants are not implemented yet; those checks arrive with the document endpoints in Phases 5–6.
 
-## 9. Upload and Download Flows (Planned — Phases 4–5)
+## 9. Upload and Download Flows (Upload implemented — Phase 4; download Phase 5)
 
-### Upload
+### Upload (implemented)
 
-1. Client sends `POST /documents/upload` with multipart file plus metadata.
-2. Backend validates the JWT and checks the caller is an owner or administrator.
-3. File validation: size limit, MIME allow-list, magic-byte check, filename sanitization.
-4. Backend generates a UUID storage key, uploads to Wasabi, and on success creates the `documents` row (checksum computed from the file bytes).
-5. An audit event (`DOCUMENT_UPLOAD`) is written.
-6. Any failure leaves no partial database row and no orphan object.
+1. Client sends `POST /api/v1/documents/upload` with multipart `file`, `name`, optional `category`, and optional `description`.
+2. Backend validates the JWT/session and requires an active owner or administrator role.
+3. File validation: size limit (including an early `Content-Length` check), extension/MIME allow-list, magic-byte/signature check, filename safety, empty-file rejection, DOCX structure, and TXT encoding.
+4. Backend computes SHA-256, generates `documents/{owner_uuid}/{random_uuid}.{ext}`, uploads to Wasabi, then commits the `documents` row.
+5. The response contains safe metadata only; it excludes `storage_key` and all credentials.
+6. If storage fails, no database row is created and the response is a generic 503. If the database commit fails after upload, object deletion is attempted and a generic 500 is returned. Cleanup is best-effort, not transactional.
+7. No audit event is written yet; `DOCUMENT_UPLOAD` belongs to Phase 7.
 
-### Download
+### Download (planned — Phase 5)
 
-1. Client sends `GET /documents/{id}/download`.
+1. Client sends `GET /api/v1/documents/{id}/download`.
 2. Backend validates the JWT, loads metadata, and checks ownership/role/grant.
 3. Denied requests return 403 and, once Phase 7 exists, an `ACCESS_DENIED` event.
-4. Backend fetches from Wasabi, streams with safe `Content-Type` and `Content-Disposition`, and records `DOCUMENT_DOWNLOAD`.
+4. Backend fetches from Wasabi, streams with safe `Content-Type` and `Content-Disposition`, and records `DOCUMENT_DOWNLOAD` once the audit writer exists.
 
 ---
 
@@ -366,7 +375,7 @@ graph LR
 
     FE -->|"HTTPS API"| BE
     BE -->|"psycopg 3"| PG
-    BE -->|"boto3 (Phase 4)"| WS
+    BE -->|"boto3 (Phase 4, live unverified)"| WS
 ```
 
 | Provider | Component | Configuration |
@@ -398,12 +407,14 @@ JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=15
 JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
 
-# Wasabi S3 (Phase 4)
-WASABI_ACCESS_KEY=your-wasabi-access-key
-WASABI_SECRET_KEY=your-wasabi-secret-key
-WASABI_BUCKET=trustvault-documents
-WASABI_ENDPOINT=https://s3.wasabisys.com
+# Wasabi S3 (Phase 4, implemented; live connection unverified)
+WASABI_ENDPOINT_URL=https://s3.us-east-1.wasabisys.com
 WASABI_REGION=us-east-1
+WASABI_BUCKET_NAME=trustvault-documents
+WASABI_ACCESS_KEY_ID=your-wasabi-access-key-id
+WASABI_SECRET_ACCESS_KEY=your-wasabi-secret-access-key
+MAX_UPLOAD_SIZE_BYTES=10485760
+ALLOWED_UPLOAD_EXTENSIONS=pdf,txt,docx,png,jpg,jpeg
 
 # CORS and app
 CORS_ALLOWED_ORIGINS=https://your-app.vercel.app
@@ -423,9 +434,9 @@ Only non-secret configuration belongs in `VITE_*` variables, because Vite embeds
 
 ## 14. Database Security and RLS Planning (Not Enabled)
 
-### Primary Authorization: Application Logic (Planned)
+### Primary Authorization: Application Logic (Authentication and Upload Implemented; Grants Planned)
 
-The FastAPI backend is intended to be the primary enforcement point. Every endpoint will check authentication, role, and per-document permission.
+The FastAPI backend is the primary enforcement point. Every protected endpoint checks authentication and role; Phase 4 upload additionally derives ownership from the session. Per-document READ/EDIT permission checks arrive with Phases 5–6.
 
 ### Secondary Defense: Row-Level Security (Deferred)
 
@@ -449,13 +460,15 @@ Planned policies:
 
 | Scenario | Response | Behavior |
 |----------|----------|----------|
-| Wasabi S3 unreachable (Phase 4) | 503 Service Unavailable | Upload/download fails cleanly; no partial metadata |
+| Wasabi unreachable or misconfigured (Phase 4) | 503 Service Unavailable | Upload fails cleanly; no metadata row; generic client message |
+| Metadata commit fails after upload (Phase 4) | 500 Internal Server Error | Best-effort object deletion; generic client message |
 | Supabase DB unreachable | 503 Service Unavailable | Requests fail; no silent fallback |
 | JWT missing/expired/invalid, revoked session, or disabled account | 401 Unauthorized | Request rejected |
-| Permission denied (Phase 6) | 403 Forbidden | Generic message; no metadata leaked; audit event once Phase 7 exists |
+| Permission denied / wrong role (Phase 4 upload; Phase 6 grants) | 403 Forbidden | Generic message; no metadata leaked; audit event once Phase 7 exists |
 | Document not found | 404 Not Found | Generic message; no ownership information |
 | File too large (Phase 4) | 413 Payload Too Large | Rejected before storage |
-| Invalid file type (Phase 4) | 422 Unprocessable Entity | Rejected with allowed-types list |
+| Invalid/unsupported file type or signature (Phase 4) | 415 Unsupported Media Type | Rejected with a generic type message |
+| Invalid upload metadata, empty file, or malformed filename (Phase 4) | 400/422 | Rejected before storage; details limited to validation feedback |
 | Auth rate limit exceeded | 429 Too Many Requests | `Retry-After` returned; client waits and retries |
 | Unexpected server error | 500 Internal Server Error | Logged server-side; generic client message |
 
@@ -463,7 +476,7 @@ Planned policies:
 
 ## 16. Health Check
 
-`GET /health` currently reports **process health only**: `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`. It does **not** query PostgreSQL or Wasabi, and a test asserts that it exposes no configuration markers. Database and storage connectivity checks will be added when those integrations exist.
+`GET /health` currently reports **process health only**: `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`. It does **not** query PostgreSQL or Wasabi, and a test asserts that it exposes no configuration markers. Storage operators can use `python -m scripts.check_storage`; health integration remains deferred.
 
 ---
 
@@ -475,5 +488,18 @@ Planned policies:
 - **Role model:** `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER` are stored in PostgreSQL. Public registration creates Viewers only; elevated roles come from the provisioning CLI.
 - **CSRF and CORS:** auth POSTs enforce an exact Origin allow-list, CORS never combines credentials with a wildcard, and the refresh cookie is path-scoped. A per-session CSRF token is not implemented.
 - **Rate limiting:** an in-memory sliding window limits login/register attempts per process. A multi-instance deployment requires a shared store.
-- **Tests:** 55 backend tests cover auth flows, rotation/reuse, disabled accounts, role dependencies, rate limits, production config validation, and secret-free logging. The suite uses an ephemeral PostgreSQL instance.
+- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 101 tests. It uses an ephemeral PostgreSQL instance.
 - **Not implemented:** document authorization, audit writes, RLS, MFA, account lockout, idle timeouts, and production deployment verification.
+
+---
+
+## 18. Phase 4 Implementation Notes (Verified with Mocked Storage)
+
+- **Frontend:** migrated from TypeScript/TSX to JavaScript/JSX, removed TypeScript dependencies and configs, and added an upload form. Owner/Admin users can select a file, choose a category, add a description, and see progress/errors/success metadata. Viewers see a restriction notice.
+- **Upload endpoint:** `POST /api/v1/documents/upload`; requires `ADMINISTRATOR` or `DOCUMENT_OWNER`, enforces active sessions, and returns 201 with safe metadata.
+- **Validation:** extension/MIME/signature allow-list, filename safety, empty-file rejection, 10 MiB default limit, DOCX package checks, and UTF-8 TXT checks. No antivirus scanning.
+- **Metadata:** backend-generated owner, storage key, MIME type, byte size, and SHA-256 checksum; `documents` table only, no new migration.
+- **Storage:** `boto3` S3 client with Wasabi endpoint and path-style addressing, lazy cached service, safe error classes, and no secret logging.
+- **Consistency:** object first, metadata second; database failure attempts object deletion. No distributed transaction.
+- **Tests:** 101 backend tests pass, including upload authorization, validation, metadata, storage failure, persistence cleanup, config validation, and secret-safe logging. Frontend lint/build pass; storage tests use a fake adapter.
+- **Not implemented/verified:** live Wasabi bucket policy/connectivity, download/listing, permission grants, audit writes, RLS, and deployment.

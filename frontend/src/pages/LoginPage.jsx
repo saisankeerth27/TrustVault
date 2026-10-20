@@ -15,9 +15,7 @@ const loginSchema = z.object({
   password: z.string().min(1, { message: 'Enter your password.' }),
 })
 
-type LoginFormValues = z.infer<typeof loginSchema>
-
-function redirectPathFrom(state: unknown): string {
+function redirectPathFrom(state) {
   if (
     state &&
     typeof state === 'object' &&
@@ -35,14 +33,14 @@ export function LoginPage() {
   const { status, login } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
-  const [serverError, setServerError] = useState<string | null>(null)
+  const [serverError, setServerError] = useState(null)
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
     setError,
     clearErrors,
-  } = useForm<LoginFormValues>({
+  } = useForm({
     defaultValues: { email: '', password: '' },
   })
 
@@ -56,7 +54,7 @@ export function LoginPage() {
     return <Navigate to={destination} replace />
   }
 
-  const onSubmit = async (values: LoginFormValues) => {
+  const onSubmit = async (values) => {
     clearErrors()
     setServerError(null)
     const result = loginSchema.safeParse(values)

@@ -79,11 +79,11 @@ graph TB
 
 **Scenario:** A user attempts to download a document via a direct link, guessed storage key, or API manipulation.
 
-**Mitigation:** Storage bucket is private. Downloads are proxied through the backend after authorization and audit logging. No direct presigned or public URLs are returned to clients. Storage keys are system-generated and never exposed.
+**Mitigation:** The bucket is intended to be private, and Phase 4 never returns a direct or presigned URL or the storage key. Downloads are not implemented yet. The Phase 5 download proxy must authorize before reading from storage and must audit successful/denied attempts once the Phase 7 writer exists.
 
-**Verification:** Tests assert that unauthorized download requests receive 403, that no API response contains storage URLs, and that direct bucket access is denied.
+**Verification:** Phase 4 tests assert that upload responses contain no storage key, URL, or credentials. Unauthorized-download and direct-bucket-denial tests belong to Phases 5/8 and the live deployment check.
 
-**Residual Risk:** Low. However, files already downloaded before a revocation cannot be recalled — see 4.4.
+**Residual Risk:** Low after the bucket policy is verified. The live Wasabi private policy has **not** been verified. Files already downloaded before a revocation cannot be recalled — see 4.4.
 
 ---
 
@@ -115,11 +115,11 @@ graph TB
 
 **Scenario:** A user uploads malware, an executable disguised as an allowed type, a polyglot file, or a zip bomb.
 
-**Mitigation:** Enforce size limits, MIME allow-list, and magic-byte verification. Disallow executable types. Store files privately and serve with safe `Content-Disposition` (attachment) and a restrictive `Content-Type`. Never execute or render uploaded content server-side. Consider malware scanning as a future enhancement.
+**Mitigation (implemented for upload):** Enforce a 10 MiB default size limit (including early `Content-Length` rejection), an extension and MIME allow-list, magic-byte/signature verification, filename validation, empty-file rejection, DOCX OOXML member limits, and NUL-free UTF-8 TXT validation. Executable types are not allowed. The backend computes the checksum, generates the storage key, and stores files privately. Uploaded content is never executed or rendered server-side. Download response headers and malware scanning are future work.
 
-**Verification:** Unit tests for validation rules; integration tests uploading mismatched extensions and oversized files; tests asserting rejection of executable MIME types.
+**Verification:** Unit tests cover each validation rule; integration tests cover mismatched extensions/content, unsafe names, empty files, oversized requests, Viewer denial, storage failure, and metadata-failure cleanup.
 
-**Residual Risk:** Medium without antivirus scanning. A zero-day in a viewed document format is outside the application's control. Recommend adding scanning in a later phase.
+**Residual Risk:** Medium without antivirus scanning. Signature checks are not a malware scanner and can be bypassed by a valid but malicious document. A zero-day in a viewed document format is outside the application's control. Recommend adding scanning in a later phase.
 
 ---
 
@@ -127,9 +127,9 @@ graph TB
 
 **Scenario:** A crafted filename such as `../../etc/passwd` or a null-byte injection manipulates storage paths or local filesystem writes.
 
-**Mitigation:** The application never uses client filenames as filesystem or storage paths. Storage keys are server-generated UUIDs. Original filenames are sanitized and stored only as metadata. Path traversal sequences are stripped or rejected.
+**Mitigation (implemented for upload):** The application never uses client filenames as filesystem or storage paths. Phase 4 creates `documents/{owner_uuid}/{random_uuid}.{ext}` from server-side values. Path separators, NUL/control characters, and names over 255 characters are rejected; the original name is metadata only.
 
-**Verification:** Unit tests with traversal payloads in filenames; storage key assertions confirming UUID-only keys.
+**Verification:** Tests assert rejection of traversal/NUL/control-character filenames and verify generated storage keys do not contain the user filename.
 
 **Residual Risk:** Low.
 
@@ -151,7 +151,7 @@ graph TB
 
 **Scenario:** An attacker or privileged insider modifies or deletes audit records to hide unauthorized activity.
 
-**Mitigation:** Audit records are append-only at the application level (no UPDATE/DELETE endpoints). Each record includes a hash of the previous record, forming a tamper-evident chain. RLS restricts modification. Verification utilities detect chain breaks.
+**Mitigation:** Audit records are intended to be append-only at the application level (no UPDATE/DELETE endpoints). The Phase 7 writer will include a hash of the previous record, forming a tamper-evident chain, and verification utilities will detect chain breaks. RLS is not enabled, so the database does not currently restrict modification.
 
 **Limitation and Residual Risk:** **A hash chain stored only in the same database does not fully protect against a privileged attacker.** An attacker with direct database access can modify a record and recompute all subsequent hashes, producing a locally valid chain. To mitigate, TrustVault plans independently controlled signed checkpoints: periodically hash the chain head and publish/store the digest in an append-only external system or a separately administered store. Comparison against these checkpoints makes tampering detectable even by database administrators. Until external checkpoints are implemented, detection depends on out-of-band chain snapshots.
 
@@ -163,9 +163,9 @@ graph TB
 
 **Scenario:** Error messages, search results, headers, or logs reveal document existence, ownership, or contents to unauthorized users.
 
-**Mitigation:** Unauthorized document requests return generic 403/404 without metadata. Search is permission-scoped. Errors returned to clients are generic; detailed logs stay server-side. No sensitive data in `Content-Disposition` beyond the document name the requester may access.
+**Mitigation:** Phase 4 upload responses expose only safe metadata and never the storage key, URL, or credentials. Role denials and storage failures return generic messages; internal storage errors are logged without credentials. Future download responses must avoid leaking metadata to unauthorized callers and use `Content-Disposition` only after authorization.
 
-**Verification:** Tests asserting that denied requests do not include document metadata; log review for accidental secret leakage.
+**Verification:** Tests assert generic storage/persistence errors and secret-safe logs, and assert upload responses omit storage details. Denied-download and log-review tests expand in later phases.
 
 **Residual Risk:** Low–Medium. Timing side channels and name leakage in shared contexts require ongoing review.
 
@@ -175,9 +175,9 @@ graph TB
 
 **Scenario:** Secrets (database URL, service role key, Wasabi keys, JWT secret) are committed, logged, or exposed in client bundles.
 
-**Mitigation:** Secrets live only in environment variables. `.env` files are gitignored; `.env.example` contains placeholders only. Secret scanning before every commit. No secrets in frontend code or build output. Credentials rotated if exposure is suspected.
+**Mitigation:** Secrets live only in environment variables. `.env` files are gitignored; `.env.example` contains placeholders only. Wasabi credentials are server-side settings returned by the backend configuration, never `VITE_*` values. Storage errors and logs omit credentials and keys. Secret scanning is required before each commit. Credentials are rotated if exposure is suspected.
 
-**Verification:** Pre-commit secret scan of staged files; build-output scan; periodic credential rotation.
+**Verification:** Phase 4 tests assert secret-safe storage logging; the final commit requires a staged-file secret scan and build-output review.
 
 **Residual Risk:** Medium if operational discipline lapses. Any leaked credential must be treated as compromised and rotated immediately.
 
@@ -223,9 +223,9 @@ graph TB
 
 **Scenario:** High-volume requests, large uploads, or expensive queries exhaust backend, database, or storage resources.
 
-**Mitigation:** Authentication rate limiting, future request limits, upload size limits, query pagination and limits, timeouts on external calls, and provider-level protections (Render/Vercel/Supabase). Health checks and monitoring.
+**Mitigation:** Authentication rate limiting, a 10 MiB default upload limit (configurable up to 100 MiB), early `Content-Length` rejection, DOCX expansion limits, future query pagination/request limits, timeouts on external calls, and provider-level protections (Render/Vercel/Supabase). Health checks and monitoring.
 
-**Verification:** Load and limit tests; upload-size rejection tests; pagination caps verified.
+**Verification:** Upload-size and DOCX-expansion tests pass; load tests and pagination caps remain later work.
 
 **Residual Risk:** Medium. Managed providers absorb much of this, but application-level floods require continued tuning.
 
@@ -249,7 +249,10 @@ graph TB
 |------|----------|---------------------|
 | Downloaded copies cannot be recalled after revocation | Inherent | Communicate to users; consider watermarking |
 | Privileged DB attacker can rewrite local hash chain | High | Implement external signed checkpoints |
-| Malware in uploaded files | Medium | Add antivirus scanning |
+| Malware in uploaded files | Medium | Add antivirus scanning; validation is not scanning |
+| Live Wasabi bucket policy/connectivity unverified | Medium | Verify private policy, least-privilege keys, and upload/delete behavior before deployment |
+| Upload object and metadata are not transactional | Low–Medium | Best-effort cleanup only; monitor orphans and add reconciliation |
+| Uploads are not audited yet | Medium | Phase 7 writes `DOCUMENT_UPLOAD`/denied events |
 | Stolen access token valid until expiry | Medium | Short TTL; consider token binding |
 | Credential stuffing without MFA | Medium | Evaluate MFA |
 | Application-level DoS | Medium | Rate limits, provider protections |
@@ -295,3 +298,19 @@ These notes record the authentication controls that are actually implemented. Pl
 - **Account provisioning:** public registration always creates a Viewer. Elevated roles require the server-side CLI; clients cannot request a role.
 - **Secret-free logging:** tests assert that auth logs do not include passwords, access tokens, refresh tokens, or email addresses. Alembic logging is configured with `disable_existing_loggers=False` so application loggers remain active.
 - **Residual risks after Phase 3:** no MFA, no account lockout, no idle timeout, no per-session CSRF token, no shared rate limiter, and no deployed verification of cross-site cookies. Stolen access tokens remain valid only while the session stays active and the token stays unexpired (15 minutes by default).
+
+---
+
+## 10. Phase 4 Implementation Notes (Verified with Mocked Storage)
+
+These notes record the upload/storage controls that are actually implemented. Downloads, permissions, and audit writes remain planned.
+
+- **Authorization:** `POST /api/v1/documents/upload` requires an active `ADMINISTRATOR` or `DOCUMENT_OWNER`; Viewers receive 403 and anonymous callers 401. Ownership is taken from the authenticated user, never client input.
+- **Input validation:** Extension and declared-MIME allow-list, magic-byte/signature checks, empty-file rejection, 10 MiB default limit with early `Content-Length` rejection, filename length/control-character/path-separator rejection, DOCX member count/uncompressed-size checks, and NUL-free UTF-8 TXT validation.
+- **Key and checksum integrity:** Storage keys are generated from server-side UUIDs; the backend computes SHA-256 from received bytes and ignores client checksums. The user filename never becomes a path.
+- **Private access:** No direct/presigned URL or storage key is returned to the client. The frontend never receives Wasabi credentials.
+- **Failure behavior:** Missing/misconfigured storage or Wasabi failure returns generic 503 with no metadata row. A metadata commit failure after upload returns generic 500 and attempts best-effort object deletion.
+- **Secret handling:** Storage errors are logged without credentials or internal details; configuration is server-side only. Tests assert secret-safe logging and responses.
+- **Frontend migration:** TypeScript/TSX was removed in favor of JavaScript/JSX; lint and build pass.
+- **Verification:** 101 backend tests pass. Storage tests use a fake adapter; **no test contacted Wasabi**. Live bucket privacy, credentials, permissions, and connectivity remain unverified.
+- **Not implemented:** Download/listing, permission grants, audit writes, malware scanning, RLS, and deployment.

@@ -1,11 +1,7 @@
 import { ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
-interface BrandMarkProps {
-  to?: string
-}
-
-export function BrandMark({ to = '/dashboard' }: BrandMarkProps) {
+export function BrandMark({ to = '/dashboard' }) {
   return (
     <Link
       to={to}

@@ -67,7 +67,7 @@ docs: define TrustVault requirements and architecture
 Create the frontend and backend scaffolds, configure build tooling, and deploy empty shells to Vercel and Render to prove the deployment pipeline before feature work.
 
 **Deliverables**
-- `frontend/` — React + TypeScript + Vite + Tailwind CSS + shadcn/ui scaffold with a placeholder page.
+- `frontend/` — React + Vite + Tailwind CSS + shadcn/ui scaffold with a placeholder page (initially TypeScript; migrated to JavaScript/JSX in Phase 4).
 - `backend/` — FastAPI application scaffold with `app/main.py`, `GET /health`, and settings management.
 - `.env.example` files for both frontend and backend with placeholder values only.
 - Vercel configuration for the frontend.
@@ -170,7 +170,7 @@ Implement registration, login, JWT issuance, rotating refresh sessions, logout, 
 **Tests**
 - 55 backend tests total, including registration, login, refresh, rotation/reuse, logout, current user, expired/tampered tokens, disabled accounts, role dependencies, rate limits, production config validation, and log redaction.
 - Full migration test applies `0001` and `0002`, runs `alembic check`, downgrades to base, and re-upgrades.
-- Frontend `npm run typecheck`, `npm run lint`, and `npm run build` pass.
+- At Phase 3 completion, frontend typecheck, lint, and build passed. The frontend was migrated to JavaScript/JSX in Phase 4, and typecheck no longer applies.
 - Not tested: live Vercel/Render cookies, third-party cookie blocking, shared rate limiting, and Supabase migration.
 
 **Suggested Commit Message**
@@ -182,35 +182,39 @@ feat(auth): implement authentication and roles
 
 ## Phase 4: Private Storage and Validated Uploads
 
+**Status:** Complete - awaiting review. Verified locally with a mocked Wasabi adapter; live bucket connectivity/policy was **not** verified because no credentials were supplied.
+
 **Objectives**
-Integrate private Wasabi S3 storage and implement validated uploads with backend-proxied downloads.
+Integrate private Wasabi S3 storage and implement a validated secure upload path. Downloads are deferred to Phase 5 to keep Phase 4 reviewable.
 
 **Deliverables**
-- Wasabi S3 client wrapper using `boto3`.
-- Upload endpoint with validation (size, MIME allow-list, magic-byte check, filename sanitization).
-- UUID-based storage key generation.
-- Download proxy endpoint with permission placeholder from Phase 3 roles.
-- Metadata creation and rollback on storage failure.
-- Audit hooks scaffolded for upload/download (fully implemented in Phase 7).
+- Wasabi S3 client wrapper using `boto3`, lazy/cached service creation, and safe errors.
+- `POST /api/v1/documents/upload` with Owner/Admin role enforcement.
+- Validation: size (10 MiB default), extension/MIME allow-list, magic-byte/signature checks, filename safety, empty-file rejection, DOCX package checks, and TXT encoding checks.
+- Backend-generated `documents/{owner_uuid}/{random_uuid}.{ext}` keys and backend-computed SHA-256.
+- Metadata creation, safe 201 response without storage keys, and best-effort object cleanup when metadata commit fails.
+- Server-side storage settings, upload limits, connectivity CLI, and deployment templates.
+- JavaScript/JSX frontend migration and an upload form for Owner/Admin.
 
 **Dependencies**
 - Phase 3 approved.
 
 **Acceptance Criteria**
-- Valid files upload to Wasabi and metadata is recorded.
-- Invalid type/size/filename uploads are rejected with no partial records.
-- Downloads are proxied through the backend; no direct S3 URL is exposed.
-- Storage failures return 503 and leave no orphan metadata.
+- Valid files pass validation, upload through the mocked storage adapter, and record metadata.
+- Invalid type/size/filename/content uploads are rejected before storage.
+- No direct/presigned storage URL or storage key is exposed to the client.
+- Storage failures return 503 with no metadata row; database failures return 500 and attempt object cleanup.
+- Live Wasabi behavior remains explicitly unverified.
 
 **Tests**
-- Unit tests for every validation rule.
-- Integration tests for upload/download (mockable S3).
-- Test that API responses contain no presigned or direct storage URLs.
-- Failure-path tests for S3 errors.
+- Unit tests for every validation rule and storage configuration.
+- Integration tests for authorized/denied upload, metadata persistence, failure paths, and cleanup.
+- Tests that responses and logs expose no storage key or secret.
+- 101 backend tests pass; frontend lint/build pass.
 
 **Suggested Commit Message**
 ```
-feat: implement validated file uploads with Wasabi storage
+feat(storage): implement secure document uploads
 ```
 
 ---
@@ -221,8 +225,8 @@ feat: implement validated file uploads with Wasabi storage
 Implement document listing, metadata editing, categorization, deletion, and permission-scoped search.
 
 **Deliverables**
-- Document CRUD endpoints.
-- Category management.
+- Backend-proxied download endpoint with safe headers; no direct/presigned storage URLs.
+- Document listing, metadata update, category management, and soft/hard-delete behavior with object cleanup.
 - Search endpoint with filters: name, owner, category, date range.
 - Pagination and sorting.
 - Permission scoping so users only see accessible documents (owner/admin/placeholder grants until Phase 6).
@@ -380,7 +384,7 @@ Deliver the full React frontend covering all user-facing capabilities with acces
 - Frontend build succeeds with no type errors.
 
 **Tests**
-- TypeScript typecheck and production build.
+- JavaScript lint and production build.
 - Manual UI walkthrough of each role.
 - Component tests where applicable.
 

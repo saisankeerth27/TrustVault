@@ -48,3 +48,19 @@ services:
         value: "10"
       - key: AUTH_RATE_LIMIT_WINDOW_SECONDS
         value: "60"
+      # Private Wasabi bucket configuration. Set these in the Render dashboard.
+      # Keep the bucket private and never place these values in the frontend.
+      - key: WASABI_ENDPOINT_URL
+        sync: false
+      - key: WASABI_REGION
+        sync: false
+      - key: WASABI_BUCKET_NAME
+        sync: false
+      - key: WASABI_ACCESS_KEY_ID
+        sync: false
+      - key: WASABI_SECRET_ACCESS_KEY
+        sync: false
+      - key: MAX_UPLOAD_SIZE_BYTES
+        value: "10485760"
+      - key: ALLOWED_UPLOAD_EXTENSIONS
+        value: pdf,txt,docx,png,jpg,jpeg

@@ -1,17 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { setAccessToken, subscribeToAccessToken } from '@/auth/tokenStore'
-import { AuthContext, type AuthStatus } from '@/auth/useAuth'
+import { AuthContext } from '@/auth/useAuth'
 import { refreshAccessToken } from '@/services/api'
 import {
   getCurrentUser,
   login as loginRequest,
   logout as logoutRequest,
 } from '@/services/auth'
-import type { LoginRequest, User } from '@/types/auth'
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<AuthStatus>('loading')
-  const [user, setUser] = useState<User | null>(null)
+export function AuthProvider({ children }) {
+  const [status, setStatus] = useState('loading')
+  const [user, setUser] = useState(null)
   const bootstrapStarted = useRef(false)
 
   useEffect(() => {
@@ -47,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
-  const login = useCallback(async (credentials: LoginRequest) => {
+  const login = useCallback(async (credentials) => {
     const session = await loginRequest(credentials)
     setAccessToken(session.access_token)
     setUser(session.user)

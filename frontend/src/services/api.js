@@ -1,7 +1,5 @@
-import axios, { type InternalAxiosRequestConfig } from 'axios'
+import axios from 'axios'
 import { getAccessToken, setAccessToken } from '@/auth/tokenStore'
-import type { AuthResponse } from '@/types/auth'
-import type { ApiErrorEnvelope } from '@/types/api'
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? ''
 
@@ -32,19 +30,19 @@ if (!isApiConfigured && import.meta.env.DEV) {
   )
 }
 
-let refreshPromise: Promise<AuthResponse> | null = null
+let refreshPromise = null
 
-function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
+function withRefreshLock(task) {
   if (typeof navigator !== 'undefined' && navigator.locks) {
     return navigator.locks.request('trustvault-refresh', task)
   }
   return task()
 }
 
-export function refreshAccessToken(): Promise<AuthResponse> {
+export function refreshAccessToken() {
   if (!refreshPromise) {
     refreshPromise = withRefreshLock(() =>
-      refreshClient.post<AuthResponse>('/api/v1/auth/refresh'),
+      refreshClient.post('/api/v1/auth/refresh'),
     )
       .then(({ data }) => {
         setAccessToken(data.access_token)
@@ -66,16 +64,14 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
-type RetryableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean }
-
 apiClient.interceptors.response.use(
   (response) => response,
-  async (error: unknown) => {
+  async (error) => {
     if (!axios.isAxiosError(error) || error.response?.status !== 401) {
       throw error
     }
 
-    const config = error.config as RetryableRequestConfig | undefined
+    const config = error.config
     const url = config?.url ?? ''
 
     if (!config || config._retry || url.includes('/api/v1/auth/')) {
@@ -95,9 +91,9 @@ apiClient.interceptors.response.use(
   },
 )
 
-export function getApiErrorMessage(error: unknown): string {
+export function getApiErrorMessage(error) {
   if (axios.isAxiosError(error)) {
-    const data = error.response?.data as ApiErrorEnvelope | undefined
+    const data = error.response?.data
     if (data?.error?.message) {
       return data.error.message
     }
