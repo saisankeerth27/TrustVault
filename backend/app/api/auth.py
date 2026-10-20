@@ -11,9 +11,10 @@ from app.core.config import get_settings
 from app.core.rate_limit import auth_rate_limiter
 from app.core.security import create_access_token
 from app.db.session import get_db
-from app.models.enums import UserRole
+from app.models.enums import AuditAction, AuditOutcome, UserRole
 from app.models.user import User
 from app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, UserResponse
+from app.services.audit import record_best_effort, record_event
 from app.services.auth import (
     AccountExistsError,
     DisabledAccountError,
@@ -97,6 +98,47 @@ def _no_store(response: Response) -> None:
     response.headers["Pragma"] = "no-cache"
 
 
+def _commit_with_success_audit(
+    session: Session,
+    *,
+    action: AuditAction,
+    actor: User | None,
+    details: dict[str, object] | None = None,
+) -> None:
+    try:
+        record_event(
+            session,
+            action=action,
+            outcome=AuditOutcome.SUCCESS,
+            actor=actor,
+            details=details,
+        )
+        session.commit()
+    except Exception as exc:
+        try:
+            session.rollback()
+        except Exception:
+            logger.error("Database rollback failed after an authentication audit error.")
+        logger.error("Authentication action could not be committed with its audit event.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The request could not be completed.",
+        ) from exc
+
+
+def _record_login_failure(
+    session: Session,
+    *,
+    reason: str,
+) -> None:
+    record_best_effort(
+        session,
+        action=AuditAction.LOGIN_FAILURE,
+        outcome=AuditOutcome.FAILURE,
+        details={"reason": reason},
+    )
+
+
 def _build_auth_response(user: User, session_id: UUID) -> AuthResponse:
     settings = get_settings()
     access_token = create_access_token(user.id, user.role, session_id)
@@ -132,7 +174,12 @@ def register(
         ) from exc
 
     refresh_plaintext, refresh_token = create_session_token(session, user)
-    session.commit()
+    _commit_with_success_audit(
+        session,
+        action=AuditAction.USER_REGISTERED,
+        actor=user,
+        details={"role": user.role},
+    )
 
     _set_refresh_cookie(response, refresh_plaintext)
     _no_store(response)
@@ -164,12 +211,14 @@ def login(
             password=payload.password.get_secret_value(),
         )
     except DisabledAccountError as exc:
+        _record_login_failure(session, reason="disabled_account")
         logger.warning("Login rejected for disabled account.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_INVALID_CREDENTIALS,
         ) from exc
     except InvalidCredentialsError as exc:
+        _record_login_failure(session, reason="invalid_credentials")
         logger.info("Login failed with invalid credentials.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -177,7 +226,12 @@ def login(
         ) from exc
 
     refresh_plaintext, refresh_token = create_session_token(session, user)
-    session.commit()
+    _commit_with_success_audit(
+        session,
+        action=AuditAction.LOGIN_SUCCESS,
+        actor=user,
+        details={"role": user.role},
+    )
 
     _set_refresh_cookie(response, refresh_plaintext)
     _no_store(response)
@@ -249,8 +303,15 @@ def logout(
     plaintext = request.cookies.get(REFRESH_COOKIE_NAME)
 
     if plaintext:
-        revoke_session(session, plaintext=plaintext)
-        session.commit()
+        user_id = revoke_session(session, plaintext=plaintext)
+        if user_id is not None:
+            user = session.get(User, user_id)
+            _commit_with_success_audit(
+                session,
+                action=AuditAction.LOGOUT,
+                actor=user,
+                details=None if user is not None else {"subject_user_id": str(user_id)},
+            )
         logger.info("Logout completed; refresh session revoked.")
 
     _clear_refresh_cookie(response)

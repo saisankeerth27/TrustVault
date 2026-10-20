@@ -24,11 +24,11 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.document_permission import DocumentPermission
-from app.models.enums import DocumentAccessLevel, UserRole
+from app.models.enums import AuditAction, AuditOutcome, DocumentAccessLevel, UserRole
 from app.models.user import User
 from app.schemas.document import (
     DocumentListResponse,
@@ -39,6 +39,7 @@ from app.schemas.document import (
     PermissionResponse,
     PermissionUpdateRequest,
 )
+from app.services.audit import record_best_effort, record_event
 from app.services.document_access import (
     DocumentAccessDeniedError,
     DocumentCapability,
@@ -83,10 +84,7 @@ logger = logging.getLogger("trustvault.documents")
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
-require_document_manager = require_roles(
-    UserRole.ADMINISTRATOR,
-    UserRole.DOCUMENT_OWNER,
-)
+_UPLOAD_ROLES = {UserRole.ADMINISTRATOR.value, UserRole.DOCUMENT_OWNER.value}
 
 _CONTENT_LENGTH_OVERHEAD_BYTES = 1024 * 1024
 _DOWNLOAD_CHUNK_SIZE = 64 * 1024
@@ -178,6 +176,25 @@ def _stream_body(body: IO[bytes]) -> Iterator[bytes]:
             yield chunk
     finally:
         body.close()
+
+
+def require_document_manager(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> User:
+    if current_user.role not in _UPLOAD_ROLES:
+        record_best_effort(
+            session,
+            action=AuditAction.DOCUMENT_UPLOAD_DENIED,
+            outcome=AuditOutcome.DENIED,
+            actor=current_user,
+            details={
+                "reason": "role_not_permitted",
+                "role": current_user.role,
+            },
+        )
+        raise _access_denied()
+    return current_user
 
 
 def _enforce_request_size(request: Request, max_size_bytes: int) -> None:
@@ -415,6 +432,7 @@ def update_document(
             session,
             document=authorized.document,
             changes=payload.model_dump(exclude_unset=True),
+            actor=current_user,
         )
     except DocumentUpdateError as exc:
         raise HTTPException(
@@ -473,6 +491,28 @@ def download_document(
             detail="Document storage is temporarily unavailable.",
         ) from exc
 
+    try:
+        record_event(
+            session,
+            action=AuditAction.DOCUMENT_DOWNLOAD,
+            outcome=AuditOutcome.SUCCESS,
+            actor=current_user,
+            document_id=document.id,
+            details={"file_size": document.file_size},
+        )
+        session.commit()
+    except Exception as exc:
+        try:
+            session.rollback()
+        except Exception:
+            logger.error("Database rollback failed after a download audit error.")
+        body.close()
+        logger.error("Document download audit event could not be recorded.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The download could not be completed.",
+        ) from exc
+
     logger.info(
         "Document download started for user %s.",
         current_user.id,
@@ -514,6 +554,7 @@ def delete_document(
         soft_delete_document(
             session,
             document=authorized.document,
+            actor=current_user,
             storage=storage,
         )
     except DocumentDeletionError as exc:
@@ -692,6 +733,7 @@ def revoke_document_permission(
             session,
             document=authorized.document,
             permission_id=permission_id,
+            revoked_by=current_user,
         )
     except PermissionNotFoundError as exc:
         raise _permission_not_found() from exc

@@ -1,4 +1,4 @@
-import { FileText, LayoutDashboard, LogOut, Share2, ShieldCheck } from 'lucide-react'
+import { FileText, LayoutDashboard, LogOut, ScrollText, Share2, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
@@ -13,7 +13,10 @@ const baseNavItems = [
   { to: '/shared-with-me', label: 'Shared', icon: Share2 },
 ]
 
-const adminNavItem = { to: '/admin', label: 'Admin', icon: ShieldCheck }
+const adminNavItems = [
+  { to: '/admin', label: 'Admin', icon: ShieldCheck },
+  { to: '/admin/audit', label: 'Audit', icon: ScrollText },
+]
 
 export function AppLayout() {
   const { user, logout } = useAuth()
@@ -21,7 +24,7 @@ export function AppLayout() {
   const [isSigningOut, setIsSigningOut] = useState(false)
 
   const navItems =
-    user?.role === 'ADMINISTRATOR' ? [...baseNavItems, adminNavItem] : baseNavItems
+    user?.role === 'ADMINISTRATOR' ? [...baseNavItems, ...adminNavItems] : baseNavItems
 
   async function handleSignOut() {
     setIsSigningOut(true)
@@ -46,6 +49,7 @@ export function AppLayout() {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  end={item.to === '/admin'}
                   className={({ isActive }) =>
                     cn(
                       'inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
@@ -90,8 +94,8 @@ export function AppLayout() {
 
       <footer className="border-t bg-muted/40">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <p>TrustVault &mdash; Phase 6 named-user permissions</p>
-          <p>Audit history and immutable event tracking arrive in Phase 7.</p>
+          <p>TrustVault &mdash; Phase 7 tamper-evident audit trail</p>
+          <p>Administrator audit history, signed checkpoints, and integrity verification.</p>
         </div>
       </footer>
     </div>

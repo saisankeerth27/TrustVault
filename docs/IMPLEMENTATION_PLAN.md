@@ -260,7 +260,7 @@ feat(documents): implement document management and search
 
 ## Phase 6: Document Permissions and Revocation
 
-**Status:** Complete — awaiting review. Verified locally with 146 backend tests and frontend lint/build; live Wasabi behavior remains unverified.
+**Status:** Complete — verified locally with 146 backend tests and frontend lint/build at Phase 6 completion; live Wasabi behavior remains unverified.
 
 **Objectives**
 Implement named-user, per-document READ/EDIT grants with owner-only management and immediate revocation enforced on every document endpoint.
@@ -301,36 +301,44 @@ feat(permissions): implement document access grants and revocation
 
 ## Phase 7: Audit Trail and Administrator Activity
 
+**Status:** Complete — awaiting review. Verified locally with 158 backend tests and frontend lint/build; live Wasabi and Supabase/deployment behavior remain unverified.
+
 **Objectives**
-Implement immutable audit logging with hash-chain integrity and administrator/owner audit query views.
+Implement an append-only, tamper-evident audit trail with hash-chain and signed-checkpoint verification and a global-administrator audit activity view.
 
 **Deliverables**
-- Audit service used by all significant actions.
-- Hash chain (`previous_hash`, `record_hash`) with verification utility.
-- Audit records for uploads, downloads, views, edits, deletions, permission grants/revocations, and denied attempts.
-- Admin audit query endpoints with filtering (event type, user, document, date).
-- Owner-scoped audit views for their own documents.
-- Documentation of external checkpoint limitations.
+- Audit service used by authentication, document, permission, and denial boundaries.
+- Migration `0003` adding a positive, unique, contiguous `chain_index`.
+- Hash chain over canonical JSON using `previous_hash` and `event_hash`, with a PostgreSQL advisory transaction lock.
+- HMAC-SHA256 signed checkpoint creation and verification, plus `scripts/audit_integrity.py`.
+- Audit records for registration, login success/failure, logout, upload, metadata update, download, delete, permission grant/update/revoke, and typed denials.
+- Global-administrator audit query and integrity endpoints with actor/document/action/outcome/date filters and pagination.
+- Administrator audit dashboard at `/admin/audit`.
+- Request ID validation/generation and direct client IP/user-agent metadata.
+- Documentation of same-host checkpoint limitations.
 
 **Dependencies**
 - Phase 6 approved.
 
 **Acceptance Criteria**
-- Every significant action produces exactly one correctly typed audit record.
-- Hash chain verifies successfully and detects a simulated tamper.
+- State-changing actions append correctly typed audit records in the protected transaction; denials are best-effort and preserve the denial outcome.
+- Hash verification detects modified, reordered, removed, and truncated events.
+- A valid signed checkpoint verifies; stale, truncated, malformed, or signature-invalid checkpoints are reported safely.
 - No API endpoint permits audit modification or deletion.
-- Admins can query and filter all audit events; owners can see activity for their documents only.
-- Denied access attempts are recorded.
+- Only global administrators can query all audit events and integrity status.
+- Audit metadata contains no sensitive values and remains bounded.
+- Owner-scoped audit views and audit export are explicitly deferred.
 
 **Tests**
-- Per-event-type audit creation tests.
-- Hash chain integrity and tamper-detection tests.
-- Audit immutability tests via API.
-- Admin/owner query scoping tests.
+- Per-event-type success and denial audit tests.
+- Administrator authorization, filtering, pagination, and generic denial tests.
+- Hash-chain tamper/removal and signed-checkpoint failure tests.
+- Mandatory-audit rollback and best-effort-denial behavior tests.
+- Metadata sanitization and request-ID safety tests.
 
 **Suggested Commit Message**
 ```
-feat: implement audit trail with hash-chain integrity
+feat(audit): implement protected audit trail
 ```
 
 ---
@@ -380,8 +388,8 @@ Deliver the full React frontend covering all user-facing capabilities with acces
 - Document upload with validation feedback.
 - Document list with search, filters, sorting, and pagination.
 - Document detail and metadata editing.
-- Permission management UI (grant/revoke for owners; admin overrides).
-- Audit log viewer for admins and owners.
+- Permission management UI (grant/revoke for owners; no administrator override).
+- Administrator audit viewer (Phase 7 provides the starting `/admin/audit` implementation; no owner audit view).
 - Responsive layouts, loading/error/empty states.
 
 **Dependencies**

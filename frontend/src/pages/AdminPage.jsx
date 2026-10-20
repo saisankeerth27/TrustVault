@@ -1,6 +1,8 @@
-import { KeyRound, ShieldCheck, UserCog, Users } from 'lucide-react'
+import { ArrowRight, KeyRound, ScrollText, ShieldCheck, UserCog, Users } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import { PageHeader } from '@/components/PageHeader'
+import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatRole } from '@/lib/roles'
 
@@ -12,7 +14,7 @@ export function AdminPage() {
       <PageHeader
         eyebrow="Administration"
         title="Administrator area"
-        description="This route is gated by the ADMINISTRATOR role in the frontend and by the backend session checks. Administrator activity and audit views arrive in Phase 7."
+        description="This route is gated by the ADMINISTRATOR role in the frontend and by the backend session checks. Audit history and integrity verification are available to administrators."
       />
 
       <div className="grid gap-5 md:grid-cols-2">
@@ -68,6 +70,35 @@ export function AdminPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <ScrollText className="size-5" aria-hidden="true" />
+            </span>
+            <div>
+              <CardTitle>Audit trail</CardTitle>
+              <CardDescription>
+                Review authentication, document, permission, and denial events.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-2xl leading-6">
+            The audit view shows append-only chain metadata and a hash-integrity report. Checkpoint
+            signatures verify the trail head without exposing credentials or document content.
+          </p>
+          <Link
+            to="/admin/audit"
+            className={buttonVariants({ variant: 'outline' })}
+          >
+            Open audit trail
+            <ArrowRight className="size-4" aria-hidden="true" />
+          </Link>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

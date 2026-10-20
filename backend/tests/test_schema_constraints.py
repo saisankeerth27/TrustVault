@@ -172,7 +172,7 @@ def test_audit_events_survive_user_and_document_deletion(db_session: Session) ->
 
     retained = db_session.get(AuditEvent, audit_id)
     assert retained is not None
-    assert retained.action == "DOCUMENT_VIEW"
+    assert retained.action == "DOCUMENT_ACCESS_DENIED"
     assert retained.actor_id is None
     assert retained.document_id is None
 
@@ -180,7 +180,7 @@ def test_audit_events_survive_user_and_document_deletion(db_session: Session) ->
 def test_audit_event_can_record_denied_attempt_without_actor_or_document(
     db_session: Session,
 ) -> None:
-    event = make_audit_event(action="ACCESS_DENIED", outcome="DENIED")
+    event = make_audit_event(action="DOCUMENT_ACCESS_DENIED", outcome="DENIED")
     db_session.add(event)
     db_session.flush()
 

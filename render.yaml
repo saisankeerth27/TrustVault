@@ -64,3 +64,11 @@ services:
         value: "10485760"
       - key: ALLOWED_UPLOAD_EXTENSIONS
         value: pdf,txt,docx,png,jpg,jpeg
+      # Optional audit checkpoints. Set both or neither in the Render dashboard.
+      # AUDIT_CHECKPOINT_PATH must be absolute and on persistent, access-controlled
+      # storage. Render's default filesystem is ephemeral; use a persistent volume
+      # or external store if checkpoints must survive instance replacement.
+      - key: AUDIT_CHECKPOINT_SIGNING_KEY
+        sync: false
+      - key: AUDIT_CHECKPOINT_PATH
+        sync: false

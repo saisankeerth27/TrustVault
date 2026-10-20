@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -43,6 +44,11 @@ class AuditEvent(Base):
             "previous_hash IS NULL OR previous_hash ~ '^[0-9a-f]{64}$'",
             name="ck_audit_events_previous_hash_sha256",
         ),
+        CheckConstraint(
+            "chain_index >= 1",
+            name="ck_audit_events_chain_index_positive",
+        ),
+        Index("ix_audit_events_chain_index", "chain_index", unique=True),
         Index("ix_audit_events_occurred_at", "occurred_at"),
         Index("ix_audit_events_actor_id", "actor_id"),
         Index("ix_audit_events_document_id", "document_id"),
@@ -57,6 +63,7 @@ class AuditEvent(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
+    chain_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
     actor_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey(

@@ -74,13 +74,15 @@ def make_permission(
 def make_audit_event(
     actor_id: object | None = None,
     document_id: object | None = None,
-    action: str = AuditAction.DOCUMENT_VIEW.value,
+    action: str = AuditAction.DOCUMENT_ACCESS_DENIED.value,
     outcome: str = AuditOutcome.SUCCESS.value,
     details: dict[str, object] | None = None,
     event_hash: str = VALID_SHA256,
     previous_hash: str | None = None,
+    chain_index: int = 1,
 ) -> AuditEvent:
     return AuditEvent(
+        chain_index=chain_index,
         actor_id=actor_id,
         document_id=document_id,
         action=action,

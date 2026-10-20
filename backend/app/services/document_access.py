@@ -11,8 +11,16 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.document import Document
 from app.models.document_permission import DocumentPermission
-from app.models.enums import DocumentAccessLevel, PermissionLevel, UserRole, UserStatus
+from app.models.enums import (
+    AuditAction,
+    AuditOutcome,
+    DocumentAccessLevel,
+    PermissionLevel,
+    UserRole,
+    UserStatus,
+)
 from app.models.user import User
+from app.services.audit import record_best_effort
 
 
 class DocumentCapability(StrEnum):
@@ -21,6 +29,15 @@ class DocumentCapability(StrEnum):
     EDIT = "EDIT"
     DELETE = "DELETE"
     MANAGE_PERMISSIONS = "MANAGE_PERMISSIONS"
+
+
+_DENIAL_ACTIONS = {
+    DocumentCapability.METADATA: AuditAction.DOCUMENT_ACCESS_DENIED,
+    DocumentCapability.READ: AuditAction.DOCUMENT_DOWNLOAD_DENIED,
+    DocumentCapability.EDIT: AuditAction.DOCUMENT_EDIT_DENIED,
+    DocumentCapability.DELETE: AuditAction.DOCUMENT_DELETE_DENIED,
+    DocumentCapability.MANAGE_PERMISSIONS: AuditAction.PERMISSION_CHANGE_DENIED,
+}
 
 
 class DocumentNotFoundError(Exception):
@@ -172,6 +189,33 @@ def can_manage_document_permissions(
     )
 
 
+def _record_access_denial(
+    session: Session,
+    *,
+    user: User,
+    document: Document | None,
+    document_id: UUID,
+    capability: DocumentCapability,
+    reason: str,
+    access_level: DocumentAccessLevel | None = None,
+) -> None:
+    details: dict[str, object] = {
+        "attempted_document_id": str(document_id),
+        "capability": capability.value,
+        "reason": reason,
+    }
+    if access_level is not None:
+        details["access_level"] = access_level.value
+    record_best_effort(
+        session,
+        action=_DENIAL_ACTIONS[capability],
+        outcome=AuditOutcome.DENIED,
+        actor=user,
+        document_id=document.id if document is not None else None,
+        details=details,
+    )
+
+
 def authorize_document(
     session: Session,
     *,
@@ -190,12 +234,37 @@ def authorize_document(
         .options(selectinload(Document.owner))
     )
     if document is None:
+        _record_access_denial(
+            session,
+            user=user,
+            document=None,
+            document_id=document_id,
+            capability=capability,
+            reason="document_not_available",
+        )
         raise DocumentNotFoundError
 
     access_level = resolve_access_level(session, user=user, document=document)
     if access_level is None:
+        _record_access_denial(
+            session,
+            user=user,
+            document=document,
+            document_id=document_id,
+            capability=capability,
+            reason="not_visible",
+        )
         raise DocumentNotFoundError
     if not _allows(access_level, capability):
+        _record_access_denial(
+            session,
+            user=user,
+            document=document,
+            document_id=document_id,
+            capability=capability,
+            reason="insufficient_access",
+            access_level=access_level,
+        )
         raise DocumentAccessDeniedError
 
     document.access_level = access_level.value

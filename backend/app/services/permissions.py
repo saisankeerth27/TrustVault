@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.document import Document
 from app.models.document_permission import DocumentPermission
-from app.models.enums import PermissionLevel, UserStatus
+from app.models.enums import AuditAction, AuditOutcome, PermissionLevel, UserStatus
 from app.models.user import User
+from app.services.audit import record_event
 from app.services.auth import normalize_email
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,17 @@ def grant_permission(
     try:
         session.flush()
         permission_id = record.id
+        record_event(
+            session,
+            action=AuditAction.PERMISSION_GRANT,
+            outcome=AuditOutcome.SUCCESS,
+            actor=granted_by,
+            document_id=document.id,
+            details={
+                "recipient_id": str(recipient.id),
+                "permission": permission.value,
+            },
+        )
         session.commit()
     except IntegrityError as exc:
         try:
@@ -190,6 +202,18 @@ def update_permission(
     try:
         session.flush()
         replacement_id = replacement.id
+        record_event(
+            session,
+            action=AuditAction.PERMISSION_UPDATE,
+            outcome=AuditOutcome.SUCCESS,
+            actor=updated_by,
+            document_id=document.id,
+            details={
+                "recipient_id": str(existing.user_id),
+                "previous_permission": existing.permission,
+                "permission": permission.value,
+            },
+        )
         session.commit()
     except Exception as exc:
         try:
@@ -210,6 +234,7 @@ def revoke_permission(
     *,
     document: Document,
     permission_id: UUID,
+    revoked_by: User,
 ) -> bool:
     """Revoke a grant idempotently while retaining its history row."""
 
@@ -229,6 +254,17 @@ def revoke_permission(
 
     record.revoked_at = datetime.now(timezone.utc)
     try:
+        record_event(
+            session,
+            action=AuditAction.PERMISSION_REVOKE,
+            outcome=AuditOutcome.SUCCESS,
+            actor=revoked_by,
+            document_id=document.id,
+            details={
+                "recipient_id": str(record.user_id),
+                "permission": record.permission,
+            },
+        )
         session.commit()
     except Exception as exc:
         try:

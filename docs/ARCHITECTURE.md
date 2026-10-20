@@ -4,7 +4,7 @@
 
 TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and Wasabi S3-compatible private object storage. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 6):** authentication, database-backed roles, rotating refresh sessions, the protected JavaScript frontend, a private validated upload pipeline, an authenticated document library, and named-user READ/EDIT grants with immediate revocation are implemented and verified locally. Storage tests use a mocked Wasabi adapter; **live Wasabi connectivity, download, and object-deletion behavior have not been verified**. The audit write path is **not** implemented. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
+> **Implementation status (Phase 7):** authentication, database-backed roles, rotating refresh sessions, the protected JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, and an append-only hash-chained audit trail with signed checkpoints and an administrator audit dashboard are implemented and verified locally. Storage tests use a mocked Wasabi adapter; **live Wasabi connectivity, download, and object-deletion behavior have not been verified**. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
 
 ### Architecture Diagram
 
@@ -19,7 +19,7 @@ graph TB
         API["FastAPI Backend<br/>Python 3.13<br/>SQLAlchemy 2.x (sync)<br/><i>Hosted on Render</i>"]
         AuthMW["JWT Auth + Session Checks<br/>Phase 3"]
         PermCheck["Centralized Access Checker<br/>Phase 6 — implemented"]
-        AuditSvc["Audit Writer — Phase 7"]
+        AuditSvc["Audit Writer + Hash Chain<br/>Phase 7 — implemented"]
         FileVal["File Validator — Phase 4<br/>implemented"]
         DocMgmt["Document Library + Sharing<br/>Phases 5–6"]
     end
@@ -63,7 +63,7 @@ graph TB
 | 4 | Private Wasabi storage and validated uploads | Complete (verified locally with mocked storage; live Wasabi unverified) |
 | 5 | Document listing, download proxy, management, and search | Complete (verified locally with mocked storage; live Wasabi unverified) |
 | 6 | Named-user READ/EDIT permissions, sharing, immediate revocation | Complete (verified locally with mocked storage; live Wasabi unverified) |
-| 7 | Audit write path, hash chain, admin activity | Next |
+| 7 | Audit write path, hash chain, signed checkpoint, admin activity | Complete (verified locally; awaiting review) |
 | 8 | Security tests and threat-model verification | Planned |
 | 9 | Complete frontend | Planned |
 | 10 | Deployment hardening and end-to-end verification | Planned |
@@ -77,7 +77,7 @@ The implemented schema is documented in full in [DATABASE.md](DATABASE.md).
 
 The React SPA runs entirely in the user's browser. It is responsible for:
 
-- **Rendering the UI** — login, authenticated dashboard, document library/details, shared-with-me view, owner permission management, role-gated administrator area, and future audit views.
+- **Rendering the UI** — login, authenticated dashboard, document library/details, shared-with-me view, owner permission management, role-gated administrator area, and the administrator audit dashboard.
 - **Client-side routing** — single-page navigation via React Router.
 - **Client-side form validation** — for user experience only. All validation is re-performed server-side.
 - **API communication** — all data interactions go through the FastAPI backend via HTTPS REST calls using a centralized Axios client.
@@ -116,7 +116,7 @@ The backend is the **intended sole enforcement point** for security. It is respo
 - Owner-only endpoints grant, list, update, and revoke named-user `READ`/`EDIT` access by recipient email.
 - The centralized checker resolves ownership first, then the active grant, then administrator metadata oversight. There is no permission cache: each request reads current database state.
 - Updates use revoke-and-regrant, so the prior level remains as history. Revocation is idempotent and effective on the recipient's next request.
-- Denials create an `ACCESS_DENIED` audit event once Phase 7 exists. Permission changes are not audited yet.
+- Denials create a typed audit denial event, and successful grant/update/revoke actions append chain events in the same transaction.
 
 ### Document Operations
 **Upload (implemented — Phase 4):**
@@ -133,12 +133,12 @@ The backend is the **intended sole enforcement point** for security. It is respo
 - `GET /api/v1/documents/{id}/download` permits owners, READ recipients, and EDIT recipients, and proxies the private object with safe attachment and no-store headers.
 - `DELETE /api/v1/documents/{id}` is owner-only and sets `deleted_at`; the Wasabi object is deleted best-effort after the database commit.
 - Permission endpoints are owner-only: `GET/POST /documents/{id}/permissions` and `PATCH/DELETE /documents/{id}/permissions/{permission_id}`. Lists include revoked history.
-- Successful actions are logged operationally but are **not** audit events; Phase 7 owns `DOCUMENT_VIEW`, `DOCUMENT_EDIT`, `DOCUMENT_DOWNLOAD`, `DOCUMENT_DELETE`, permission events, and denied-access records.
+- Successful and denied actions are written to the append-only audit trail. Mandatory success events share the business transaction; denial events are best-effort.
 
-### Audit Logging (schema in Phase 2; write path planned — Phase 7)
-- Persist an event for every significant action into `audit_events`.
-- Maintain a hash chain using `previous_hash` and `event_hash`.
-- Expose read-only query endpoints for administrators and document owners.
+### Audit Logging (implemented — Phase 7)
+- Append one event for each significant authentication, document, permission, and denial action into `audit_events`.
+- Maintain a contiguous `chain_index`, previous-event hash, and SHA-256 `event_hash`.
+- Expose read-only global-administrator query and integrity endpoints; do not expose admin or owner audit mutation endpoints.
 - Never expose UPDATE or DELETE endpoints for audit history.
 
 ### Database Access (implemented — Phase 2)
@@ -156,7 +156,7 @@ The backend is the **intended sole enforcement point** for security. It is respo
 
 ## 5. Database Architecture (Implemented)
 
-The schema contains five tables. Phase 4 writes `documents` rows without a schema change. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
+The schema contains five tables. Migrations `0001`–`0003` establish the schema and audit chain sequence. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
 
 | Table | Purpose |
 |-------|---------|
@@ -164,7 +164,7 @@ The schema contains five tables. Phase 4 writes `documents` rows without a schem
 | `refresh_tokens` | Hashed opaque refresh tokens, rotation families, expiry, revocation |
 | `documents` | Metadata: owner, name, category, description, storage key, MIME type, size, checksum, soft-delete timestamp |
 | `document_permissions` | Per-user, per-document grant history (`READ`/`EDIT`) with revocation timestamps |
-| `audit_events` | Append-oriented event records with action, outcome, JSONB details, and hash-chain columns |
+| `audit_events` | Append-oriented event records with contiguous chain sequence, action, outcome, JSONB details, and hash-chain columns |
 
 ### Design Decisions
 
@@ -178,7 +178,7 @@ The schema contains five tables. Phase 4 writes `documents` rows without a schem
 - **Soft delete.** `documents.deleted_at` marks deletion without removing history; hard-delete and storage cleanup behavior is defined in Phase 5.
 - **Permission history with a single active grant.** A partial unique index (`WHERE revoked_at IS NULL`) allows only one active grant per `(document_id, user_id)`. Revoking sets `revoked_at`; re-granting inserts a new row, preserving audit history. `granted_by` uses `ON DELETE SET NULL`.
 - **Owner access is implicit.** Owners are not represented in `document_permissions`; ownership comes from `documents.owner_id`. The permissions table records grants to *other* users.
-- **Audit retention by design.** `audit_events.actor_id` and `audit_events.document_id` use `ON DELETE SET NULL` so removing a user or document retains the event. The `action` column is intentionally unconstrained for extensibility; `outcome`, JSON-object details, and SHA-256 hash formats are constrained.
+- **Audit retention by design.** `audit_events.actor_id` and `audit_events.document_id` use `ON DELETE SET NULL` so removing a user or document retains the event. The `action` column is intentionally unconstrained for extensibility; `outcome`, JSON-object details, and SHA-256 hash formats are constrained. A positive unique `chain_index` was added by migration `0003`.
 
 ### Deferred Tables
 
@@ -295,7 +295,7 @@ The backend verifies identity and session state on **every** protected request. 
 4. Backend computes SHA-256, generates `documents/{owner_uuid}/{random_uuid}.{ext}`, uploads to Wasabi, then commits the `documents` row.
 5. The response contains safe metadata only; it excludes `storage_key` and all credentials.
 6. If storage fails, no database row is created and the response is a generic 503. If the database commit fails after upload, object deletion is attempted and a generic 500 is returned. Cleanup is best-effort, not transactional.
-7. No audit event is written yet; `DOCUMENT_UPLOAD` belongs to Phase 7.
+7. `DOCUMENT_UPLOAD` is appended in the same transaction as the metadata row; a failed audit write rolls back the row and returns a generic 500.
 
 ### Library, metadata update, and deletion (implemented — Phases 5–6)
 
@@ -304,7 +304,7 @@ The backend verifies identity and session state on **every** protected request. 
 3. Missing and inaccessible document IDs both return a generic 404. Visible documents with insufficient capability return 403.
 4. `PATCH` accepts only mutable metadata; owners and EDIT recipients may update, while READ recipients and metadata-only administrators are denied. Protected storage and integrity fields are rejected with 422.
 5. `DELETE` is owner-only and commits `deleted_at` first, then attempts Wasabi object deletion. The object cleanup is best-effort and not part of the database transaction.
-6. No audit event is written yet; management actions belong to Phase 7.
+6. `DOCUMENT_METADATA_UPDATE` and `DOCUMENT_DELETE` share the protected transaction. Denials append typed denial events best-effort and preserve the intended 403/404.
 
 ### Download (implemented)
 
@@ -312,7 +312,7 @@ The backend verifies identity and session state on **every** protected request. 
 2. Backend validates the JWT/session and resolves OWNER, EDIT, or READ capability from current database state.
 3. Backend fetches from Wasabi and streams with the stored MIME type, `Content-Disposition: attachment`, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`.
 4. Storage not-found maps to 404; configuration/operation failures map to generic 503. No storage key or presigned URL is exposed.
-5. `DOCUMENT_DOWNLOAD` audit writing remains Phase 7.
+5. A successful download appends `DOCUMENT_DOWNLOAD` in the request transaction; an authorization denial appends `DOCUMENT_DOWNLOAD_DENIED` best-effort.
 
 ### Shared-document listing (implemented)
 
@@ -332,20 +332,20 @@ The backend verifies identity and session state on **every** protected request. 
 3. Backend normalizes the email, requires an active registered recipient, and rejects the owner as a recipient.
 4. A new active grant returns 201. Repeating the same active level returns the existing row with 200. Requesting a different active level returns 409 and instructs the owner to update instead.
 5. Regranting after revocation inserts a new row; the partial unique index preserves one active grant while retaining history.
-6. `PERMISSION_UPDATED` is defined as an audit action, but no audit row is written yet.
+6. A new grant appends `PERMISSION_GRANT` in the same transaction. Same-level no-ops do not create a duplicate state-change event.
 
 ### Updating
 
 1. Owner sends `PATCH /api/v1/documents/{id}/permissions/{permission_id}` with the new `READ`/`EDIT` level.
 2. Backend verifies ownership and that the active permission belongs to the document.
 3. A changed level sets `revoked_at` on the existing row and inserts a replacement, returning the active replacement. An unchanged level returns the existing row.
-4. Cross-document permission IDs return generic 404.
+4. A changed level appends `PERMISSION_UPDATE` in the same transaction; cross-document permission IDs return generic 404 and append `PERMISSION_CHANGE_DENIED` best-effort.
 
 ### Revoking
 
 1. Owner sends `DELETE /api/v1/documents/{id}/permissions/{permission_id}`.
 2. Backend verifies ownership and document scope, then sets `revoked_at` on the row.
-3. Revocation is idempotent and returns 204. The row remains visible in permission history.
+3. Revocation is idempotent and returns 204. The row remains visible in permission history. An actual revocation appends `PERMISSION_REVOKE` in the same transaction.
 4. **Revocation is immediate** — the next content or metadata request from the revoked user is denied.
 
 ### Capability Model
@@ -362,44 +362,63 @@ The backend verifies identity and session state on **every** protected request. 
 - No caching layer may serve stale permission data; checks always read current database state.
 - **Files already downloaded before revocation cannot be recalled.** This is a documented limitation.
 - `EDIT` implies `READ`. Only owners manage permissions; administrators do not gain owner powers.
-- Permission and document actions are operationally logged but not yet audited.
+- Audit writes are part of the mutation transaction for successful actions. A failed mandatory audit write rolls back the mutation; denial auditing is best-effort and cannot change the denial outcome.
 
 ---
 
-## 11. Audit Model and Integrity Protection (Schema now; write path Phase 7)
+## 11. Audit Model and Integrity Protection (Implemented — Phase 7)
 
 ### Event Actions
 
-`app/models/enums.py` defines the known actions: `USER_REGISTERED`, `USER_LOGIN`, `USER_LOGIN_FAILED`, `DOCUMENT_UPLOAD`, `DOCUMENT_DOWNLOAD`, `DOCUMENT_VIEW`, `DOCUMENT_EDIT`, `DOCUMENT_DELETE`, `PERMISSION_GRANTED`, `PERMISSION_UPDATED`, `PERMISSION_REVOKED`, and `ACCESS_DENIED`. The database column is unconstrained so later phases can add actions without a migration. No application code writes audit rows yet.
+`app/models/enums.py` defines the known actions: `USER_REGISTERED`, `LOGIN_SUCCESS`, `LOGIN_FAILURE`, `LOGOUT`, `DOCUMENT_UPLOAD`, `DOCUMENT_METADATA_UPDATE`, `DOCUMENT_DOWNLOAD`, `DOCUMENT_DELETE`, `PERMISSION_GRANT`, `PERMISSION_UPDATE`, `PERMISSION_REVOKE`, `DOCUMENT_ACCESS_DENIED`, `DOCUMENT_UPLOAD_DENIED`, `DOCUMENT_DOWNLOAD_DENIED`, `DOCUMENT_EDIT_DENIED`, `DOCUMENT_DELETE_DENIED`, `PERMISSION_CHANGE_DENIED`, and `AUDIT_ACCESS_DENIED`. The database column remains unconstrained so later phases can add actions without a migration.
 
 ### Record Structure (`audit_events`)
 
 | Column | Meaning |
 |--------|---------|
 | `id` | UUID primary key |
+| `chain_index` | Positive, unique, contiguous append sequence |
 | `actor_id` | Acting user (nullable, `ON DELETE SET NULL`) |
 | `document_id` | Target document (nullable, `ON DELETE SET NULL`) |
 | `action` | Event action (extensible string) |
 | `outcome` | `SUCCESS`, `DENIED`, or `FAILURE` |
 | `occurred_at` | Server-side UTC timestamp |
-| `request_id` | Optional correlation id |
-| `details` | JSONB object with event-specific data |
-| `previous_hash` | SHA-256 of the previous event (nullable for the first event) |
+| `request_id` | Validated or generated correlation id |
+| `details` | Sanitized JSONB object with event-specific and request metadata |
+| `previous_hash` | SHA-256 of the previous event (null for the first event) |
 | `event_hash` | SHA-256 of this event |
+
+`details` automatically includes the validated request ID, direct socket client IP, and length-limited user-agent when available, plus an actor-name snapshot. Sensitive keys such as passwords, tokens, cookies, authorization headers, session IDs, content, and payloads are rejected. Metadata depth, item count, and total size are bounded.
 
 ### Hash Chain
 
-Once the Phase 7 writer exists, each event will include the SHA-256 of the previous event, forming a tamper-evident chain verified by recomputation.
+The writer takes a PostgreSQL advisory transaction lock, reads the current chain head, and appends `chain_index + 1`. The hashed payload is canonical JSON with sorted keys, compact separators, UTF-8 encoding, and a versioned schema (`trustvault-audit-event-v1`). Verification recomputes every event hash, checks contiguous indexes, and checks each previous-hash link.
+
+Successful protected mutations append the audit event in the same transaction; an audit failure raises a generic 500 and rolls back the business change. Authorization denials use a best-effort commit so audit unavailability never converts a denial into success.
+
+### Administrator API and UI
+
+- `GET /api/v1/admin/audit-events` filters by actor ID, document ID, action, outcome, and inclusive UTC date range, with newest-first pagination.
+- `GET /api/v1/admin/audit-integrity` returns chain and checkpoint status.
+- Both endpoints require a global `ADMINISTRATOR`. Non-admin access returns 403 and appends `AUDIT_ACCESS_DENIED` best-effort.
+- `/admin/audit` provides filters, event detail expansion, pagination, and an integrity panel. There is no owner-scoped audit view, audit export, or audit mutation endpoint.
+- Audit reads and integrity checks are not themselves audited.
+
+### Signed Checkpoints
+
+Checkpoint creation signs the schema, creation time, event count, last chain index, and last event hash with HMAC-SHA256 using `AUDIT_CHECKPOINT_SIGNING_KEY`. The file is written atomically to the absolute `AUDIT_CHECKPOINT_PATH` and never exposes the key. Statuses are `VALID`, `STALE`, `MISSING`, `UNCONFIGURED`, `UNAVAILABLE`, and `INVALID`; the overall status distinguishes `VERIFIED`, valid-chain-with-stale/missing checkpoint, and invalid.
+
+`python -m scripts.audit_integrity` verifies the chain and checkpoint; `--create-checkpoint` writes a new signed checkpoint after verifying the chain. Exit codes are `0` verified/written, `1` attention required, and `2` configuration error.
 
 ### Limitations of a Same-Database Hash Chain
 
-A hash chain stored in the same database it protects does **not** fully protect against a privileged database administrator: an attacker could modify a record and recompute subsequent hashes so the local chain still verifies. Planned mitigation: independently controlled, periodically signed checkpoints published to an external append-only store, compared during verification. This does not make tampering impossible, only detectable.
+A hash chain stored in the same database it protects does **not** fully protect against a privileged database administrator: an attacker could modify records and recompute subsequent hashes so the local chain still verifies. The signed checkpoint detects changes relative to the last trusted checkpoint, but a same-host checkpoint file can be deleted by the same attacker. An independently controlled append-only checkpoint store and scheduled checkpoint publication are still required to make privileged tampering reliably detectable. This control does not make tampering impossible.
 
 ### Application Enforcement
 
-- The application will never issue `UPDATE` or `DELETE` on `audit_events`.
-- No API exposes audit modification.
-- A database immutability trigger is deliberately **not** added in Phase 2 because it would conflict with the `ON DELETE SET NULL` retention foreign keys. Phase 7 will revisit enforcement alongside the write path.
+- The application never issues `UPDATE` or `DELETE` on `audit_events`.
+- No API exposes audit modification or deletion.
+- A database immutability trigger is deliberately **not** added because it would conflict with the `ON DELETE SET NULL` retention foreign keys. The backend's single database role is not restricted from direct table changes; hash-chain and checkpoint verification provide detection, not prevention.
 
 ---
 
@@ -466,6 +485,10 @@ WASABI_SECRET_ACCESS_KEY=your-wasabi-secret-access-key
 MAX_UPLOAD_SIZE_BYTES=10485760
 ALLOWED_UPLOAD_EXTENSIONS=pdf,txt,docx,png,jpg,jpeg
 
+# Signed audit checkpoint (optional; configure both or neither)
+AUDIT_CHECKPOINT_SIGNING_KEY=replace-with-at-least-32-random-characters
+AUDIT_CHECKPOINT_PATH=/absolute/persistent/path/audit-checkpoint.json
+
 # CORS and app
 CORS_ALLOWED_ORIGINS=https://your-app.vercel.app
 APP_ENV=production
@@ -516,7 +539,9 @@ Planned policies:
 | Object missing during download (Phase 5) | 404 Not Found | Generic unavailable message; no storage details |
 | Supabase DB unreachable | 503 Service Unavailable | Requests fail; no silent fallback |
 | JWT missing/expired/invalid, revoked session, or disabled account | 401 Unauthorized | Request rejected |
-| Permission denied / wrong role or insufficient grant (Phases 4–6) | 403 Forbidden | Generic message; no document metadata leaked; audit event once Phase 7 exists |
+| Permission denied / wrong role or insufficient grant (Phases 4–7) | 403 Forbidden | Generic message; no document metadata leaked; denial audit event attempted best-effort |
+| Mandatory audit write fails during a protected mutation (Phase 7) | 500 Internal Server Error | Business transaction rolls back; generic client message; no secret or chain details exposed |
+| Audit integrity check fails | 200 with `INVALID` status | Administrator sees chain/checkpoint status; no automatic repair |
 | Document not found | 404 Not Found | Generic message; no ownership information |
 | File too large (Phase 4) | 413 Payload Too Large | Rejected before storage |
 | Invalid/unsupported file type or signature (Phase 4) | 415 Unsupported Media Type | Rejected with a generic type message |
@@ -528,7 +553,7 @@ Planned policies:
 
 ## 16. Health Check
 
-`GET /health` currently reports **process health only**: `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`. It does **not** query PostgreSQL or Wasabi, and a test asserts that it exposes no configuration markers. Storage operators can use `python -m scripts.check_storage`; health integration remains deferred.
+`GET /health` currently reports **process health only**: `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`. It does **not** query PostgreSQL or Wasabi, and a test asserts that it exposes no configuration markers. Storage operators can use `python -m scripts.check_storage`; audit operators can use `python -m scripts.audit_integrity`. Health integration remains deferred.
 
 ---
 
@@ -540,7 +565,7 @@ Planned policies:
 - **Role model:** `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER` are stored in PostgreSQL. Public registration creates Viewers only; elevated roles come from the provisioning CLI.
 - **CSRF and CORS:** auth POSTs enforce an exact Origin allow-list, CORS never combines credentials with a wildcard, and the refresh cookie is path-scoped. A per-session CSRF token is not implemented.
 - **Rate limiting:** an in-memory sliding window limits login/register attempts per process. A multi-instance deployment requires a shared store.
-- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 127 tests. It uses an ephemeral PostgreSQL instance.
+- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 158 tests. It uses an ephemeral PostgreSQL instance.
 - **Not implemented at Phase 3 completion:** document authorization, audit writes, RLS, MFA, account lockout, idle timeouts, and production deployment verification.
 
 ---
@@ -582,5 +607,19 @@ Planned policies:
 - **History:** level changes revoke the old row and insert a replacement; revocation is idempotent and retains the row. The existing partial unique index guarantees one active grant.
 - **Listing:** regular document lists include owned and actively shared documents; the shared view excludes revoked grants and soft-deleted documents. Administrators retain all active metadata but gain no content rights by role.
 - **Frontend:** access-level badges drive actions; owners get a sharing page with grant, update, revoke confirmation, and history. `/shared-with-me` lists direct shares. READ can download, EDIT can download and edit, and only OWNER can delete or manage access.
-- **Tests:** 146 backend tests pass (19 new Phase 6 tests), covering role boundaries, owner-only management, idempotency/conflicts, forged identity fields, history retention, immediate revocation, shared listing exclusions, access levels, and metadata-only administrator behavior. Frontend lint/build pass.
-- **Not implemented/verified:** audit writes and audit views, live Wasabi behavior, RLS, malware scanning, and deployment.
+- **Tests:** 146 backend tests pass at Phase 6 completion (19 Phase 6 tests), covering role boundaries, owner-only management, idempotency/conflicts, forged identity fields, history retention, immediate revocation, shared listing exclusions, access levels, and metadata-only administrator behavior. Frontend lint/build pass.
+- **Not implemented/verified at Phase 6 completion:** live Wasabi behavior, RLS, malware scanning, and deployment.
+
+---
+
+## 21. Phase 7 Implementation Notes (Verified Locally with Mocked Storage)
+
+- **Audit writer:** `app/services/audit.py` sanitizes details, attaches validated request ID/direct client IP/user-agent context, takes an advisory transaction lock, and appends contiguous chain events with canonical SHA-256 hashes.
+- **Migration:** `0003_add_audit_chain_index.py` adds nullable `chain_index`, deterministically backfills existing rows by `occurred_at, id`, then enforces `NOT NULL`, positive values, and uniqueness.
+- **Event integration:** registration, login success/failure, logout, upload, metadata update, download, delete, grants, updates, revocations, and denial boundaries append typed events. Success writes share the protected transaction; denials use best-effort commits.
+- **Integrity:** `app/services/audit_integrity.py` verifies chain continuity and hashes and validates HMAC-SHA256 signed checkpoint files. Checkpoint writing is atomic and uses an absolute path plus at least a 32-character secret.
+- **Administrator surface:** global-admin-only `GET /api/v1/admin/audit-events` and `GET /api/v1/admin/audit-integrity`; no owner audit view, mutation endpoint, or export in this phase.
+- **Request context:** `X-Request-ID` is validated or replaced with a 32-character UUID hex and echoed. Client IP uses the direct ASGI socket, not untrusted forwarded headers.
+- **Frontend:** `/admin/audit` provides action/outcome/actor/document/date filters, pagination, detail expansion, denied indicators, and a chain/checkpoint integrity panel with refresh.
+- **Tests:** 158 backend tests pass (12 Phase 7 tests), including event coverage, admin authorization/filtering, tamper/removal detection, checkpoint staleness/truncation/signature failure, mandatory-audit rollback, metadata sanitization, and request-ID safety. Frontend lint/build pass; the build retains the existing chunk-size warning.
+- **Not implemented/verified:** live Wasabi behavior, live Supabase/deployment, scheduled independent checkpoint publication, audit export, owner-scoped audit views, RLS, and malware scanning.

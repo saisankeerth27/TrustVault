@@ -14,6 +14,7 @@ This threat model documents the assets TrustVault protects, the trust boundaries
 | User credentials | Password hashes, refresh tokens | Critical |
 | JWT signing secret | Secret used to sign and verify access tokens | Critical |
 | Audit records | Tamper-evident history of all actions | High |
+| Audit checkpoint signing key | HMAC key used to sign the audit chain head | Critical |
 | Service credentials | Supabase service role key, Wasabi keys, database URL | Critical |
 | User identities and roles | Account and role assignments | Medium–High |
 
@@ -79,9 +80,9 @@ graph TB
 
 **Scenario:** A user attempts to download a document via a direct link, guessed storage key, or API manipulation.
 
-**Mitigation:** The bucket is intended to be private. Uploads never return a direct or presigned URL or the storage key. The download proxy authorizes OWNER, EDIT, or READ capability from current database state before reading from storage and streams the body without exposing the key or a direct URL. Storage-not-found and configuration/operation failures return generic responses. Successful/denied downloads are logged operationally but not yet audited.
+**Mitigation:** The bucket is intended to be private. Uploads never return a direct or presigned URL or the storage key. The download proxy authorizes OWNER, EDIT, or READ capability from current database state before reading from storage and streams the body without exposing the key or a direct URL. Storage-not-found and configuration/operation failures return generic responses. Successful downloads append `DOCUMENT_DOWNLOAD`; denied attempts append `DOCUMENT_DOWNLOAD_DENIED` best-effort.
 
-**Verification:** Phase 5–6 tests assert owner/READ/EDIT download permissions, generic 404 denial for unrelated users and ungranted administrators, immediate post-revocation denial, safe attachment/no-store headers, header-injection resistance, and no storage-key leakage.
+**Verification:** Phase 5–7 tests assert owner/READ/EDIT download permissions, generic 404 denial for unrelated users and ungranted administrators, immediate post-revocation denial, safe attachment/no-store headers, header-injection resistance, no storage-key leakage, and success/denial audit events.
 
 **Residual Risk:** Low after the bucket policy is verified. The live Wasabi private policy and download behavior have **not** been verified. Files already downloaded before a revocation cannot be recalled — see 4.4.
 
@@ -93,7 +94,7 @@ graph TB
 
 **Mitigation:** Roles are stored server-side and derived from the authenticated identity, never trusted from client-supplied body or header fields. JWT signature validation prevents claim tampering. Permission-management endpoints require document ownership; administrator status does not grant sharing or content access.
 
-**Verification:** Tests attempt role manipulation via JWT tampering and request body injection and assert denial. Audit records for denials remain Phase 7.
+**Verification:** Tests attempt role manipulation via JWT tampering and request body injection and assert denial. Phase 7 tests confirm authorization denials append best-effort denial audit events.
 
 **Residual Risk:** Low, provided the signing secret remains confidential.
 
@@ -139,9 +140,9 @@ graph TB
 
 **Scenario:** A viewer or unrelated user grants themselves or others access to a document they do not own.
 
-**Mitigation:** Permission endpoints require the caller to be the document owner. The recipient must be an active registered account, owner self-grants are rejected, client-supplied grantor/recipient IDs are rejected, and permission IDs must belong to the requested document. Audit writes are deferred to Phase 7.
+**Mitigation:** Permission endpoints require the caller to be the document owner. The recipient must be an active registered account, owner self-grants are rejected, client-supplied grantor/recipient IDs are rejected, and permission IDs must belong to the requested document. Successful changes and denied attempts append audit events.
 
-**Verification:** Phase 6 tests attempt grants/list/update/revoke as unrelated owners, administrators, READ/EDIT recipients, and anonymous callers, and assert 403/404 denial without mutation. Audit records remain Phase 7.
+**Verification:** Phase 6 tests attempt grants/list/update/revoke as unrelated owners, administrators, READ/EDIT recipients, and anonymous callers, and assert 403/404 denial without mutation. Phase 7 tests confirm permission success and denial audit records.
 
 **Residual Risk:** Low.
 
@@ -151,11 +152,11 @@ graph TB
 
 **Scenario:** An attacker or privileged insider modifies or deletes audit records to hide unauthorized activity.
 
-**Mitigation:** Audit records are intended to be append-only at the application level (no UPDATE/DELETE endpoints). The Phase 7 writer will include a hash of the previous record, forming a tamper-evident chain, and verification utilities will detect chain breaks. RLS is not enabled, so the database does not currently restrict modification.
+**Mitigation:** Audit writes are append-only at the application layer, with no UPDATE/DELETE endpoints. Events have a contiguous `chain_index`, previous-event hash, and canonical SHA-256 `event_hash`; verification detects modified, reordered, and removed events. An HMAC-SHA256 signed checkpoint binds the chain head, and `scripts/audit_integrity.py` verifies or creates it. RLS is not enabled, so the database role is not restricted from direct modification.
 
-**Limitation and Residual Risk:** **A hash chain stored only in the same database does not fully protect against a privileged attacker.** An attacker with direct database access can modify a record and recompute all subsequent hashes, producing a locally valid chain. To mitigate, TrustVault plans independently controlled signed checkpoints: periodically hash the chain head and publish/store the digest in an append-only external system or a separately administered store. Comparison against these checkpoints makes tampering detectable even by database administrators. Until external checkpoints are implemented, detection depends on out-of-band chain snapshots.
+**Limitation and Residual Risk:** **A hash chain and same-host checkpoint do not fully protect against a privileged attacker.** An attacker with direct database access can rewrite records and subsequent hashes, and an attacker with host filesystem access can delete or replace the checkpoint. Detection depends on retaining a trusted checkpoint outside the attacker's control. TrustVault still needs independently controlled, scheduled checkpoint publication to an append-only external store before this risk is adequately mitigated.
 
-**Verification:** Tests that API modification is impossible; chain verification tests that detect deliberate tampering; proposed checkpoint tests in a later phase.
+**Verification:** Phase 7 tests confirm no API audit mutation path, detection of modified/middle-removed events, signed-checkpoint validation, staleness/truncation/signature failure handling, and mandatory-audit-write rollback. Residual risk remains without independent checkpoint storage.
 
 ---
 
@@ -163,9 +164,9 @@ graph TB
 
 **Scenario:** Error messages, search results, headers, or logs reveal document existence, ownership, or contents to unauthorized users.
 
-**Mitigation:** Upload and document responses expose only safe metadata and never the storage key, URL, or credentials. Role denials, missing/inaccessible IDs, and storage failures return generic messages; internal storage errors are logged without credentials. Phase 5 download authorization occurs before any content headers are returned, and attachment filenames are encoded with control characters neutralized.
+**Mitigation:** Upload and document responses expose only safe metadata and never the storage key, URL, or credentials. Role denials, missing/inaccessible IDs, and storage failures return generic messages; internal storage errors are logged without credentials. Phase 5 download authorization occurs before any content headers are returned, and attachment filenames are encoded with control characters neutralized. Audit details reject sensitive keys, content, and payloads and are bounded.
 
-**Verification:** Tests assert generic storage/persistence errors, secret-safe logs, metadata-only response fields, owner-only download denial, safe attachment encoding, and no storage-key leakage.
+**Verification:** Tests assert generic storage/persistence errors, secret-safe logs, metadata-only response fields, owner-only download denial, safe attachment encoding, no storage-key leakage, and audit metadata sanitization.
 
 **Residual Risk:** Low–Medium. Timing side channels and name leakage in shared contexts require ongoing review.
 
@@ -237,7 +238,7 @@ graph TB
 2. **Deny by default.** Access is granted only by explicit ownership, role, or permission grant.
 3. **Least privilege.** Credentials and roles carry only the access they require.
 4. **Defense in depth.** Application checks plus RLS plus private storage plus audit.
-5. **Immutable history.** Audit records are append-only and hash-chained.
+5. **Tamper-evident history.** Audit records are append-only at the application layer, hash-chained, and compared with a signed checkpoint. Independent checkpoint storage remains required for privileged-host resistance.
 6. **Secrets never touch source control.**
 7. **Fail closed.** External-service failures deny access rather than bypass checks.
 
@@ -248,15 +249,16 @@ graph TB
 | Risk | Severity | Notes / Future Work |
 |------|----------|---------------------|
 | Downloaded copies cannot be recalled after revocation | Inherent | Communicate to users; consider watermarking |
-| Privileged DB attacker can rewrite local hash chain | High | Implement external signed checkpoints |
+| Privileged DB/host attacker can rewrite local hash chain or delete same-host checkpoint | High | Retain signed checkpoints in an independently controlled append-only store; schedule publication |
 | Malware in uploaded files | Medium | Add antivirus scanning; validation is not scanning |
 | Live Wasabi bucket policy/connectivity unverified | Medium | Verify private policy, least-privilege keys, and upload/delete behavior before deployment |
 | Upload object and metadata are not transactional | Low–Medium | Best-effort cleanup only; monitor orphans and add reconciliation |
 | Soft-deleted metadata can outlive a failed object cleanup | Low–Medium | Cleanup is best-effort after commit; log and reconcile private orphans |
-| Document and permission actions are not audited yet | Medium | Phase 7 writes view/download/edit/delete/permission/denied events |
+| Audit summaries/export and owner audit views absent | Low | Global admin detail filters work; add aggregate/export features only if required |
 | Stolen access token valid until expiry | Medium | Short TTL; consider token binding |
 | Credential stuffing without MFA | Medium | Evaluate MFA |
 | Application-level DoS | Medium | Rate limits, provider protections |
+| Direct client IP may be a proxy address | Low | Configure trusted proxy handling deliberately if deployment requires real client IPs |
 
 ---
 
@@ -335,7 +337,7 @@ These notes record the document-management controls implemented at Phase 5 compl
 
 ## 12. Phase 6 Implementation Notes (Verified with Mocked Storage)
 
-These notes record the authorization controls actually implemented for named-user sharing. Audit writes and live storage verification remain outstanding.
+These notes record the authorization controls actually implemented for named-user sharing. Audit writes and live storage verification were still outstanding at Phase 6 completion.
 
 - **Central enforcement:** `app/services/document_access.py` resolves access from current ownership and active grants on every request and maps it to explicit metadata/read/edit/delete/manage capabilities. There is no authorization cache.
 - **Grant management:** Only the document owner can list, grant, update, or revoke access. Recipients must be active registered users identified by normalized email. Same-level grants are idempotent; conflicting levels return 409; cross-document permission IDs return 404.
@@ -343,5 +345,20 @@ These notes record the authorization controls actually implemented for named-use
 - **Administrator boundary:** Administrators can read metadata for all active documents but receive no content, edit, delete, or permission-management capability unless they own the document or receive an explicit grant.
 - **Shared listing:** /api/v1/documents/shared-with-me includes only active grants on active, non-deleted documents. The regular document list includes owned plus actively shared documents.
 - **Revocation semantics:** After revocation, content and edit requests return generic 404 because the user no longer has document visibility. Downloaded copies remain outside the system's control.
-- **Verification:** 146 backend tests pass, including 19 Phase 6 tests for owner-only management, READ/EDIT/administrator boundaries, forged fields, idempotency/conflicts, history retention, immediate revocation, shared-list exclusions, and cross-document IDOR. Frontend lint/build pass.
-- **Not implemented/verified:** Audit event writes/views, live Wasabi behavior, malware scanning, RLS, and deployment.
+- **Verification:** 146 backend tests pass at Phase 6 completion, including 19 Phase 6 tests for owner-only management, READ/EDIT/administrator boundaries, forged fields, idempotency/conflicts, history retention, immediate revocation, shared-list exclusions, and cross-document IDOR. Frontend lint/build pass.
+- **Not implemented/verified at Phase 6 completion:** Audit event writes/views, live Wasabi behavior, malware scanning, RLS, and deployment.
+
+---
+
+## 13. Phase 7 Implementation Notes (Verified Locally with Mocked Storage)
+
+These notes record the audit controls actually implemented. Live storage, Supabase migration, and deployment remain unverified.
+
+- **Append-only writer:** `app/services/audit.py` sanitizes metadata and appends events under an advisory transaction lock with contiguous `chain_index`, `previous_hash`, and canonical SHA-256 `event_hash`.
+- **Transactional semantics:** Mandatory audit events for successful state changes share the protected transaction; audit failure rolls back the change and returns generic 500. Denial events are best-effort and cannot change the 403/404 outcome.
+- **Coverage:** registration, login success/failure, logout, upload, metadata update, download, delete, permission grant/update/revoke, and typed document/permission/audit-access denials.
+- **Request metadata:** validated or generated request IDs are echoed; details include direct socket client IP and sanitized, length-limited user-agent. Sensitive keys and content are rejected, and metadata depth/size is bounded.
+- **Integrity verification:** chain verification detects index gaps, previous-hash mismatches, and modified event hashes. HMAC-SHA256 signed checkpoints support valid/stale/missing/unconfigured/unavailable/invalid statuses.
+- **Administrator boundary:** audit query and integrity endpoints are global-administrator-only; non-admin attempts are denied and audited. No API allows audit modification or deletion.
+- **Verification:** 158 backend tests pass, including 12 Phase 7 tests for event coverage, admin authorization/filtering, tamper and middle-removal detection, checkpoint staleness/truncation/signature failure, audit-write rollback, metadata sanitization, and unsafe request IDs. Frontend lint/build pass.
+- **Residual risk:** No independent immutable checkpoint store or scheduled checkpoint publication exists. A privileged attacker who controls both database and host filesystem can still alter history; the signed same-host checkpoint only detects changes relative to the last trusted copy. Audit exports, aggregate summaries, owner audit views, RLS, live Wasabi verification, malware scanning, and deployment remain outstanding.

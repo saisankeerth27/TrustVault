@@ -151,21 +151,22 @@ def rotate_session(
     return user, new_plaintext, new_token
 
 
-def revoke_session(session: Session, *, plaintext: str) -> bool:
+def revoke_session(session: Session, *, plaintext: str) -> UUID | None:
     refresh_token = session.scalar(
         select(RefreshToken)
         .where(RefreshToken.token_hash == hash_refresh_token(plaintext))
         .with_for_update()
     )
     if refresh_token is None:
-        return False
+        return None
 
+    user_id = refresh_token.user_id
     _revoke_family(
         session,
         refresh_token.family_id,
         datetime.now(timezone.utc),
     )
-    return True
+    return user_id
 
 
 def session_is_active(

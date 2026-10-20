@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.document import Document
 from app.models.document_permission import DocumentPermission
+from app.models.enums import AuditAction, AuditOutcome
 from app.models.user import User
+from app.services.audit import record_event
 from app.services.document_access import annotate_access_levels, visible_document_scope
 from app.services.storage import (
     StorageConfigurationError,
@@ -78,6 +80,18 @@ def store_document(
     session.add(document)
 
     try:
+        session.flush()
+        record_event(
+            session,
+            action=AuditAction.DOCUMENT_UPLOAD,
+            outcome=AuditOutcome.SUCCESS,
+            actor=owner,
+            document_id=document.id,
+            details={
+                "file_size": upload.size,
+                "mime_type": upload.mime_type,
+            },
+        )
         session.commit()
     except Exception as exc:
         try:
@@ -203,12 +217,21 @@ def update_document_metadata(
     *,
     document: Document,
     changes: dict[str, object],
+    actor: User,
 ) -> Document:
     for field in ("name", "category", "description"):
         if field in changes:
             setattr(document, field, changes[field])
 
     try:
+        record_event(
+            session,
+            action=AuditAction.DOCUMENT_METADATA_UPDATE,
+            outcome=AuditOutcome.SUCCESS,
+            actor=actor,
+            document_id=document.id,
+            details={"changed_fields": sorted(changes)},
+        )
         session.commit()
     except Exception as exc:
         try:
@@ -226,11 +249,19 @@ def soft_delete_document(
     session: Session,
     *,
     document: Document,
+    actor: User,
     storage: WasabiStorage,
 ) -> None:
     document.deleted_at = datetime.now(timezone.utc)
 
     try:
+        record_event(
+            session,
+            action=AuditAction.DOCUMENT_DELETE,
+            outcome=AuditOutcome.SUCCESS,
+            actor=actor,
+            document_id=document.id,
+        )
         session.commit()
     except Exception as exc:
         try:

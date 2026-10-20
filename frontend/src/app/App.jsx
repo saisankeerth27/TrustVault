@@ -4,6 +4,7 @@ import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { RequireRole } from '@/components/RequireRole'
 import { AdminPage } from '@/pages/AdminPage'
+import { AuditPage } from '@/pages/AuditPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentDetailsPage } from '@/pages/DocumentDetailsPage'
 import { DocumentPermissionsPage } from '@/pages/DocumentPermissionsPage'
@@ -31,6 +32,7 @@ export function App() {
               <Route path="/documents/:documentId" element={<DocumentDetailsPage />} />
               <Route element={<RequireRole role="ADMINISTRATOR" />}>
                 <Route path="/admin" element={<AdminPage />} />
+                <Route path="/admin/audit" element={<AuditPage />} />
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Route>

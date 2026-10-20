@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2 and 3 and used by the Phase 4 upload, Phase 5 document-management, and Phase 6 permission pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
+This document describes the PostgreSQL schema implemented across Phases 2–7 and used by the authentication, upload, document-management, permission, and audit pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py`, `0002_add_refresh_tokens.py`, and `0003_add_audit_chain_index.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, and owner-managed READ/EDIT grants exist; the audit writer does not. Phase 6 adds no migration. Migrations have **not** been applied to the Supabase project.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, and the append-only hash-chained audit writer exist. Migration `0003` adds the audit chain sequence. Migrations have **not** been applied to the Supabase project.
 
 ## Entity Relationships
 
@@ -65,6 +65,7 @@ erDiagram
 
     audit_events {
         uuid id PK
+        bigint chain_index UK
         uuid actor_id FK
         uuid document_id FK
         varchar action
@@ -180,6 +181,7 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `id` | UUID | Primary key, default `gen_random_uuid()` |
+| `chain_index` | BIGINT | Not null, `>= 1`, unique (`ix_audit_events_chain_index`) |
 | `actor_id` | UUID | Nullable, FK `users.id` `ON DELETE SET NULL` |
 | `document_id` | UUID | Nullable, FK `documents.id` `ON DELETE SET NULL` |
 | `action` | VARCHAR(64) | Not null, extensible (no check) |
@@ -194,17 +196,19 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 
 **`action` is intentionally unconstrained.** Later phases add actions without a migration. `outcome` is constrained because it is a small, stable set. `details` must be a JSON object to keep audit queries predictable, and hash columns must be 64-character lowercase hex.
 
-**Hash chain.** `previous_hash` and `event_hash` hold the Phase 7 hash chain. No code writes them yet; the columns exist so the write path does not require a schema migration later.
+**Chain sequence and hashes.** Migration `0003` adds nullable `chain_index`, backfills existing rows deterministically by `(occurred_at, id)`, then enforces `NOT NULL`, `>= 1`, and uniqueness. The writer takes a PostgreSQL advisory transaction lock and appends the next contiguous index with `previous_hash` and a canonical SHA-256 `event_hash`. A hash chain stored alongside the data it protects detects unauthorized changes but cannot prevent a privileged database administrator from rewriting the chain; the signed checkpoint adds detection relative to the last trusted checkpoint.
 
-**Immutability is not database-enforced in Phase 2.** A trigger or revoke-based immutability rule would block the `ON DELETE SET NULL` updates that preserve history. Phase 7 will implement the append-only write path and revisit enforcement alongside hash-chain verification and external checkpoints.
+**Details metadata.** Event details include action-specific fields plus the validated request ID, direct socket client IP, and length-limited user-agent when available, and an actor-name snapshot. Passwords, tokens, cookies, authorization headers, session IDs, content, and payloads are rejected by the sanitizer before insert. Details are bounded by depth, item count, and total size.
 
-**Indexes:** `occurred_at`, `actor_id`, `document_id`, `action`, `outcome`, plus composite `(document_id, occurred_at)` and `(actor_id, occurred_at)` for document- and actor-scoped history views.
+**Immutability is not database-enforced.** A trigger or revoke-based immutability rule would conflict with the `ON DELETE SET NULL` updates that preserve history. The application exposes no audit UPDATE/DELETE endpoint and writes through a single append path, but the database role is not restricted from direct table changes.
+
+**Indexes:** unique `ix_audit_events_chain_index`; `occurred_at`, `actor_id`, `document_id`, `action`, and `outcome`, plus composite `(document_id, occurred_at)` and `(actor_id, occurred_at)` for document- and actor-scoped history views.
 
 ## RLS Strategy (Not Enabled)
 
 Row-Level Security is planned as defense-in-depth, not as the primary authorization mechanism. **No RLS policies are enabled.** Phase 3 keeps the backend on a single privileged database role; authentication establishes an application identity, not a per-request PostgreSQL identity. Because that role bypasses RLS, application-level authorization remains authoritative and policies are deferred until they can be tested meaningfully.
 
-1. The backend owns authorization and will enforce ownership, role, and per-document grants in application code (Phases 3 and 6).
+1. The backend owns authorization and enforces owner, role, per-document grants, and administrator audit access in application code (Phases 3–7).
 2. Phase 3 keeps a single privileged role; per-request database identities and tested RLS policies remain deferred.
 3. The frontend never connects to the database, and the service/privileged credential is never exposed to clients.
 4. In later phases, policies will be additive safety nets (for example, `documents` visible only to owner, administrator, or grant holder) and will be tested before being claimed as active.
@@ -216,7 +220,8 @@ Until then, TrustVault must not be described as having database-enforced access 
 - Alembic configuration: `backend/alembic.ini` (no credentials stored) and `backend/alembic/env.py`.
 - Initial migration: `backend/alembic/versions/0001_initial_schema.py` (revision `0001`) creates `pg_trgm`, the four core tables, constraints, and indexes.
 - Phase 3 migration: `backend/alembic/versions/0002_add_refresh_tokens.py` (revision `0002`) adds `refresh_tokens` and its indexes.
-- `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`.
+- Phase 7 migration: `backend/alembic/versions/0003_add_audit_chain_index.py` (revision `0003`) adds `chain_index`, backfills existing audit rows, then adds the positive check and unique index.
+- `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`; `0003.downgrade()` drops the chain index, check, and column.
 
 Common commands (run from `backend/` with `DATABASE_URL` set):
 
@@ -249,7 +254,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 146 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management/audit tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 158 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
 
 Run the suite:
 

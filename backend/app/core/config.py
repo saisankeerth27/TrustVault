@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import SecretStr, field_validator, model_validator
@@ -45,6 +46,9 @@ class Settings(BaseSettings):
     auth_rate_limit_attempts: int = 10
     auth_rate_limit_window_seconds: int = 60
 
+    audit_checkpoint_signing_key: SecretStr | None = None
+    audit_checkpoint_path: str | None = None
+
     @field_validator("database_url", mode="before")
     @classmethod
     def empty_database_url_to_none(cls, value: object) -> object:
@@ -72,6 +76,27 @@ class Settings(BaseSettings):
             stripped = value.strip()
             return stripped or None
         return value
+
+    @field_validator("audit_checkpoint_signing_key", mode="before")
+    @classmethod
+    def empty_audit_secret_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("audit_checkpoint_path", mode="before")
+    @classmethod
+    def validate_audit_checkpoint_path(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        path = Path(stripped).expanduser()
+        if not path.is_absolute():
+            raise ValueError("AUDIT_CHECKPOINT_PATH must be an absolute path.")
+        return str(path)
 
     @field_validator("wasabi_endpoint_url")
     @classmethod
@@ -157,6 +182,20 @@ class Settings(BaseSettings):
 
         if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
             raise ValueError("SameSite=None requires AUTH_COOKIE_SECURE=true.")
+
+        checkpoint_key = (
+            self.audit_checkpoint_signing_key.get_secret_value()
+            if self.audit_checkpoint_signing_key
+            else ""
+        )
+        if bool(checkpoint_key) != bool(self.audit_checkpoint_path):
+            raise ValueError(
+                "AUDIT_CHECKPOINT_SIGNING_KEY and AUDIT_CHECKPOINT_PATH must be configured together."
+            )
+        if checkpoint_key and len(checkpoint_key) < 32:
+            raise ValueError(
+                "AUDIT_CHECKPOINT_SIGNING_KEY must be at least 32 characters."
+            )
 
         if self.app_env == "production":
             secret = self.jwt_secret.get_secret_value() if self.jwt_secret else ""

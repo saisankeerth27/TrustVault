@@ -10,7 +10,7 @@ Organizations need a secure, auditable document management system that enforces 
 
 **Description:** The system must support three distinct roles: **Administrator**, **Document Owner**, and **Viewer**. Users authenticate with secure credentials. Role assignment determines the scope of permitted actions.
 
-- Administrators can review metadata for all active documents, view audit logs once Phase 7 is implemented, and manage users. Administrator identity does not automatically grant document content access.
+- Administrators can review metadata for all active documents, view the global audit log, and access administrator areas. Administrator identity does not automatically grant document content access. Administrative user management remains deferred.
 - Document Owners can upload, organize, share, and manage their own documents.
 - Viewers can only access documents explicitly shared with them.
 
@@ -33,16 +33,16 @@ Organizations need a secure, auditable document management system that enforces 
 **Description:** Document owners grant READ or EDIT access to specific named users on a per-document basis. Permissions are stored at the individual document-user level, not at group or role level. A user without explicit permission has no access.
 
 **Phase:** 6 (Document Permissions and Revocation)
-**Verification:** Phase 6 tests confirm owner-only grants, READ/EDIT capability boundaries, immediate post-revocation denial, grant-history retention, and shared-document listing. Audit event creation remains Phase 7.
+**Verification:** Phase 6 tests confirm owner-only grants, READ/EDIT capability boundaries, immediate post-revocation denial, grant-history retention, and shared-document listing. Phase 7 verifies grant, update, revoke, and denied-permission audit events.
 
 ---
 
 ### MR-4: Owner-Controlled Permission Grants and Revocation
 
-**Description:** Only the document owner can grant or revoke permissions. Revocation is immediate: the target user loses access on the next request. Granting, updating, or revoking a permission must create an audit record once the Phase 7 audit writer exists.
+**Description:** Only the document owner can grant or revoke permissions. Revocation is immediate: the target user loses access on the next request. Granting, updating, or revoking a permission creates an audit record in the same transaction.
 
-**Phase:** 6 (Document Permissions and Revocation)
-**Verification:** Phase 6 tests confirm immediate denial after revocation, owner-only management, cross-document permission-ID rejection, and retained grant history. Audit record creation is verified in Phase 7.
+**Phase:** 6 (Document Permissions and Revocation), 7 (Audit)
+**Verification:** Phase 6 tests confirm immediate denial after revocation, owner-only management, cross-document permission-ID rejection, and retained grant history. Phase 7 tests confirm permission success/denial audit events.
 
 ---
 
@@ -117,7 +117,7 @@ Search results must be filtered by the requesting user's permissions — a user 
 Administrators cannot modify or delete audit records through the application.
 
 **Phase:** 7 (Audit Trail and Administrator Activity)
-**Verification:** Integration tests confirming administrator access to logs; tests confirming administrators cannot delete audit records via API.
+**Verification:** Phase 7 integration tests confirm administrator access to logs and integrity status, filtering/pagination, non-admin denial, and the absence of audit mutation endpoints. Aggregate document/user activity summaries and export are not implemented.
 
 ---
 
@@ -146,7 +146,7 @@ Administrators cannot modify or delete audit records through the application.
 | Delete own documents                | Yes | Yes | No |
 | Delete others' documents            | No  | No  | No |
 | Grant/revoke per-document access    | Own documents only | Own only | No |
-| View audit logs                     | Yes (Phase 7) | Own docs only (Phase 7) | No |
+| View audit logs                     | Yes | No  | No  |
 | Manage users/roles                  | Yes | No  | No |
 | Search documents                    | All metadata | Own + shared | Shared only |
 | Download documents                  | Explicit grant only | Own + shared grants | Shared grants only |
@@ -188,7 +188,20 @@ Administrators cannot modify or delete audit records through the application.
 - **MR-5:** Document detail, edit, download, delete, and permission endpoints use centralized authorization with 404 for missing/unrelated resources and 403 for visible-but-insufficient capability. Metadata-only administrators are denied content access.
 - **MR-7:** Regular listing includes owned and actively shared documents; `/shared-with-me` excludes revoked grants and deleted documents. Administrators retain metadata oversight.
 - **Frontend:** Access-level badges, a shared-documents route, and an owner-only permission-management page with grant, update, revoke confirmation, and history are implemented.
-- **Not yet met:** permission/document audit events, live bucket verification, malware scanning, RLS, and deployment.
+- **Not yet met at Phase 6 completion:** permission/document audit events, live bucket verification, malware scanning, RLS, and deployment.
+
+### Phase 7 Implementation Status (Verified Locally with Mocked Storage)
+
+- **MR-6:** Implemented for authentication, upload, metadata update, download, delete, permission grant/update/revoke, and denied access. Each event records timestamp, actor, optional document, action, outcome, request ID, direct client IP, and user-agent. Details are sanitized and bounded.
+- **MR-6 integrity:** Events use a contiguous chain index, previous-event hash, canonical SHA-256 hashing, and a PostgreSQL advisory transaction lock. HMAC-SHA256 signed checkpoint files detect changes relative to the last trusted checkpoint.
+- **MR-4 audit:** Successful grants/updates/revocations append audit events in the protected transaction; denial events are best-effort so they cannot alter the denial outcome.
+- **MR-9:** Global administrators can query all audit events with actor, document, action, outcome, and UTC date filters, plus read chain/checkpoint integrity. There is no audit modification/deletion endpoint.
+- **FA-14:** Implemented for state-changing actions; idempotent no-op requests do not duplicate state-change events. Login failures and authorization denials are recorded.
+- **FA-15 / FA-16:** Implemented; verification detects modified, reordered, and removed events, and no API exposes audit mutation.
+- **FA-17:** Partially met. Querying, filtering, and pagination are implemented; CSV/JSON export is not.
+- **MR-9 summaries:** Aggregate document/user activity summaries are not implemented. Administrators can derive detail views through filters and the existing permission history.
+- **Administrator UI:** `/admin/audit` provides filters, pagination, event details, and an integrity panel. Owner-scoped audit views are intentionally not part of the Phase 7 policy.
+- **Not yet met / unverified:** independent immutable checkpoint storage and scheduled publication, audit export and aggregate summaries, live Wasabi behavior, Supabase migration/deployment, RLS, and malware scanning.
 
 ---
 
@@ -211,13 +224,13 @@ Administrators cannot modify or delete audit records through the application.
 - FA-10: Granting READ allows reading and downloading but not editing, deleting, re-sharing, or managing permissions.
 - FA-11: Granting EDIT allows reading, downloading, and editing but not deleting, re-sharing, or managing permissions.
 - FA-12: Revocation takes effect immediately.
-- FA-13: Permission changes are recorded in the audit trail once the Phase 7 audit writer is implemented. The permission history table already retains grant/revoke rows.
+- FA-13: Permission changes are recorded in the audit trail. The permission history table also retains grant/revoke rows.
 
 ### Audit
-- FA-14: Every action listed in MR-6 produces exactly one audit record.
-- FA-15: Audit records form a verifiable hash chain.
+- FA-14: Every state-changing action listed in MR-6 produces one audit record; denied attempts and login failures are recorded separately. Idempotent no-ops do not create duplicate state-change events.
+- FA-15: Audit records form a verifiable hash chain with a contiguous sequence and canonical hashes.
 - FA-16: No API endpoint allows modification or deletion of audit records.
-- FA-17: Administrators can query, filter, and export audit data.
+- FA-17: Partially met. Administrators can query, filter, and paginate audit data; export is not implemented.
 
 ### Security
 - FA-18: Every document-access API endpoint checks authorization server-side.
@@ -253,12 +266,12 @@ Administrators cannot modify or delete audit records through the application.
 | MR-1   | Authentication with roles                      | Phase 3              | Unit + integration tests for role endpoints  |
 | MR-2   | Document upload, organization, search, mgmt    | Phase 4 (upload), 5  | Upload/library/CRUD/search tests pass with mocked storage; live Wasabi unverified |
 | MR-3   | Named-user per-document READ/EDIT permissions  | Phase 6 (implemented) | Permission grant/deny integration tests pass |
-| MR-4   | Owner-controlled grant and revocation          | Phase 6 (implemented); audit Phase 7 | Immediate revocation and history tests pass |
+| MR-4   | Owner-controlled grant and revocation          | Phase 6, 7 (implemented) | Immediate revocation, history, and permission audit tests pass |
 | MR-5   | Backend enforcement of authorization           | Phase 5, 6, 8        | Direct API tests bypassing frontend          |
-| MR-6   | Audit records for all significant actions      | Phase 7              | Event-driven audit creation tests            |
+| MR-6   | Audit records for all significant actions      | Phase 7 (implemented) | Event-driven audit, chain integrity, and checkpoint tests pass |
 | MR-7   | Search by name, owner, category, date          | Phase 5              | Filtered search tests with permission scoping|
 | MR-8   | File upload validation                         | Phase 4              | Implemented; validation/unit tests pass      |
-| MR-9   | Administrator activity and permission views    | Phase 7              | Admin endpoint access + restriction tests    |
+| MR-9   | Administrator activity and permission views    | Phase 7 (partial)    | Admin access/filter/denial tests pass; summaries/export deferred |
 | MR-10  | Automated cross-user access denial tests       | Phase 8              | Dedicated cross-user test suite              |
 
 ## 8. Out of Scope for Phase 0

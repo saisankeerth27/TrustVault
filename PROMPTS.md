@@ -288,6 +288,45 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Updated Phase 5 regression expectations and added 19 dedicated permission tests.
   - Reconciled README, architecture, database, requirements, plan, and threat documentation with the owner-only sharing policy and metadata-only administrator boundary.
   - Recorded the Phase 5 commit hash/link and left the Phase 6 hash/link pending for reporting after the single final commit.
-- **Commit hash:** pending final Phase 6 commit/push; reported in the final response.
-- **GitHub link:** pending final Phase 6 commit/push.
-- **Human review and decision:** Phase 6 review pending; Phase 7 must not begin until approval is given.
+- **Commit hash:** `d3c7ab436a6d99b912b3e05c522a33ff844c1b9c`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/d3c7ab436a6d99b912b3e05c522a33ff844c1b9c
+- **Human review and decision:** Approved; Phase 7 was subsequently authorized.
+
+---
+
+## 2026-10-20 - Phase 7: Audit Trail and Administrator Activity
+
+- **Date and phase:** 2026-10-20 - Phase 7 (Audit Trail and Administrator Activity)
+- **Objective:** Implement Phase 7 only: an append-only, tamper-evident audit trail for authentication, document, permission, and denied actions; hash-chain and signed-checkpoint verification; a global-administrator audit API/dashboard; tests; and documentation. Verify locally, make exactly one commit, push once, and stop before Phase 8.
+- **Prompt / instruction summary:** The human authorized Phase 7 and required audit coverage for significant successes and denials; a hash chain with independently verifiable checkpoints; administrator-only audit query views; no audit mutation API; server-side authorization; JavaScript/JSX frontend; preservation of Phases 0–6; all required documentation; exactly one commit (`feat(audit): implement protected audit trail`) and one push; then stop for review.
+- **Files or code produced:**
+  - Schema: new `backend/alembic/versions/0003_add_audit_chain_index.py` adds and backfills `chain_index`, enforces positivity, and adds a unique index; `backend/app/models/audit_event.py` and `backend/app/models/enums.py` add the chain field and final action taxonomy.
+  - Audit core: new `backend/app/services/audit.py` (sanitization, advisory-lock append, canonical hashing, transactional/best-effort records), `backend/app/services/audit_integrity.py` (chain verification, HMAC-SHA256 checkpoints), and `backend/app/core/request_context.py` (validated/generated request ID and direct client IP/user-agent metadata).
+  - Integration: `backend/app/services/auth.py`, `document_access.py`, `documents.py`, and `permissions.py` append success/denial events; `backend/app/api/auth.py` adds auth events; `backend/app/api/documents.py` and `admin.py` expose protected behavior; `backend/app/api/router.py` and `backend/app/main.py` wire the admin router, request context, and `X-Request-ID`.
+  - Configuration: `backend/app/core/config.py` validates checkpoint key/path pair, absolute path, and minimum key length.
+  - Admin surface: new `backend/app/api/admin.py` and `backend/app/schemas/audit.py` with filtered/paginated event listing and integrity status; no audit mutation endpoints.
+  - Frontend: new `frontend/src/services/audit.js`, `frontend/src/lib/audit.js`, and `frontend/src/pages/AuditPage.jsx`; updated `App.jsx`, `AppLayout.jsx`, and `AdminPage.jsx` for `/admin/audit`, navigation, and administrator entry.
+  - Operations: new `backend/scripts/audit_integrity.py` with exit codes 0/1/2; `.env.example`/`render.yaml` checkpoint configuration; documentation in README, architecture, database, requirements, plan, threats, and this entry.
+- **Tests and verification performed:**
+  - Full backend suite: **158 passed**, one Starlette/httpx deprecation warning, including 12 Phase 7 tests.
+  - Phase 7 coverage: authentication/document/permission success events, denied actions, admin authorization/filtering/pagination, tamper and middle-event removal detection, signed-checkpoint validity/staleness/truncation/signature failure, mandatory-audit rollback, best-effort denial auditing, metadata sanitization, and unsafe request IDs.
+  - `python -m scripts.audit_integrity --help` verified; checkpoint CLI paths exercised through tests.
+  - `npm run lint`: 0 warnings, 0 errors. `npm run build`: passed with the existing chunk-size warning. No TypeScript/TSX files.
+  - Not performed: live Wasabi verification, Supabase migration, Vercel/Render deployment, scheduled independent checkpoint publication, audit export, aggregate activity summaries, or browser-to-live-storage testing.
+- **Issues discovered:**
+  - The initial Phase 7 plan described owner-scoped audit views, but the authorization policy implemented and documented here is global-administrator-only; owner views and audit export remain deferred.
+  - Audit success writes must share the business transaction or a security-relevant mutation could succeed without a record; denial writes must remain best-effort or audit failure would turn a denial into a server error.
+  - A same-host signed checkpoint can be deleted by a privileged host attacker, so it is not an independent immutable store.
+  - `X-Forwarded-For` is not trusted; the recorded client IP is the direct ASGI socket address and may be a proxy address.
+  - Windows Application Control blocked the bundled PostgreSQL Snowball dictionary; local tests used a copied PostgreSQL installation with that dictionary disabled and a temporary path shim. This is an environment workaround, not a repository change.
+  - Embedded PostgreSQL initialization creates a Data directory under the repository root; it is runtime test state and must not be committed.
+- **Corrections made:**
+  - Added request metadata (`client_ip`, `user_agent`) to satisfy the MR-6 client-metadata requirement, with sanitization and final size checks.
+  - Rejected unsafe request IDs and generated a 32-character UUID hex instead of trusting arbitrary client input.
+  - Excluded `AUDIT_ACCESS_DENIED` from document-targeted denial assertions because it correctly has no document ID.
+  - Configured checkpoint settings in the tamper test environment so checkpoint verification could be exercised.
+  - Reconciled stale Phase 6 status, README test counts, audit API descriptions, checkpoint limitations, and implementation-plan deliverables with the actual code.
+  - Recorded the Phase 6 commit hash/link and left the Phase 7 hash/link pending for reporting after the single final commit.
+- **Commit hash:** pending final Phase 7 commit/push; reported in the final response.
+- **GitHub link:** pending final Phase 7 commit/push.
+- **Human review and decision:** Phase 7 review pending; Phase 8 must not begin until approval is given.
