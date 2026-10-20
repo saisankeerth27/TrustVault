@@ -8,10 +8,12 @@ import {
   ServerCog,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useAuth } from '@/auth/useAuth'
 import { PageHeader } from '@/components/PageHeader'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { formatRole } from '@/lib/roles'
 import { apiBaseUrl, apiClient, getApiErrorMessage, isApiConfigured } from '@/services/api'
 import type { HealthResponse } from '@/types/api'
 
@@ -51,9 +53,10 @@ function StatusPill({
 }
 
 export function DashboardPage() {
+  const { user } = useAuth()
   const [health, setHealth] = useState<HealthState>(() =>
     isApiConfigured
-      ? { status: 'loading', message: 'Checking backend health…' }
+      ? { status: 'loading', message: 'Checking backend health...' }
       : { status: 'unconfigured', message: 'VITE_API_BASE_URL is not configured.' },
   )
 
@@ -91,9 +94,9 @@ export function DashboardPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 1"
-        title="Application dashboard"
-        description="The frontend and backend skeletons are running. Authentication, document storage, permissions, and audit logging are not implemented yet."
+        eyebrow="Phase 3"
+        title={user ? `Welcome back, ${user.name.split(' ')[0]}` : 'Application dashboard'}
+        description="You are signed in to TrustVault. Authentication, session rotation, and role enforcement are live; document storage, permissions, and the audit UI arrive in later phases."
         actions={
           <Link to="/documents" className={buttonVariants({ variant: 'outline' })}>
             View documents
@@ -106,17 +109,17 @@ export function DashboardPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
-              <CardTitle>Scaffold status</CardTitle>
-              <StatusPill tone="success">Phase 1</StatusPill>
+              <CardTitle>Authentication</CardTitle>
+              <StatusPill tone="success">Live</StatusPill>
             </div>
-            <CardDescription>Application skeleton and tooling are in place.</CardDescription>
+            <CardDescription>Your session is verified by the backend.</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="space-y-3 text-sm">
               {[
-                'React, TypeScript, and Vite frontend',
-                'FastAPI backend with health endpoint',
-                'Pytest and frontend build checks',
+                'Short-lived access token held in memory',
+                'Rotating HttpOnly refresh session',
+                'Database-backed role and account checks',
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2.5">
                   <CheckCircle2
@@ -126,6 +129,12 @@ export function DashboardPage() {
                   <span>{item}</span>
                 </li>
               ))}
+              <li className="flex items-center justify-between gap-3 border-t pt-3">
+                <span className="text-muted-foreground">Signed in as</span>
+                <span className="text-right font-medium">
+                  {user ? formatRole(user.role) : ''}
+                </span>
+              </li>
             </ul>
           </CardContent>
         </Card>
@@ -175,11 +184,11 @@ export function DashboardPage() {
             </div>
             <div className="flex items-center gap-2">
               <LockKeyhole className="size-4" aria-hidden="true" />
-              Permission enforcement arrives in Phase 6.
+              Per-document permission enforcement arrives in Phase 6.
             </div>
             <div className="flex items-center gap-2">
               <KeyRound className="size-4" aria-hidden="true" />
-              Authentication arrives in Phase 3.
+              Authentication and baseline roles are active now.
             </div>
           </CardContent>
         </Card>
@@ -189,9 +198,7 @@ export function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>Security model</CardTitle>
-            <CardDescription>
-              How TrustVault will enforce access once later phases are complete.
-            </CardDescription>
+            <CardDescription>How TrustVault enforces access today and later.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 text-sm leading-6 text-muted-foreground">
             <div className="flex items-start gap-3">
@@ -204,13 +211,14 @@ export function DashboardPage() {
             <div className="flex items-start gap-3">
               <LockKeyhole className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
               <p>
-                Every document read, download, edit, delete, and permission change will be
-                checked server-side and recorded in an append-only audit trail.
+                Every protected request validates the access token, active server-side session,
+                and current database role. Signing out revokes the refresh session immediately.
               </p>
             </div>
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-              Current limitation: this Phase 1 scaffold has no authentication and no document
-              data. Do not treat any UI state as an access-control guarantee.
+              Current limitation: document APIs, per-document permissions, and audit views are not
+              implemented. Do not treat this dashboard as evidence that those features are secure
+              or available.
             </p>
           </CardContent>
         </Card>
@@ -218,7 +226,7 @@ export function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>Quick links</CardTitle>
-            <CardDescription>Navigate the current scaffold.</CardDescription>
+            <CardDescription>Navigate the current application.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <Link
@@ -228,13 +236,15 @@ export function DashboardPage() {
               Documents
               <ArrowRight className="size-4" aria-hidden="true" />
             </Link>
-            <Link
-              to="/login"
-              className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"
-            >
-              Login placeholder
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </Link>
+            {user?.role === 'ADMINISTRATOR' ? (
+              <Link
+                to="/admin"
+                className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"
+              >
+                Administrator area
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </Link>
+            ) : null}
             <a
               href="https://github.com/saisankeerth27/TrustVault"
               className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"

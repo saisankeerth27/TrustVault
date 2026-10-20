@@ -199,7 +199,7 @@ graph TB
 
 **Scenario:** An attacker steals an access or refresh token via XSS, insecure storage, or network interception.
 
-**Mitigation:** HTTPS everywhere. Prefer httpOnly, secure, same-site cookies or memory storage for tokens. Short access-token TTL. Refresh token rotation binds usage and invalidates reused tokens. Strong CSP reduces XSS. Logout revokes refresh tokens.
+**Mitigation:** HTTPS in production. Phase 3 keeps the access token in memory and the refresh token in an HttpOnly, path-scoped cookie with configurable Secure/SameSite flags. Access tokens are short-lived; refresh tokens rotate and are stored only as SHA-256 hashes. Reuse detection revokes the session family, and logout/disablement invalidates access through per-request session checks. A strong CSP remains planned for Phase 10.
 
 **Verification:** Token expiry tests; refresh rotation tests; reuse-detection tests; CSP header checks.
 
@@ -211,7 +211,7 @@ graph TB
 
 **Scenario:** Automated attempts to guess passwords or replay leaked credentials.
 
-**Mitigation:** Rate limiting and account lockout thresholds on authentication endpoints. bcrypt hashing with strong work factor. Generic error messages prevent user enumeration. Encourage strong passwords. Consider MFA in a future phase.
+**Mitigation:** Phase 3 applies an in-memory sliding-window limit to login and registration (default 10 attempts per 60 seconds), uses bcrypt with a strong work factor, and returns generic errors to reduce user enumeration. Account lockout, shared multi-instance limiting, and MFA remain future work.
 
 **Verification:** Rate-limit tests; generic error message tests; timing considerations reviewed.
 
@@ -223,7 +223,7 @@ graph TB
 
 **Scenario:** High-volume requests, large uploads, or expensive queries exhaust backend, database, or storage resources.
 
-**Mitigation:** Request rate limiting, upload size limits, query pagination and limits, timeouts on external calls, and provider-level protections (Render/Vercel/Supabase). Health checks and monitoring.
+**Mitigation:** Authentication rate limiting, future request limits, upload size limits, query pagination and limits, timeouts on external calls, and provider-level protections (Render/Vercel/Supabase). Health checks and monitoring.
 
 **Verification:** Load and limit tests; upload-size rejection tests; pagination caps verified.
 
@@ -272,7 +272,7 @@ These notes record what is actually implemented in the Phase 1 scaffold. Planned
 These notes record what the Phase 2 schema does and does not enforce. Planned mitigations elsewhere remain planned unless listed here.
 
 - **Schema constraints are enforced by PostgreSQL.** Unique, check, and partial-unique indexes are applied by the initial Alembic migration and exercised by tests against a real PostgreSQL instance. See `docs/DATABASE.md`.
-- **RLS is not enabled.** The backend connects with a single privileged database role that bypasses Row-Level Security, and policy design depends on the Phase 3 authentication model. Authorization is therefore **not** yet provided by the database, and Phase 2 must not be described as RLS-complete.
+- **RLS is not enabled.** The backend connects with a single privileged database role that bypasses Row-Level Security. Phase 3 keeps that model while adding application-level authentication and roles. Authorization is therefore **not** provided by the database, and TrustVault must not be described as RLS-complete.
 - **Audit history is retained, not yet written.** `audit_events.actor_id` and `audit_events.document_id` use `ON DELETE SET NULL` so deleting a user or document preserves the event with its action and details. No application code writes audit rows yet (Phase 7), and the `event_hash`/`previous_hash` columns are not populated by any trust boundary yet.
 - **Audit immutability is not database-enforced.** A database immutability trigger or revoke-based policy would conflict with the `ON DELETE SET NULL` foreign keys and with the application-level design, so it is deferred to Phase 7 alongside the write path and hash-chain verification.
 - **Deletion semantics are deliberate.** `documents.owner_id` uses `ON DELETE RESTRICT`, `document_permissions` cascades from documents/users, and `documents.deleted_at` provides soft deletion. These choices are documented in `docs/DATABASE.md`.
@@ -280,3 +280,18 @@ These notes record what the Phase 2 schema does and does not enforce. Planned mi
 
 **Residual risk after Phase 2:** Medium, unchanged for authorization. The database is prepared but no access control path exists until Phase 3; database-level defense in depth is deferred.
 
+---
+
+## 9. Phase 3 Implementation Notes (Verified)
+
+These notes record the authentication controls that are actually implemented. Planned document and audit controls remain planned.
+
+- **Password storage:** bcrypt hashes only; cost is configurable (default 12). Passwords are limited to 12–72 UTF-8 bytes. Unknown accounts perform a dummy bcrypt verification to reduce timing-based enumeration.
+- **Access tokens:** HS256 JWTs with issuer/audience, type, expiry, session, and role claims. The role claim is informational; authorization reads the current database role.
+- **Refresh sessions:** 256-bit opaque tokens stored as SHA-256 hashes, grouped into families. Rotation marks the old token revoked and links the replacement; reuse revokes the family.
+- **Immediate invalidation:** protected requests verify the user's active status and an active refresh family on every call. Logout, disablement, and reuse detection invalidate existing access tokens without waiting for JWT expiry.
+- **Cookie and CSRF controls:** refresh cookie is HttpOnly with path `/api/v1/auth`; production requires Secure. Auth POSTs enforce an exact Origin allow-list. A per-session CSRF token is not implemented, and cross-site cookies remain dependent on browser policy.
+- **Rate limiting:** in-memory and per process. It is not a shared limiter and can be bypassed by distributing requests across instances; production hardening must address this.
+- **Account provisioning:** public registration always creates a Viewer. Elevated roles require the server-side CLI; clients cannot request a role.
+- **Secret-free logging:** tests assert that auth logs do not include passwords, access tokens, refresh tokens, or email addresses. Alembic logging is configured with `disable_existing_loggers=False` so application loggers remain active.
+- **Residual risks after Phase 3:** no MFA, no account lockout, no idle timeout, no per-session CSRF token, no shared rate limiter, and no deployed verification of cross-site cookies. Stolen access tokens remain valid only while the session stays active and the token stays unexpired (15 minutes by default).

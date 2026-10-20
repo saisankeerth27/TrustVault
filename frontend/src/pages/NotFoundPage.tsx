@@ -12,7 +12,7 @@ export function NotFoundPage() {
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">404</p>
         <h1 className="text-3xl font-semibold tracking-tight">Page not found</h1>
         <p className="mx-auto max-w-md text-sm leading-6 text-muted-foreground">
-          The page you requested does not exist in this Phase 1 scaffold.
+          The page you requested does not exist in TrustVault.
         </p>
       </div>
       <Link to="/dashboard" className={buttonVariants()}>

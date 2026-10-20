@@ -14,8 +14,8 @@ Organizations need a secure, auditable document management system that enforces 
 - Document Owners can upload, organize, share, and manage their own documents.
 - Viewers can only access documents explicitly shared with them.
 
-**Phase:** 3 (Authentication and Roles)
-**Verification:** Unit tests confirming role assignment; integration tests confirming role-specific endpoint access.
+**Phase:** 3 (authentication and role baseline), with role-specific document access enforced in Phases 5–8.
+**Verification:** Phase 3 tests confirm registration role assignment, role dependencies, disabled-account rejection, and session enforcement. Document-level role tests arrive with document endpoints.
 
 ---
 
@@ -152,6 +152,17 @@ Administrators cannot modify or delete audit records through the application.
 | Download documents                  | All with permission | Own + shared | Shared only |
 | Edit documents                      | With EDIT permission | Own + with EDIT | With EDIT only |
 | Modify audit records via API        | No  | No  | No |
+
+### Phase 3 Implementation Status (Verified Locally)
+
+- **FA-1:** Registration, login, access tokens, and rotating refresh sessions are implemented. Public registration always creates a Viewer; elevated roles require the provisioning CLI.
+- **FA-2:** Passwords are stored only as bcrypt hashes. Tests verify hashing, verification, and password-length limits.
+- **FA-3:** Partially met. Access tokens expire after 15 minutes and refresh sessions expire after 7 days by default, with rotation and reuse detection. A configurable **idle** timeout is not implemented.
+- **FA-4:** Invalid credentials and disabled accounts return the same generic login error, and unknown accounts perform dummy bcrypt work.
+- **Additional controls:** auth POSTs enforce an Origin allow-list; auth endpoints are rate limited in-process; logout, disablement, and reuse detection invalidate access through database session checks.
+- **Not yet met:** MFA, account lockout, a shared multi-instance rate limiter, per-session CSRF tokens, and production deployment verification.
+
+---
 
 ## 4. Functional Acceptance Criteria
 

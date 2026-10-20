@@ -1,21 +1,45 @@
-import { FileText, LayoutDashboard, LogIn } from 'lucide-react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { FileText, LayoutDashboard, LogOut, ShieldCheck } from 'lucide-react'
+import { useState } from 'react'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useAuth } from '@/auth/useAuth'
 import { BrandMark } from '@/components/BrandMark'
-import { buttonVariants } from '@/components/ui/button-variants'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { formatRole } from '@/lib/roles'
 
-const navItems = [
+const baseNavItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/documents', label: 'Documents', icon: FileText },
 ]
 
+const adminNavItem = { to: '/admin', label: 'Admin', icon: ShieldCheck }
+
 export function AppLayout() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+  const [isSigningOut, setIsSigningOut] = useState(false)
+
+  const navItems =
+    user?.role === 'ADMINISTRATOR' ? [...baseNavItems, adminNavItem] : baseNavItems
+
+  async function handleSignOut() {
+    setIsSigningOut(true)
+    try {
+      await logout()
+    } catch {
+      // The local session is still cleared by AuthProvider.
+    } finally {
+      setIsSigningOut(false)
+      navigate('/login', { replace: true })
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
           <BrandMark />
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <nav aria-label="Main navigation" className="flex items-center gap-1">
               {navItems.map((item) => (
                 <NavLink
@@ -35,10 +59,26 @@ export function AppLayout() {
                 </NavLink>
               ))}
             </nav>
-            <NavLink to="/login" className={cn(buttonVariants({ size: 'sm' }))}>
-              <LogIn className="size-4" aria-hidden="true" />
-              <span className="hidden sm:inline">Sign in</span>
-            </NavLink>
+
+            <div className="hidden max-w-44 text-right lg:block">
+              <p className="truncate text-sm font-medium">{user?.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {user ? formatRole(user.role) : ''}
+              </p>
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleSignOut}
+              disabled={isSigningOut}
+            >
+              <LogOut className="size-4" aria-hidden="true" />
+              <span className="hidden sm:inline">
+                {isSigningOut ? 'Signing out...' : 'Sign out'}
+              </span>
+            </Button>
           </div>
         </div>
       </header>
@@ -49,8 +89,8 @@ export function AppLayout() {
 
       <footer className="border-t bg-muted/40">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <p>TrustVault · Phase 1 application scaffold</p>
-          <p>Authentication, documents, permissions, and audit logging are not implemented yet.</p>
+          <p>TrustVault &mdash; Phase 3 authenticated application</p>
+          <p>Documents, permissions, storage, and audit UI arrive in later phases.</p>
         </div>
       </footer>
     </div>

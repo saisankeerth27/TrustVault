@@ -4,7 +4,13 @@ from sqlalchemy.pool import NullPool
 
 from tests.db_helpers import alembic_config
 
-CORE_TABLES = {"users", "documents", "document_permissions", "audit_events"}
+CORE_TABLES = {
+    "users",
+    "documents",
+    "document_permissions",
+    "audit_events",
+    "refresh_tokens",
+}
 
 
 def test_migration_upgrade_check_and_downgrade(migration_database_url: str) -> None:

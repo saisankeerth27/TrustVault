@@ -3,6 +3,13 @@
 from app.models.audit_event import AuditEvent
 from app.models.document import Document
 from app.models.document_permission import DocumentPermission
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
 
-__all__ = ["AuditEvent", "Document", "DocumentPermission", "User"]
+__all__ = [
+    "AuditEvent",
+    "Document",
+    "DocumentPermission",
+    "RefreshToken",
+    "User",
+]

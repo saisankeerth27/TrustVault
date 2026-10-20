@@ -108,7 +108,7 @@ Design and implement the relational schema with SQLAlchemy 2.x models and an Ale
 - Alembic configuration (`backend/alembic.ini`, `backend/alembic/env.py`) and the initial migration `0001_initial_schema`.
 - Database connection/session module (`backend/app/db/`): URL normalization, lazy engine, session factory, FastAPI dependency.
 - RLS strategy documented in `docs/ARCHITECTURE.md` and `docs/DATABASE.md`. Policy scripts are deferred because RLS policy design depends on the Phase 3 authentication model.
-- `categories` and `refresh_tokens` tables are intentionally deferred: category is a nullable column on `documents` for now, and refresh tokens belong to Phase 3.
+- `categories` and `refresh_tokens` tables were intentionally deferred at the end of Phase 2: category is a nullable column on `documents` for now, and refresh tokens were implemented in Phase 3.
 
 **Dependencies**
 - Phase 1 approved.
@@ -135,38 +135,47 @@ feat(db): implement database schema and migrations
 
 ## Phase 3: Authentication and Roles
 
+**Status:** Complete — awaiting review. Verified locally against an isolated PostgreSQL instance; no deployment or Supabase migration was performed.
+
 **Objectives**
-Implement registration, login, JWT issuance, refresh token rotation, logout, role extraction, and authentication rate limiting.
+Implement registration, login, JWT issuance, rotating refresh sessions, logout, role enforcement, authentication rate limiting, and the frontend authentication experience.
 
 **Deliverables**
-- `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`.
-- Password hashing with bcrypt.
-- JWT access tokens with short TTL and opaque rotating refresh tokens.
-- Authentication middleware/dependency.
-- Role-based dependency helpers.
-- Rate limiting on auth endpoints.
+- `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, and `GET /api/v1/auth/me`.
+- bcrypt password hashing with a 12-character minimum and 72-byte maximum.
+- Short-lived HS256 access JWTs with issuer/audience validation and opaque rotating refresh tokens stored as SHA-256 hashes.
+- `refresh_tokens` model and migration `0002_add_refresh_tokens` with family-based reuse detection and revocation.
+- Authentication dependencies that verify JWT claims, active user status, and an active refresh-token family on every protected request.
+- Role dependencies for `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER`; fail-closed handling for unknown roles.
+- Origin allow-list checks on auth POSTs, HttpOnly path-scoped refresh cookies, and configurable production cookie policy.
+- In-memory login/registration rate limiting with `Retry-After`.
+- Account provisioning CLI that never prints passwords or hashes; public registration creates Viewers only.
+- Frontend in-memory access token, credentialed Axios client with shared refresh retry, auth provider, protected routes, role-gated admin route, forbidden state, login/logout UX, and current-user display.
+- Updated `.env.example`, `render.yaml`, README, architecture, database, requirements, implementation plan, threat model, and PROMPTS log.
 
 **Dependencies**
 - Phase 2 approved.
 
 **Acceptance Criteria**
-- Registration stores only hashed passwords.
-- Login returns valid access and refresh tokens.
-- Expired or tampered JWTs are rejected with 401.
-- Refresh token rotation invalidates the previous refresh token.
-- Role is encoded and validated on protected endpoints.
+- Registration stores only hashed passwords and always creates a Viewer.
+- Login returns a valid access token and sets a rotating HttpOnly refresh cookie.
+- Expired, tampered, wrong-issuer/audience, wrong-type, revoked-session, and disabled-account tokens are rejected with 401.
+- Refresh rotation invalidates the previous token; reuse revokes the entire family.
+- Logout revokes the session immediately, including existing access tokens.
+- Role checks use the current database role and fail closed.
+- Production settings reject a short/missing JWT secret, insecure cookies, invalid SameSite combinations, and wildcard CORS.
+- Auth logs contain no passwords, tokens, or email addresses.
 - Auth endpoints are rate limited.
 
 **Tests**
-- Unit tests for password hashing and verification.
-- Integration tests for register, login, refresh, logout.
-- Expired/tampered token rejection tests.
-- Rate limit behavior test.
-- Role extraction test.
+- 55 backend tests total, including registration, login, refresh, rotation/reuse, logout, current user, expired/tampered tokens, disabled accounts, role dependencies, rate limits, production config validation, and log redaction.
+- Full migration test applies `0001` and `0002`, runs `alembic check`, downgrades to base, and re-upgrades.
+- Frontend `npm run typecheck`, `npm run lint`, and `npm run build` pass.
+- Not tested: live Vercel/Render cookies, third-party cookie blocking, shared rate limiting, and Supabase migration.
 
 **Suggested Commit Message**
 ```
-feat: implement authentication with JWT and role-based access
+feat(auth): implement authentication and roles
 ```
 
 ---

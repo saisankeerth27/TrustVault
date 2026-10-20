@@ -1,13 +1,14 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented in Phase 2: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migration `backend/alembic/versions/0001_initial_schema.py`.
+This document describes the PostgreSQL schema implemented across Phases 2 and 3: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py` and `0002_add_refresh_tokens.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. No authentication, permission endpoints, or audit writer exist yet. The migration has **not** been applied to the Supabase project.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance, including the Phase 3 `refresh_tokens` table. Authentication and role enforcement exist; document permission endpoints and the audit writer do not. Migrations have **not** been applied to the Supabase project.
 
 ## Entity Relationships
 
 ```mermaid
 erDiagram
+    users ||--o{ refresh_tokens : owns
     users ||--o{ documents : owns
     users ||--o{ document_permissions : receives
     users ||--o{ document_permissions : grants
@@ -24,6 +25,17 @@ erDiagram
         varchar status
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    refresh_tokens {
+        uuid id PK
+        uuid user_id FK
+        uuid family_id
+        varchar token_hash UK
+        timestamptz expires_at
+        timestamptz created_at
+        timestamptz revoked_at
+        uuid replaced_by_id FK
     }
 
     documents {
@@ -80,9 +92,26 @@ erDiagram
 
 **Why a constrained string instead of a native enum?** Adding a role to a PostgreSQL enum requires `ALTER TYPE` and careful migration ordering; a `CHECK` constraint is simpler to evolve. The value is still validated by PostgreSQL, and Python `StrEnum` classes keep application code typed.
 
-**Why require `password_hash` now?** Authentication arrives in Phase 3, but a `NOT NULL` hash column guarantees no account can be created without a credential, even by a future bug or manual insert.
+**Why require `password_hash`?** The column is `NOT NULL`, and Phase 3 always stores a bcrypt hash. An account can never exist without a credential, even after a future bug or manual insert.
 
-**Email normalization.** The database requires the stored value to already be lowercase and trimmed. Normalization is performed before insert (Phase 3 will normalize input); the constraint prevents mixed-case duplicates from bypassing the unique index.
+**Email normalization.** The database requires the stored value to already be lowercase and trimmed. Normalization is performed before insert by Phase 3 auth services; the constraint prevents mixed-case duplicates from bypassing the unique index.
+
+## `refresh_tokens`
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | UUID | Primary key, default `gen_random_uuid()` |
+| `user_id` | UUID | Not null, FK `users.id` `ON DELETE CASCADE` |
+| `family_id` | UUID | Not null; groups a rotation chain |
+| `token_hash` | VARCHAR(71) | Not null, unique, `sha256:<64 hex>` |
+| `expires_at` | TIMESTAMPTZ | Not null |
+| `created_at` | TIMESTAMPTZ | Not null, default `now()` |
+| `revoked_at` | TIMESTAMPTZ | Nullable; set on rotation, logout, or reuse detection |
+| `replaced_by_id` | UUID | Nullable, self-FK `ON DELETE SET NULL` |
+
+**Hashed, rotating sessions.** The raw refresh token is returned only to the browser in an HttpOnly cookie. PostgreSQL stores `sha256:<hex>`; a database leak does not directly yield usable refresh tokens. Every refresh rotates the token, marks the old row revoked, and links it to the replacement. Reuse of an already-rotated token revokes every active token in the same family.
+
+**Indexes:** `ix_refresh_tokens_user_id`, `ix_refresh_tokens_family_id`, `ix_refresh_tokens_expires_at`, a partial `ix_refresh_tokens_active_family` on `family_id` `WHERE revoked_at IS NULL`, and a unique constraint on `token_hash`.
 
 ## `documents`
 
@@ -169,20 +198,21 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 
 ## RLS Strategy (Not Enabled)
 
-Row-Level Security is planned as defense-in-depth, not as the primary authorization mechanism. **No RLS policies are enabled in Phase 2.** The Phase 2 strategy:
+Row-Level Security is planned as defense-in-depth, not as the primary authorization mechanism. **No RLS policies are enabled.** Phase 3 keeps the backend on a single privileged database role; authentication establishes an application identity, not a per-request PostgreSQL identity. Because that role bypasses RLS, application-level authorization remains authoritative and policies are deferred until they can be tested meaningfully.
 
 1. The backend owns authorization and will enforce ownership, role, and per-document grants in application code (Phases 3 and 6).
-2. Whether the backend keeps a single privileged role or uses a per-request database identity is an authentication-design decision (Phase 3). Until that is settled, shipping untested policies would create false confidence.
+2. Phase 3 keeps a single privileged role; per-request database identities and tested RLS policies remain deferred.
 3. The frontend never connects to the database, and the service/privileged credential is never exposed to clients.
 4. In later phases, policies will be additive safety nets (for example, `documents` visible only to owner, administrator, or grant holder) and will be tested before being claimed as active.
 
-Until then, Phase 2 must not be described as having database-enforced access control.
+Until then, TrustVault must not be described as having database-enforced access control.
 
 ## Migrations
 
 - Alembic configuration: `backend/alembic.ini` (no credentials stored) and `backend/alembic/env.py`.
-- Initial migration: `backend/alembic/versions/0001_initial_schema.py` (revision `0001`).
-- The migration creates `pg_trgm`, then tables, constraints, and indexes. Its `downgrade()` drops the tables but deliberately leaves the shared `pg_trgm` extension installed.
+- Initial migration: `backend/alembic/versions/0001_initial_schema.py` (revision `0001`) creates `pg_trgm`, the four core tables, constraints, and indexes.
+- Phase 3 migration: `backend/alembic/versions/0002_add_refresh_tokens.py` (revision `0002`) adds `refresh_tokens` and its indexes.
+- `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`.
 
 Common commands (run from `backend/` with `DATABASE_URL` set):
 
@@ -215,7 +245,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint tests, one for the migration upgrade/check/downgrade/re-upgrade test. Tests never read `DATABASE_URL` and never contact Supabase.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 55 tests and never reads `DATABASE_URL` or contacts Supabase.
 
 Run the suite:
 
@@ -227,4 +257,4 @@ pytest
 
 ## Applying to Supabase
 
-The migration has **not** been applied to the Supabase project. To apply it, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.
+The migrations have **not** been applied to the Supabase project. To apply them, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.

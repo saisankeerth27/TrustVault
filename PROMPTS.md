@@ -118,3 +118,39 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 - **Commit hash:** `f85c6633154dc08af547e184dc9a31f56d914c10`
 - **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/f85c6633154dc08af547e184dc9a31f56d914c10
 - **Human review and decision:** Awaiting human review and Phase 2 approval. Phase 3 must not begin until approval is given.
+
+---
+
+## 2026-10-20 — Phase 3: Authentication, Roles, and Session Security
+
+- **Date and phase:** 2026-10-20 — Phase 3 (Authentication and Roles)
+- **Objective:** Implement database-backed authentication and role enforcement end to end, including secure password handling, short-lived access tokens, rotating refresh sessions, logout/revocation, auth rate limiting, account provisioning, real frontend login/logout/protected-state UX, tests, configuration, and documentation. Stop after one verified commit and push for human review before Phase 4.
+- **Prompt / instruction summary:** The human approved Phase 3 and required: JWT access tokens plus opaque rotating refresh tokens stored as hashes; bcrypt password hashing with strong cost; registration, login, refresh, logout, and `GET /api/v1/auth/me`; all required role algorithms and deny-by-default role dependencies; `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER` names; public registration restricted to Viewer and elevated accounts created by a CLI; rate limiting; secure cookies/CSRF protections; security tests for expired/tampered tokens, revoked refresh tokens, and unauthorized role access; frontend login/logout/current-user/protected routes/forbidden state without implementing document APIs; production env/render docs; README/architecture/requirement/threat/PROMPTS updates; full verification. The prompt required exactly one final commit (`feat(auth): implement authentication and roles`), no intermediate commits or docs commit, one push, and stopping for approval before Phase 4.
+- **Files or code produced:**
+  - Backend auth core: `app/core/security.py` (bcrypt, JWT create/decode, refresh-token generation/hash/expiry), `app/core/rate_limit.py`, and auth settings/validators in `app/core/config.py`.
+  - Data/service/auth API: `app/models/refresh_token.py`, `app/services/auth.py`, `app/schemas/auth.py`, `app/api/deps.py`, `app/api/auth.py`, plus router registration and app description updates.
+  - Migration: `backend/alembic/versions/0002_add_refresh_tokens.py` with hashed tokens, families, self-reference, expiry/revocation, and indexes.
+  - Provisioning: `backend/scripts/create_user.py` and `backend/scripts/__init__.py`; supports interactive password entry or `TRUSTVAULT_USER_PASSWORD`, refuses duplicates, and never prints secrets.
+  - Tests: `tests/auth_helpers.py`, `test_auth.py`, `test_auth_roles.py`, `test_auth_rate_limit.py`, `test_auth_config.py`, updated `conftest.py`, `test_models.py`, and `test_migrations.py`.
+  - Frontend: `src/auth/tokenStore.ts`, `src/auth/useAuth.ts`, `src/auth/AuthContext.tsx`, `src/services/auth.ts`, `src/types/auth.ts`, `src/lib/roles.ts`, `src/components/AuthLoadingScreen.tsx`, `ProtectedRoute.tsx`, `RequireRole.tsx`, `ForbiddenState.tsx`, `src/pages/AdminPage.tsx`; updated Axios client, router, layout, login, dashboard, documents, not-found, and page title.
+  - Configuration/docs: `backend/.env.example`, `render.yaml`, `README.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/REQUIREMENTS.md`, `docs/IMPLEMENTATION_PLAN.md`, `THREATS.md`, and this entry.
+- **Tests and verification performed:**
+  - `pytest` — **55 passed** after fixing the logging capture issue. Coverage includes registration, login, refresh rotation, family reuse revocation, logout, current user, expired/tampered/wrong-issuer/wrong-audience/wrong-type tokens, disabled accounts, role dependencies, rate limiting, production configuration validation, and log redaction.
+  - The migration test applied `0001` and `0002`, ran `alembic check`, downgraded to base, and re-upgraded against an ephemeral PostgreSQL 18.6 instance.
+  - `npm run typecheck` — passed.
+  - `npm run lint` (oxlint) — 0 warnings, 0 errors after splitting the auth context/hook for Fast Refresh.
+  - `npm run build` — passed (TypeScript plus Vite production build).
+  - Not performed: Supabase migration, Vercel/Render deployment, live cross-site cookie verification, third-party cookie testing, and production rate-limiter testing. No credential was used or committed.
+- **Issues discovered:**
+  - The first full test run reported 54 passed and 1 failed: `test_auth_logs_do_not_contain_secrets_or_email` saw an empty `caplog`.
+  - Instrumentation showed the `trustvault.auth` logger was disabled only after the Alembic test fixture ran. `alembic/env.py` called `fileConfig(config.config_file_name)` with the default `disable_existing_loggers=True`, disabling application loggers.
+  - The frontend auth context initially exported both a component and a hook from one file, triggering an oxlint Fast Refresh warning.
+  - Existing docs and HTML contained mojibake around some punctuation and a page-title separator.
+- **Corrections made:**
+  - Changed `alembic/env.py` to `fileConfig(config.config_file_name, disable_existing_loggers=False)` and re-ran the targeted test, then the full suite: 55 passed.
+  - Split the auth context definition/hook into `useAuth.ts`, leaving `AuthContext.tsx` exporting only the provider; typecheck, lint, and build now pass cleanly.
+  - Updated the page title and Phase 3 UI copy, removing stale Phase 1 placeholders.
+  - Preserved the one-commit constraint: commit hash and GitHub link remain pending in this entry and are reported in the final response after the single commit is created.
+- **Commit hash:** pending
+- **GitHub link:** pending
+- **Human review and decision:** Awaiting human review and Phase 3 approval. Phase 4 must not begin until approval is given.

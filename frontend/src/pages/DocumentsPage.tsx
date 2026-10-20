@@ -11,11 +11,11 @@ export function DocumentsPage() {
       <PageHeader
         eyebrow="Documents"
         title="Documents"
-        description="Upload, organize, search, and manage documents. This page is an intentional empty state for Phase 1."
+        description="Upload, organize, search, and manage documents. Authentication is active, but this page remains an intentional empty state until document APIs arrive."
         actions={
           <Button disabled title="Uploads are implemented in Phase 4">
             <Upload className="size-4" aria-hidden="true" />
-            Upload · Phase 4
+            Upload in Phase 4
           </Button>
         }
       />
@@ -29,7 +29,8 @@ export function DocumentsPage() {
             <h2 className="text-lg font-semibold tracking-tight">No documents to show</h2>
             <p className="mx-auto max-w-md text-sm leading-6 text-muted-foreground">
               Document uploads, storage, search, and per-document permissions are planned for
-              Phases 4 through 6. No sample data or fake documents are displayed here.
+              Phases 4 through 6. Your authenticated session does not expose document data yet,
+              and no sample or fake documents are displayed here.
             </p>
           </div>
           <Link to="/dashboard" className={buttonVariants({ variant: 'outline' })}>

@@ -1,4 +1,6 @@
-import axios from 'axios'
+import axios, { type InternalAxiosRequestConfig } from 'axios'
+import { getAccessToken, setAccessToken } from '@/auth/tokenStore'
+import type { AuthResponse } from '@/types/auth'
 import type { ApiErrorEnvelope } from '@/types/api'
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? ''
@@ -9,6 +11,16 @@ export const isApiConfigured = apiBaseUrl.length > 0
 export const apiClient = axios.create({
   baseURL: apiBaseUrl || undefined,
   timeout: 10_000,
+  withCredentials: true,
+  headers: {
+    Accept: 'application/json',
+  },
+})
+
+const refreshClient = axios.create({
+  baseURL: apiBaseUrl || undefined,
+  timeout: 10_000,
+  withCredentials: true,
   headers: {
     Accept: 'application/json',
   },
@@ -19,6 +31,69 @@ if (!isApiConfigured && import.meta.env.DEV) {
     '[TrustVault] VITE_API_BASE_URL is not set. Copy frontend/.env.example to frontend/.env to enable API requests.',
   )
 }
+
+let refreshPromise: Promise<AuthResponse> | null = null
+
+function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    return navigator.locks.request('trustvault-refresh', task)
+  }
+  return task()
+}
+
+export function refreshAccessToken(): Promise<AuthResponse> {
+  if (!refreshPromise) {
+    refreshPromise = withRefreshLock(() =>
+      refreshClient.post<AuthResponse>('/api/v1/auth/refresh'),
+    )
+      .then(({ data }) => {
+        setAccessToken(data.access_token)
+        return data
+      })
+      .finally(() => {
+        refreshPromise = null
+      })
+  }
+
+  return refreshPromise
+}
+
+apiClient.interceptors.request.use((config) => {
+  const token = getAccessToken()
+  if (token) {
+    config.headers.set('Authorization', `Bearer ${token}`)
+  }
+  return config
+})
+
+type RetryableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean }
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error: unknown) => {
+    if (!axios.isAxiosError(error) || error.response?.status !== 401) {
+      throw error
+    }
+
+    const config = error.config as RetryableRequestConfig | undefined
+    const url = config?.url ?? ''
+
+    if (!config || config._retry || url.includes('/api/v1/auth/')) {
+      throw error
+    }
+
+    config._retry = true
+
+    try {
+      const session = await refreshAccessToken()
+      config.headers.set('Authorization', `Bearer ${session.access_token}`)
+      return apiClient(config)
+    } catch (refreshError) {
+      setAccessToken(null)
+      throw refreshError
+    }
+  },
+)
 
 export function getApiErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {

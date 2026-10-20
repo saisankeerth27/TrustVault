@@ -4,7 +4,7 @@
 
 TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and Wasabi S3-compatible private object storage. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 2):** the database schema, models, migrations, and connection module exist and are verified against an isolated PostgreSQL instance. Authentication, storage, document APIs, permission endpoints, and the audit write path are **not** implemented. Sections below label planned behavior explicitly. TrustVault has **no live deployment** and the migration has **not** been applied to the Supabase project.
+> **Implementation status (Phase 3):** authentication, database-backed roles, rotating refresh sessions, and the protected frontend routes are implemented and verified locally. Document storage, document APIs, permission endpoints, and the audit write path are **not** implemented. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
 
 ### Architecture Diagram
 
@@ -17,7 +17,7 @@ graph TB
 
     subgraph "API Zone — Trust Boundary"
         API["FastAPI Backend<br/>Python 3.13<br/>SQLAlchemy 2.x (sync)<br/><i>Hosted on Render</i>"]
-        AuthMW["JWT Auth Middleware — Phase 3"]
+        AuthMW["JWT Auth + Session Checks<br/>Phase 3"]
         PermCheck["Permission Checker — Phase 6"]
         AuditSvc["Audit Writer — Phase 7"]
         FileVal["File Validator — Phase 4"]
@@ -57,7 +57,7 @@ graph TB
 | 0 | Requirements, architecture, threat model, docs | Complete |
 | 1 | Frontend/backend scaffold, health endpoint, CORS, tests | Complete |
 | 2 | Database models, initial migration, connection module | Complete (verified locally) |
-| 3 | Authentication, roles, refresh tokens | Planned |
+| 3 | Authentication, roles, refresh tokens | Complete (verified locally) |
 | 4 | Wasabi storage, validated uploads, proxied downloads | Planned |
 | 5 | Document management and search | Planned |
 | 6 | Permissions and revocation | Planned |
@@ -75,11 +75,11 @@ The implemented schema is documented in full in [DATABASE.md](DATABASE.md).
 
 The React SPA runs entirely in the user's browser. It is responsible for:
 
-- **Rendering the UI** — login, registration, document management, permission management, and audit log views.
+- **Rendering the UI** — login, authenticated dashboard, role-gated administrator area, and future document, permission, and audit views.
 - **Client-side routing** — single-page navigation via React Router.
 - **Client-side form validation** — for user experience only. All validation is re-performed server-side.
 - **API communication** — all data interactions go through the FastAPI backend via HTTPS REST calls using a centralized Axios client.
-- **Token handling** — Phase 3 will store the access token securely (httpOnly cookie preferred, memory fallback) and attach it to requests.
+- **Token handling** — the access token is held in memory only; the rotating refresh token stays in an HttpOnly cookie. Axios sends credentials and retries an expired access token through one shared refresh request.
 - **UI state management** — loading states, error messages, and user feedback.
 
 **The frontend NEVER:**
@@ -94,11 +94,14 @@ The React SPA runs entirely in the user's browser. It is responsible for:
 
 The backend is the **intended sole enforcement point** for security. It is responsible for the following. Items marked *planned* are not implemented yet.
 
-### Authentication (planned — Phase 3)
-- Registration with password hashing (bcrypt).
-- Login returning a JWT access token plus a rotating opaque refresh token.
-- JWT validation dependency on protected endpoints.
-- Rate limiting on authentication endpoints.
+### Authentication (implemented — Phase 3)
+- Public registration always creates a `VIEWER`; elevated roles are provisioned with `scripts/create_user.py`.
+- Passwords are hashed with bcrypt (cost configurable; production default 12) with a 12-character minimum and 72-byte maximum. Unknown accounts perform dummy-hash work and return the same generic error.
+- Login returns a short-lived HS256 JWT access token and sets an opaque rotating refresh token in an HttpOnly cookie scoped to `/api/v1/auth`.
+- Refresh tokens are stored only as SHA-256 hashes and grouped by session family. Reuse of a rotated token revokes the whole family.
+- Every protected request validates the JWT signature, issuer, audience, account status, and an active refresh-token family. Logout, disablement, and reuse detection therefore invalidate access immediately.
+- Auth POSTs enforce an Origin allow-list, and login/registration use a bounded in-memory rate limiter (10 attempts per 60 seconds by default, client IP plus normalized email for login).
+- `GET /api/v1/auth/me` returns the trusted database user; authorization uses the current database role, not the token's role claim.
 
 ### Authorization (planned — Phase 6)
 - Every document request passes through a permission checker.
@@ -132,11 +135,12 @@ The backend is the **intended sole enforcement point** for security. It is respo
 
 ## 5. Database Architecture (Implemented)
 
-The Phase 2 schema contains four tables. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
+The Phase 3 schema contains five tables. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
 
 | Table | Purpose |
 |-------|---------|
 | `users` | Accounts, hashed passwords, role, status, timestamps |
+| `refresh_tokens` | Hashed opaque refresh tokens, rotation families, expiry, revocation |
 | `documents` | Metadata: owner, name, category, description, storage key, MIME type, size, checksum, soft-delete timestamp |
 | `document_permissions` | Per-user, per-document grant history (`READ`/`EDIT`) with revocation timestamps |
 | `audit_events` | Append-oriented event records with action, outcome, JSONB details, and hash-chain columns |
@@ -146,7 +150,7 @@ The Phase 2 schema contains four tables. Full column, constraint, and index deta
 - **UUID primary keys** generated by PostgreSQL `gen_random_uuid()`. UUIDs are not a security control; authorization never depends on ID secrecy.
 - **Roles and statuses as constrained strings.** `users.role` is checked against `ADMINISTRATOR`, `DOCUMENT_OWNER`, `VIEWER`; `users.status` against `ACTIVE`, `DISABLED`. Constrained strings avoid the migration friction of native PostgreSQL enums while still being validated at the database. Python-side `StrEnum` values live in `app/models/enums.py`.
 - **Email normalization.** `users.email` is stored lowercase and must already be lowercase (check constraint), with a unique constraint. Normalization happens before insert; the database guarantees no mixed-case duplicates.
-- **Required `password_hash`.** Even though authentication arrives in Phase 3, the column is `NOT NULL`, so an account can never exist without a hashed credential.
+- **Required `password_hash`.** The column is `NOT NULL`; Phase 3 always stores a bcrypt hash, so an account can never exist without a credential.
 - **Explicit owner FK.** `documents.owner_id` references `users.id` with `ON DELETE RESTRICT`; a user who owns documents cannot be deleted until ownership is transferred.
 - **Internal storage keys only.** `documents.storage_key` is unique, must start with `documents/`, and must not contain a URL scheme, preventing accidental public-URL storage.
 - **Required checksum.** `documents.checksum` is a required SHA-256 hex string for integrity checks in later phases.
@@ -157,7 +161,7 @@ The Phase 2 schema contains four tables. Full column, constraint, and index deta
 
 ### Deferred Tables
 
-`categories` and `refresh_tokens` are deferred. Category is a nullable `documents.category` column until Phase 5 decides whether a lookup table is warranted. Refresh tokens belong to the Phase 3 authentication design.
+`categories` remains deferred. Category is a nullable `documents.category` column until Phase 5 decides whether a lookup table is warranted. `refresh_tokens` is now implemented by migration `0002`.
 
 ### Connection Management
 
@@ -196,7 +200,7 @@ The frontend **never** receives a direct Wasabi URL.
 
 ---
 
-## 7. Authentication Flow (Planned — Phase 3)
+## 7. Authentication Flow (Implemented — Phase 3)
 
 ```mermaid
 sequenceDiagram
@@ -206,64 +210,57 @@ sequenceDiagram
     participant D as Supabase PostgreSQL
 
     U->>F: Enter credentials
-    F->>B: POST /auth/login {email, password}
-    B->>D: Query user by email
-    D-->>B: User record (hashed password)
-    B->>B: Verify password (bcrypt)
+    F->>B: POST /api/v1/auth/login {email, password}
+    B->>D: Query user by normalized email
+    D-->>B: User record (bcrypt hash, role, status)
+    B->>B: Verify password / dummy hash for unknown accounts
     alt Valid credentials
-        B->>D: Create refresh token record
-        B-->>F: 200 {access_token, refresh_token}
-        F->>F: Store tokens securely
-    else Invalid credentials
-        B-->>F: 401 Invalid credentials
+        B->>D: Create refresh-token family record (store SHA-256 hash)
+        B-->>F: 200 {access_token, user} + HttpOnly refresh cookie
+        F->>F: Keep access token in memory
+    else Invalid credentials or disabled account
+        B-->>F: 401 Invalid email or password
     end
 
-    Note over F,B: Subsequent requests
-    F->>B: GET /documents (Authorization: Bearer {jwt})
-    B->>B: Validate JWT signature + expiration
-    alt Valid JWT
-        B->>B: Extract user_id, role from claims
-        B->>B: Proceed to authorization check
-    else Invalid/Expired JWT
-        B-->>F: 401 Token expired
-        F->>B: POST /auth/refresh {refresh_token}
+    Note over F,B: Subsequent API requests
+    F->>B: Authorization: Bearer {jwt} + refresh cookie
+    B->>B: Verify signature, issuer, audience, type, expiry
+    B->>D: Load user + active refresh session
+    alt Valid and session active
+        B->>B: Proceed using the current database role
+    else Invalid, expired, revoked, or disabled
+        B-->>F: 401
+        F->>B: POST /api/v1/auth/refresh (cookie)
         B->>D: Validate + rotate refresh token
-        B-->>F: 200 {new_access_token, new_refresh_token}
+        B-->>F: 200 {new_access_token, user} + rotated cookie
     end
 ```
 
-### Token Details (Planned)
+### Token Details (Implemented)
 
-- **Access token:** JWT, short-lived (15 minutes default), containing `user_id`, `role`, `exp`.
-- **Refresh token:** opaque string stored in the database, longer-lived, single-use with rotation.
-- **Password hashing:** bcrypt with a configurable work factor.
+- **Access token:** HS256 JWT, 15-minute default lifetime, with `sub`, `role`, `sid`, `type=access`, `iat`, `nbf`, `exp`, and `jti`. Issuer and audience are validated.
+- **Refresh token:** 256-bit opaque value, stored only as `sha256:<64 hex>`, 7-day default lifetime, single-use rotation within a family. Reuse revokes the family.
+- **Cookie:** `trustvault_refresh`, `HttpOnly`, path `/api/v1/auth`, `SameSite`/`Secure` from configuration. Production requires Secure; cross-site Vercel/Render needs `SameSite=None`.
+- **Password hashing:** bcrypt with configurable cost (default 12). Passwords must be 12–72 UTF-8 bytes.
+- **Revocation:** access tokens are tied to the refresh-token family and checked against current session state on every protected request.
 
----
-
-## 8. Per-Request Authorization Flow (Planned — Phase 6)
+## 8. Per-Request Authentication and Authorization (Phase 3)
 
 ```mermaid
 flowchart TD
-    A[Incoming Request] --> B{JWT Present?}
+    A[Incoming Protected Request] --> B{Bearer token present?}
     B -->|No| C[401 Unauthorized]
-    B -->|Yes| D{JWT Valid?}
+    B -->|Yes| D{JWT valid and type=access?}
     D -->|No| C
-    D -->|Yes| E[Extract user_id + role]
-    E --> F{Is Admin?}
-    F -->|Yes| G[Access Granted]
-    F -->|No| H{Is Document Owner?}
-    H -->|Yes| G
-    H -->|No| I{Has Active Grant?}
-    I -->|No| J[403 Forbidden + Audit]
-    I -->|Yes| K{Permission Level Sufficient?}
-    K -->|No| J
-    K -->|Yes| G
-    G --> L[Execute Operation + Audit]
+    D -->|Yes| E[Load user and refresh family from database]
+    E --> F{User active and session active?}
+    F -->|No| C
+    F -->|Yes| G{Endpoint role requirement met?}
+    G -->|No| H[403 Forbidden]
+    G -->|Yes| I[Execute endpoint]
 ```
 
-The backend verifies access on **every** request; no cached authorization persists beyond an individual call.
-
----
+The backend verifies identity and session state on **every** protected request. Role checks use the current database value and fail closed for unknown roles. Document-level ownership and READ/EDIT grants are not implemented yet; those checks arrive with the document endpoints in Phases 5–6.
 
 ## 9. Upload and Download Flows (Planned — Phases 4–5)
 
@@ -395,8 +392,8 @@ DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@db.YOUR_PROJECT_REF.supabase.co
 DB_POOL_SIZE=5
 DB_MAX_OVERFLOW=10
 
-# Authentication (Phase 3)
-JWT_SECRET=your-random-jwt-secret-min-32-chars
+# Authentication (Phase 3, implemented)
+JWT_SECRET=replace-me
 JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=15
 JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
@@ -432,7 +429,7 @@ The FastAPI backend is intended to be the primary enforcement point. Every endpo
 
 ### Secondary Defense: Row-Level Security (Deferred)
 
-RLS is defense-in-depth, not the primary control. **RLS is not enabled in Phase 2.** The backend currently connects with a single privileged role; there is no per-request database identity. Policy design depends on the Phase 3 authentication model (whether the backend keeps using a privileged role or assumes a per-user database role), so policies are deferred rather than shipped untested.
+RLS is defense-in-depth, not the primary control. **RLS is not enabled.** Phase 3 keeps the backend on a single privileged database role; authentication issues application-level identities, not per-request PostgreSQL identities. Because that role bypasses RLS, application authorization remains authoritative and policies are deferred until they can be tested meaningfully.
 
 Planned policies:
 
@@ -444,7 +441,7 @@ Planned policies:
 | `audit_events` | INSERT-only for the backend role; no UPDATE/DELETE |
 | `refresh_tokens` (Phase 3) | Accessible only by the backend role |
 
-**Important:** if the backend continues to use a privileged role, that role bypasses RLS by design, and application-level authorization remains authoritative. Phase 2 must not be described as having database-enforced access control.
+**Important:** because the backend uses a privileged role, that role bypasses RLS by design, and application-level authorization remains authoritative. TrustVault must not be described as having database-enforced access control.
 
 ---
 
@@ -454,12 +451,12 @@ Planned policies:
 |----------|----------|----------|
 | Wasabi S3 unreachable (Phase 4) | 503 Service Unavailable | Upload/download fails cleanly; no partial metadata |
 | Supabase DB unreachable | 503 Service Unavailable | Requests fail; no silent fallback |
-| JWT missing/expired/invalid (Phase 3) | 401 Unauthorized | Request rejected |
+| JWT missing/expired/invalid, revoked session, or disabled account | 401 Unauthorized | Request rejected |
 | Permission denied (Phase 6) | 403 Forbidden | Generic message; no metadata leaked; audit event once Phase 7 exists |
 | Document not found | 404 Not Found | Generic message; no ownership information |
 | File too large (Phase 4) | 413 Payload Too Large | Rejected before storage |
 | Invalid file type (Phase 4) | 422 Unprocessable Entity | Rejected with allowed-types list |
-| Rate limit exceeded (Phase 3) | 429 Too Many Requests | Client waits and retries |
+| Auth rate limit exceeded | 429 Too Many Requests | `Retry-After` returned; client waits and retries |
 | Unexpected server error | 500 Internal Server Error | Logged server-side; generic client message |
 
 ---
@@ -467,3 +464,16 @@ Planned policies:
 ## 16. Health Check
 
 `GET /health` currently reports **process health only**: `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`. It does **not** query PostgreSQL or Wasabi, and a test asserts that it exposes no configuration markers. Database and storage connectivity checks will be added when those integrations exist.
+
+---
+
+## 17. Phase 3 Implementation Notes (Verified)
+
+- **Auth endpoints:** `register`, `login`, `refresh`, `logout`, and `me` are implemented under `/api/v1/auth`.
+- **Session design:** access tokens stay in frontend memory; refresh tokens are hashed in PostgreSQL and rotated through an HttpOnly cookie. Family reuse detection revokes the family.
+- **Immediate revocation:** protected requests check the user's status and active refresh family on every call, so logout/disablement takes effect without waiting for JWT expiry.
+- **Role model:** `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER` are stored in PostgreSQL. Public registration creates Viewers only; elevated roles come from the provisioning CLI.
+- **CSRF and CORS:** auth POSTs enforce an exact Origin allow-list, CORS never combines credentials with a wildcard, and the refresh cookie is path-scoped. A per-session CSRF token is not implemented.
+- **Rate limiting:** an in-memory sliding window limits login/register attempts per process. A multi-instance deployment requires a shared store.
+- **Tests:** 55 backend tests cover auth flows, rotation/reuse, disabled accounts, role dependencies, rate limits, production config validation, and secret-free logging. The suite uses an ephemeral PostgreSQL instance.
+- **Not implemented:** document authorization, audit writes, RLS, MFA, account lockout, idle timeouts, and production deployment verification.

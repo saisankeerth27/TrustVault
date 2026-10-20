@@ -1,5 +1,11 @@
 from app.db.base import Base
-from app.models import AuditEvent, Document, DocumentPermission, User  # noqa: F401
+from app.models import (  # noqa: F401
+    AuditEvent,
+    Document,
+    DocumentPermission,
+    RefreshToken,
+    User,
+)
 
 
 def test_all_core_tables_are_registered() -> None:
@@ -8,6 +14,7 @@ def test_all_core_tables_are_registered() -> None:
         "documents",
         "document_permissions",
         "audit_events",
+        "refresh_tokens",
     }
 
 
@@ -65,3 +72,32 @@ def test_audit_events_use_set_null_foreign_keys() -> None:
 
     assert foreign_keys["actor_id"] == "SET NULL"
     assert foreign_keys["document_id"] == "SET NULL"
+
+
+def test_refresh_tokens_store_hashes_and_cascade_with_users() -> None:
+    table = Base.metadata.tables["refresh_tokens"]
+
+    assert {
+        "id",
+        "user_id",
+        "family_id",
+        "token_hash",
+        "expires_at",
+        "created_at",
+        "revoked_at",
+        "replaced_by_id",
+    } == set(table.columns.keys())
+
+    foreign_keys = {
+        fk.parent.name: fk.ondelete for fk in table.foreign_key_constraints for fk in fk.elements
+    }
+    assert foreign_keys["user_id"] == "CASCADE"
+    assert foreign_keys["replaced_by_id"] == "SET NULL"
+
+    index_names = {index.name for index in table.indexes}
+    assert {
+        "ix_refresh_tokens_user_id",
+        "ix_refresh_tokens_family_id",
+        "ix_refresh_tokens_expires_at",
+        "ix_refresh_tokens_active_family",
+    } <= index_names

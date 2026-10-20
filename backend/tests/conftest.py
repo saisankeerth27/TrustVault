@@ -6,12 +6,34 @@ from uuid import uuid4
 import embedded_postgres
 import pytest
 from alembic import command
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
+from app.core.config import get_settings
+from app.core.rate_limit import auth_rate_limiter
+from app.db.session import get_db
+from app.main import app
 from tests.db_helpers import alembic_config
+
+TEST_JWT_SECRET = "test-jwt-secret-for-trustvault-phase-three-0123456789"
+
+
+@pytest.fixture(autouse=True)
+def auth_test_settings(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    monkeypatch.setenv("JWT_SECRET", TEST_JWT_SECRET)
+    monkeypatch.setenv("BCRYPT_ROUNDS", "4")
+    monkeypatch.setenv("AUTH_RATE_LIMIT_ATTEMPTS", "10")
+    monkeypatch.setenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "60")
+    get_settings.cache_clear()
+    auth_rate_limiter.reset()
+
+    yield
+
+    auth_rate_limiter.reset()
+    get_settings.cache_clear()
 
 
 @pytest.fixture(scope="session")
@@ -69,3 +91,16 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
         if transaction.is_active:
             transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def api_client(db_session: Session) -> Generator[TestClient, None, None]:
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.pop(get_db, None)

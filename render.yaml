@@ -22,3 +22,29 @@ services:
         value: "5"
       - key: DB_MAX_OVERFLOW
         value: "10"
+      # Set JWT_SECRET to a cryptographically random value of at least 32 characters
+      # in the Render dashboard. Never commit the real value.
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_ISSUER
+        value: trustvault
+      - key: JWT_AUDIENCE
+        value: trustvault-api
+      - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "15"
+      - key: JWT_REFRESH_TOKEN_EXPIRE_DAYS
+        value: "7"
+      - key: BCRYPT_ROUNDS
+        value: "12"
+      # Vercel and Render are cross-site by default, so the refresh cookie must be
+      # Secure and SameSite=None. The backend still enforces an Origin allow-list.
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
+      - key: AUTH_COOKIE_SAMESITE
+        value: none
+      - key: AUTH_RATE_LIMIT_ATTEMPTS
+        value: "10"
+      - key: AUTH_RATE_LIMIT_WINDOW_SECONDS
+        value: "60"

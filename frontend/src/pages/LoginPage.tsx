@@ -1,33 +1,64 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { ArrowRight, LockKeyhole, ShieldCheck } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { ArrowRight, LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
+import { useAuth } from '@/auth/useAuth'
+import { AuthLoadingScreen } from '@/components/AuthLoadingScreen'
 import { BrandMark } from '@/components/BrandMark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { getApiErrorMessage } from '@/services/api'
 
 const loginSchema = z.object({
   email: z.string().trim().email({ message: 'Enter a valid email address.' }),
-  password: z.string().min(8, { message: 'Password must be at least 8 characters.' }),
+  password: z.string().min(1, { message: 'Enter your password.' }),
 })
 
 type LoginFormValues = z.infer<typeof loginSchema>
 
+function redirectPathFrom(state: unknown): string {
+  if (
+    state &&
+    typeof state === 'object' &&
+    'from' in state &&
+    typeof state.from === 'string' &&
+    state.from.startsWith('/') &&
+    !state.from.startsWith('//')
+  ) {
+    return state.from
+  }
+  return '/dashboard'
+}
+
 export function LoginPage() {
-  const [notice, setNotice] = useState<string | null>(null)
+  const { status, login } = useAuth()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [serverError, setServerError] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
     setError,
     clearErrors,
   } = useForm<LoginFormValues>({
     defaultValues: { email: '', password: '' },
   })
 
-  const onSubmit = (values: LoginFormValues) => {
+  const destination = redirectPathFrom(location.state)
+
+  if (status === 'loading') {
+    return <AuthLoadingScreen />
+  }
+
+  if (status === 'authenticated') {
+    return <Navigate to={destination} replace />
+  }
+
+  const onSubmit = async (values: LoginFormValues) => {
     clearErrors()
+    setServerError(null)
     const result = loginSchema.safeParse(values)
 
     if (!result.success) {
@@ -40,9 +71,12 @@ export function LoginPage() {
       return
     }
 
-    setNotice(
-      'Authentication is not implemented yet. Sign-in, sessions, and roles arrive in Phase 3.',
-    )
+    try {
+      await login(result.data)
+      navigate(destination, { replace: true })
+    } catch (error) {
+      setServerError(getApiErrorMessage(error))
+    }
   }
 
   return (
@@ -51,7 +85,7 @@ export function LoginPage() {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.18),transparent_45%),radial-gradient(circle_at_80%_70%,rgba(255,255,255,0.12),transparent_40%)]" />
         <div className="relative">
           <Link
-            to="/dashboard"
+            to="/login"
             className="inline-flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
           >
             <span className="flex size-11 items-center justify-center rounded-xl bg-white/15">
@@ -68,29 +102,30 @@ export function LoginPage() {
 
         <div className="relative max-w-md space-y-6">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">
-            Access enforced by the backend
+            Authentication is live
           </p>
           <h1 className="text-3xl font-semibold leading-tight tracking-tight">
             Share documents with confidence, not hope.
           </h1>
           <p className="text-sm leading-6 text-white/80">
-            TrustVault is designed around named-user, per-document permissions and a
-            tamper-evident audit trail. Frontend controls are never the security boundary.
+            TrustVault uses short-lived access tokens and rotating, server-side sessions. Named-user
+            roles are checked by the backend on every protected request.
           </p>
           <ul className="space-y-3 text-sm text-white/85">
             <li className="flex items-start gap-3">
               <LockKeyhole className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Every request is authorized server-side.
+              Refresh credentials stay in an HttpOnly cookie and never enter browser storage.
             </li>
             <li className="flex items-start gap-3">
               <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Uploads, downloads, and permission changes are audited.
+              Disabling an account or signing out invalidates existing sessions.
             </li>
           </ul>
         </div>
 
         <p className="relative text-xs text-white/60">
-          Phase 1 scaffold · No production authentication exists yet.
+          Accounts are provisioned by an administrator. Public registration creates Viewer
+          accounts only.
         </p>
       </section>
 
@@ -106,12 +141,21 @@ export function LoginPage() {
             </p>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Sign in</h1>
             <p className="text-sm leading-6 text-muted-foreground">
-              This form is a Phase 1 placeholder. Authentication is intentionally not connected
-              to a backend yet.
+              Use the account provisioned for you. Contact an administrator if you need access or
+              an elevated role.
             </p>
           </div>
 
           <form className="space-y-5" onSubmit={handleSubmit(onSubmit)} noValidate>
+            {serverError ? (
+              <div
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+              >
+                {serverError}
+              </div>
+            ) : null}
+
             <div className="space-y-2">
               <label htmlFor="email" className="text-sm font-medium">
                 Email address
@@ -120,7 +164,10 @@ export function LoginPage() {
                 id="email"
                 type="email"
                 autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
                 placeholder="you@example.com"
+                disabled={isSubmitting}
                 aria-invalid={errors.email ? true : undefined}
                 aria-describedby={errors.email ? 'email-error' : undefined}
                 {...register('email')}
@@ -140,7 +187,8 @@ export function LoginPage() {
                 id="password"
                 type="password"
                 autoComplete="current-password"
-                placeholder="At least 8 characters"
+                placeholder="Enter your password"
+                disabled={isSubmitting}
                 aria-invalid={errors.password ? true : undefined}
                 aria-describedby={errors.password ? 'password-error' : undefined}
                 {...register('password')}
@@ -152,27 +200,24 @@ export function LoginPage() {
               ) : null}
             </div>
 
-            <Button type="submit" className="w-full" size="lg">
-              Continue
-              <ArrowRight className="size-4" aria-hidden="true" />
+            <Button type="submit" className="w-full" size="lg" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+                  Signing in...
+                </>
+              ) : (
+                <>
+                  Continue
+                  <ArrowRight className="size-4" aria-hidden="true" />
+                </>
+              )}
             </Button>
           </form>
 
-          <div
-            role="status"
-            aria-live="polite"
-            className={notice ? 'rounded-lg border border-accent bg-accent/60 p-4 text-sm' : 'sr-only'}
-          >
-            {notice}
-          </div>
-
-          <p className="text-sm text-muted-foreground">
-            <Link
-              to="/dashboard"
-              className="font-medium text-primary underline-offset-4 hover:underline"
-            >
-              Return to the dashboard
-            </Link>
+          <p className="text-xs leading-5 text-muted-foreground">
+            Access is rate limited. Repeated failed attempts are rejected temporarily. If you
+            believe an account was compromised, contact an administrator immediately.
           </p>
         </div>
       </section>
