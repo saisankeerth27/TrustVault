@@ -597,6 +597,31 @@ def test_signed_checkpoint_verification_staleness_and_truncation(
     assert "shorter" in truncated.checkpoint.message
 
 
+def test_checkpoint_creation_refuses_to_replace_newer_checkpoint(
+    api_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_checkpoint(monkeypatch, tmp_path)
+    settings = get_settings()
+
+    assert register(api_client, email=unique_email("guard-one")).status_code == 201
+    assert register(api_client, email=unique_email("guard-two")).status_code == 201
+    create_checkpoint(db_session, settings=settings)
+
+    assert register(api_client, email=unique_email("guard-three")).status_code == 201
+    create_checkpoint(db_session, settings=settings)
+
+    latest_events = _events(db_session)
+    db_session.delete(latest_events[-1])
+    db_session.commit()
+
+    assert verify_audit_trail(db_session, settings=settings).status == "INVALID"
+    with pytest.raises(CheckpointWriteError, match="invalid or newer"):
+        create_checkpoint(db_session, settings=settings)
+
+
 def test_signed_checkpoint_rejects_modified_payload(
     api_client: TestClient,
     db_session: Session,

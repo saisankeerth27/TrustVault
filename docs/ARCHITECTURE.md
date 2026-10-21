@@ -150,7 +150,7 @@ The backend is the **intended sole enforcement point** for security. It is respo
 ### Error Handling (implemented — Phase 1)
 - Structured JSON error responses.
 - Sensitive details (stack traces, SQL) are logged server-side and never returned to clients.
-- Documented status codes: 400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 503.
+- Documented status codes: 400, 401, 403, 404, 409, 411, 413, 415, 422, 429, 500, 503.
 
 ---
 
@@ -291,7 +291,7 @@ The backend verifies identity and session state on **every** protected request. 
 
 1. Client sends `POST /api/v1/documents/upload` with multipart `file`, optional `category`, and optional `description`.
 2. Backend validates the JWT/session and requires an active owner or administrator role.
-3. File validation: size limit (including an early `Content-Length` check), extension/MIME allow-list, magic-byte/signature check, filename safety, empty-file rejection, DOCX structure, and TXT encoding.
+3. File validation: size limit with a pre-routing `Content-Length` check before body parsing or authentication (413), required length for uploads (411), extension/MIME allow-list, magic-byte/signature check, filename safety including Unicode format controls, empty-file rejection, DOCX structure and expansion limits, and TXT encoding.
 4. Backend computes SHA-256, generates `documents/{owner_uuid}/{random_uuid}.{ext}`, uploads to Wasabi, then commits the `documents` row.
 5. The response contains safe metadata only; it excludes `storage_key` and all credentials.
 6. If storage fails, no database row is created and the response is a generic 503. If the database commit fails after upload, object deletion is attempted and a generic 500 is returned. Cleanup is best-effort, not transactional.
@@ -406,13 +406,13 @@ Successful protected mutations append the audit event in the same transaction; a
 
 ### Signed Checkpoints
 
-Checkpoint creation signs the schema, creation time, event count, last chain index, and last event hash with HMAC-SHA256 using `AUDIT_CHECKPOINT_SIGNING_KEY`. The file is written atomically to the absolute `AUDIT_CHECKPOINT_PATH` and never exposes the key. Statuses are `VALID`, `STALE`, `MISSING`, `UNCONFIGURED`, `UNAVAILABLE`, and `INVALID`; the overall status distinguishes `VERIFIED`, valid-chain-with-stale/missing checkpoint, and invalid.
+Checkpoint creation signs the schema, creation time, event count, last chain index, and last event hash with HMAC-SHA256 using `AUDIT_CHECKPOINT_SIGNING_KEY`. The file is written atomically to the absolute `AUDIT_CHECKPOINT_PATH` and never exposes the key. Creation refuses to replace an invalid checkpoint or move backward to an older chain head. Statuses are `VALID`, `STALE`, `MISSING`, `UNCONFIGURED`, `UNAVAILABLE`, and `INVALID`; the overall status distinguishes `VERIFIED`, valid-chain-with-stale/missing checkpoint, and invalid.
 
 `python -m scripts.audit_integrity` verifies the chain and checkpoint; `--create-checkpoint` writes a new signed checkpoint after verifying the chain. Exit codes are `0` verified/written, `1` attention required, and `2` configuration error.
 
 ### Limitations of a Same-Database Hash Chain
 
-A hash chain stored in the same database it protects does **not** fully protect against a privileged database administrator: an attacker could modify records and recompute subsequent hashes so the local chain still verifies. The signed checkpoint detects changes relative to the last trusted checkpoint, but a same-host checkpoint file can be deleted by the same attacker. An independently controlled append-only checkpoint store and scheduled checkpoint publication are still required to make privileged tampering reliably detectable. This control does not make tampering impossible.
+A hash chain stored in the same database it protects does **not** fully protect against a privileged database administrator: an attacker could modify records and recompute subsequent hashes so the local chain still verifies. The signed checkpoint detects changes relative to the last trusted checkpoint, but a same-host checkpoint file can be deleted by the same attacker. Events appended after the latest checkpoint and then deleted are not detectable by that checkpoint, and concurrent checkpoint writers are not serialized. Run checkpoint creation as a single scheduled job. An independently controlled append-only checkpoint store and scheduled checkpoint publication are still required to make privileged tampering reliably detectable. This control does not make tampering impossible.
 
 ### Application Enforcement
 
@@ -565,7 +565,7 @@ Planned policies:
 - **Role model:** `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER` are stored in PostgreSQL. Public registration creates Viewers only; elevated roles come from the provisioning CLI.
 - **CSRF and CORS:** auth POSTs enforce an exact Origin allow-list, CORS never combines credentials with a wildcard, and the refresh cookie is path-scoped. A per-session CSRF token is not implemented.
 - **Rate limiting:** an in-memory sliding window limits login/register attempts per process. A multi-instance deployment requires a shared store.
-- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 198 tests. It uses an ephemeral PostgreSQL instance.
+- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 213 tests. It uses an ephemeral PostgreSQL instance.
 - **Not implemented at Phase 3 completion:** document authorization, audit writes, RLS, MFA, account lockout, idle timeouts, and production deployment verification.
 
 ---
@@ -628,14 +628,15 @@ Planned policies:
 
 ## 22. Phase 8 Implementation Notes (Verified Locally)
 
-- **Threat-mapped suite:** `backend/tests/test_security.py` contains 40 security cases named by threat-model section, covering every scenario in `THREATS.md`.
+- **Threat-mapped suite:** `backend/tests/test_security.py` contains 46 security cases named by threat-model section, plus focused request-limit tests in `backend/tests/test_request_limits.py`, covering every scenario in `THREATS.md`.
 - **Cross-user denial:** User B is denied GET, download, edit/PATCH, and DELETE for User A's document without a grant. After a READ grant, User B can read and download but cannot edit or delete. Revocation restores immediate 404 denial for all four operations, and the grant/revoke/denial actions are audited.
 - **Object-level authorization:** Existing-but-unrelated UUIDs and random missing UUIDs return the same generic 404 body, and denial responses omit document names, owner identity, storage keys, and checksums.
 - **Privilege boundaries:** Registration rejects role injection, a validly signed token with a forged administrator role claim cannot escalate a Viewer, and administrator identity does not grant content, edit, delete, or permission-management access. Denials append the appropriate audit events.
-- **Upload and path attacks:** Executable, MIME/signature-mismatched, empty, and broken-document uploads are rejected before storage. Traversal and absolute filenames return 400, control characters cannot reach server-generated storage keys, and client filenames never become storage paths.
+- **Upload and path attacks:** Executable, MIME/signature-mismatched, missing-content-type, empty, malformed multipart, and broken-document uploads are rejected before storage. DOCX member-count and uncompressed-size limits are unit-tested. Traversal and absolute filenames return 400, control and Unicode format-control characters (including bidi overrides) cannot reach server-generated storage keys, and client filenames never become storage paths.
 - **Audit tampering:** POST, PUT, PATCH, and DELETE against both administrator audit endpoints return 405; event-specific mutation paths return 404. Audit row counts and the latest event remain unchanged.
 - **Token and brute-force defenses:** Expired and signature-tampered access tokens return 401, logout invalidates a previously issued access token through the active-session check, and the login limiter returns 429 with `Retry-After` without echoing the email or password.
-- **Denial of service:** An oversized upload is rejected with 413 before storage or metadata persistence.
-- **Coverage:** The full 198-test suite passes with 89% combined statement/branch coverage. Authorization and document services are at 77%-88%, the administrator audit API at 96%, and dependency, application, error, and audit-schema modules at 100%.
+- **Denial of service:** An unauthenticated oversized upload is rejected with 413 before request-body parsing or authentication, uploads without `Content-Length` return 411, and invalid/duplicate lengths return 400. DOCX expansion limits are tested.
+- **Account status and audit role:** Disabled users are denied document and administrator audit endpoints, and a validly signed administrator role claim cannot read audit data when the database role is Viewer.
+- **Coverage:** The full 213-test suite passes with 89% combined statement/branch coverage across 2,175 statements and 426 branches. Authorization and document services are at 77%-88%, the administrator audit API at 96%, and dependency, application, error, and audit-schema modules at 100%.
 - **CI:** `.github/workflows/backend-tests.yml` runs the full suite and coverage on backend pushes and pull requests. The workflow has not yet run on GitHub.
 - **Honest limitations:** RLS is still not enabled, so there are no database RLS policy tests; application-level authorization remains the primary boundary and is verified directly. Malware scanning, live Wasabi behavior, Supabase migration, and deployment remain outstanding. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.

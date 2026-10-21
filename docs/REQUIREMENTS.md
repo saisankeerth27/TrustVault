@@ -193,11 +193,11 @@ Administrators cannot modify or delete audit records through the application.
 ### Phase 7 Implementation Status (Verified Locally with Mocked Storage)
 
 - **MR-6:** Implemented for authentication, upload, metadata update, download, delete, permission grant/update/revoke, and denied access. Each event records timestamp, actor, optional document, action, outcome, request ID, direct client IP, and user-agent. Details are sanitized and bounded.
-- **MR-6 integrity:** Events use a contiguous chain index, previous-event hash, canonical SHA-256 hashing, and a PostgreSQL advisory transaction lock. HMAC-SHA256 signed checkpoint files detect changes relative to the last trusted checkpoint.
+- **MR-6 integrity:** Events use a contiguous chain index, previous-event hash, canonical SHA-256 hashing, and a PostgreSQL advisory transaction lock. HMAC-SHA256 signed checkpoint files detect changes relative to the last trusted checkpoint, and checkpoint creation refuses invalid or backward replacements. Events appended after the latest checkpoint and then deleted are not detectable by that checkpoint.
 - **MR-4 audit:** Successful grants/updates/revocations append audit events in the protected transaction; denial events are best-effort so they cannot alter the denial outcome.
 - **MR-9:** Global administrators can query all audit events with actor, document, action, outcome, and UTC date filters, plus read chain/checkpoint integrity. There is no audit modification/deletion endpoint.
 - **FA-14:** Implemented for state-changing actions; idempotent no-op requests do not duplicate state-change events. Login failures and authorization denials are recorded.
-- **FA-15 / FA-16:** Implemented; verification detects modified, reordered, and removed events, and no API exposes audit mutation.
+- **FA-15 / FA-16:** Implemented for the checkpoint-covered prefix; verification detects modified, reordered, and removed events at or before the latest checkpoint, and no API exposes audit mutation. Tail deletions after the latest checkpoint require independent checkpoint publication.
 - **FA-17:** Partially met. Querying, filtering, and pagination are implemented; CSV/JSON export is not.
 - **MR-9 summaries:** Aggregate document/user activity summaries are not implemented. Administrators can derive detail views through filters and the existing permission history.
 - **Administrator UI:** `/admin/audit` provides filters, pagination, event details, and an integrity panel. Owner-scoped audit views are intentionally not part of the Phase 7 policy.
@@ -205,13 +205,14 @@ Administrators cannot modify or delete audit records through the application.
 
 ### Phase 8 Implementation Status (Verified Locally)
 
-- **MR-5 / MR-10:** Implemented in a dedicated 40-case security suite. User B is denied read, download, edit, and delete for User A's document; after a READ grant User B can read/download but not edit/delete; revocation restores immediate denial. Grant, revocation, and every denial are audited.
+- **MR-5 / MR-10:** Implemented in a dedicated 46-case security suite plus focused request-limit tests. User B is denied read, download, edit, and delete for User A's document; after a READ grant User B can read/download but not edit/delete; revocation restores immediate denial. Grant, revocation, and every denial are audited.
 - **IDOR:** Unrelated existing UUIDs and random missing UUIDs return the same generic 404 body without document name, owner identity, checksum, or storage key.
 - **Privilege escalation:** Registration role injection is rejected, a validly signed token with a forged administrator role claim cannot escalate a Viewer, and administrator identity does not grant document content or sharing rights. These denials append audit records.
 - **Audit tampering:** Every non-GET method against the audit collection and integrity endpoints returns 405, event-specific mutation paths return 404, and audit row counts remain unchanged.
-- **Upload/path attacks:** Executable, content-mismatched, empty, and malformed uploads are rejected before storage; traversal/absolute names return 400; control characters cannot reach server-generated keys.
-- **Session/rate/DoS:** Expired and tampered access tokens return 401, logout invalidates existing access tokens, brute-force login attempts return 429 with `Retry-After`, and oversized uploads return 413 before storage.
-- **Verification:** 198 backend tests pass locally with 89% coverage. A GitHub Actions workflow runs the suite with coverage, but remote CI execution has not yet been verified.
+- **Upload/path attacks:** Executable, content-mismatched, missing-content-type, empty, malformed-multipart, and malformed-document uploads are rejected before storage; traversal/absolute names return 400; control and Unicode format-control characters (including bidi overrides) cannot reach server-generated keys; DOCX member/uncompressed-size limits are tested.
+- **Session/rate/DoS:** Expired and tampered access tokens return 401, logout and disabled accounts invalidate protected document/audit access, brute-force login attempts return 429 with `Retry-After`, pre-authentication oversized uploads return 413, uploads without `Content-Length` return 411, and invalid/duplicate lengths return 400.
+- **Audit integrity:** Checkpoint creation refuses invalid or newer checkpoint replacement; forged administrator claims cannot read audit data; tail deletion after the latest checkpoint remains outside checkpoint detection.
+- **Verification:** 213 backend tests pass locally with 89% coverage across 2,175 statements and 426 branches. A GitHub Actions workflow runs the suite with coverage, but remote CI execution has not yet been verified.
 - **Not yet met / unverified:** RLS policy tests (RLS remains disabled; application authorization is the primary boundary), malware scanning, live Wasabi behavior, Supabase migration, and deployment.
 
 ---
@@ -283,7 +284,7 @@ Administrators cannot modify or delete audit records through the application.
 | MR-7   | Search by name, owner, category, date          | Phase 5              | Filtered search tests with permission scoping|
 | MR-8   | File upload validation                         | Phase 4              | Implemented; validation/unit tests pass      |
 | MR-9   | Administrator activity and permission views    | Phase 7 (partial)    | Admin access/filter/denial tests pass; summaries/export deferred |
-| MR-10  | Automated cross-user access denial tests       | Phase 8 (implemented) | Dedicated 40-case security suite; full suite configured in CI |
+| MR-10  | Automated cross-user access denial tests       | Phase 8 (implemented) | Dedicated 46-case security suite; full suite configured in CI |
 
 ## 8. Out of Scope for Phase 0
 

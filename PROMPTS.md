@@ -357,6 +357,33 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Kept historical Phase 7 test counts while updating current suite counts to 198.
   - Removed a duplicate Phase 8 row from the README project-status table.
   - Recorded the Phase 7 commit hash/link and approval decision in this log.
-- **Commit hash:** pending final Phase 8 commit/push; reported in the final response.
-- **GitHub link:** pending final Phase 8 commit/push.
-- **Human review and decision:** Phase 8 review pending; Phase 9 must not begin until approval is given.
+- **Commit hash:** `517985d49f19ecd46b04d39300e9c52b42a9eecd`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/517985d49f19ecd46b04d39300e9c52b42a9eecd
+- **Human review and decision:** Approved; Phase 9 was subsequently authorized with a local-only instruction (check and fix without pushing).
+
+---
+
+## 2026-10-21 — Phase 8 Security Re-Audit
+
+- **Date and phase:** 2026-10-21 — Phase 8 re-audit (security tests and threat-model verification), preserving uncommitted Phase 9 work.
+- **Objective:** Audit the committed Phase 8 security implementation and documentation for gaps, verify findings directly, fix only confirmed Phase 8 issues, and leave Phase 9 frontend files untouched.
+- **Prompt / instruction summary:** The human supplied the Phase 8 prompt again and chose "Audit Phase 8 again" rather than starting Phase 9 or preserving the existing commit only. The work remained local; no commit or push was authorized.
+- **Confirmed fixes and code produced:**
+  - Added `backend/app/core/request_limits.py` with `UploadSizeLimitMiddleware`, registered before CORS/request-ID handling in `backend/app/main.py`. Oversized uploads are rejected from `Content-Length` before multipart parsing or authentication; uploads without a length return 411, and invalid/duplicate lengths return 400. The existing route-level check remains as defense in depth.
+  - Updated `backend/app/services/audit_integrity.py` so chain verification uses one consistent event snapshot and checkpoint creation refuses to replace an invalid or newer checkpoint.
+  - Rejected Unicode `Cf` filename characters, including bidi overrides, in `backend/app/services/upload_validation.py`.
+  - Added regressions for pre-authentication oversized and chunked uploads, malformed multipart, missing MIME, DOCX member/uncompressed limits, bidi filenames, disabled-account document/audit access, forged administrator audit claims, and checkpoint backward replacement. Added `backend/tests/test_request_limits.py`.
+  - Corrected one flawed control-character test that could match a random substring inside a generated UUID key.
+  - Corrected documentation overclaims about CSP checks, DOCX test coverage, early upload rejection, checkpoint scope, and current test/coverage counts.
+- **Tests and verification performed:**
+  - Full backend suite: **213 passed** (one remaining Starlette/httpx `TestClient` deprecation warning).
+  - Coverage: **89%** combined statement/branch coverage across 2,175 statements and 426 branches.
+  - Frontend `npm run lint` reports 0 warnings/errors and `npm run build` succeeds with the existing chunk-size warning; no frontend files were touched in this re-audit.
+  - Not performed: live Wasabi/Supabase/deployment verification, browser walkthrough, remote CI execution, or load testing.
+- **Residual findings documented rather than code-fixed:**
+  - Audit events appended after the latest checkpoint and then deleted are not detectable by that checkpoint; independent scheduled checkpoint publication is still required. Checkpoint creation is not serialized against concurrent writers.
+  - Orphaned storage objects are only logged; no reconciliation tool exists.
+  - Disabled-account re-enable semantics, account-enumeration signals, in-memory rate limiting, and missing CSP/HSTS remain as previously documented limitations.
+- **Commit hash:** this local Phase 8 commit; Phase 9 remains uncommitted in the local working tree.
+- **GitHub link:** not applicable; no push performed.
+- **Human review and decision:** Approved for the local Phase 8 commit; Phase 9 remains uncommitted.

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
+from app.core.request_limits import UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES
 from app.db.session import get_db
 from app.models.document_permission import DocumentPermission
 from app.models.enums import AuditAction, AuditOutcome, DocumentAccessLevel, UserRole
@@ -86,7 +87,6 @@ router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
 _UPLOAD_ROLES = {UserRole.ADMINISTRATOR.value, UserRole.DOCUMENT_OWNER.value}
 
-_CONTENT_LENGTH_OVERHEAD_BYTES = 1024 * 1024
 _DOWNLOAD_CHUNK_SIZE = 64 * 1024
 _NOT_FOUND_MESSAGE = "Document not found."
 
@@ -210,9 +210,9 @@ def _enforce_request_size(request: Request, max_size_bytes: int) -> None:
             detail="The Content-Length header is invalid.",
         ) from exc
 
-    if declared_length > max_size_bytes + _CONTENT_LENGTH_OVERHEAD_BYTES:
+    if declared_length > max_size_bytes + UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="The selected file is too large.",
         )
 

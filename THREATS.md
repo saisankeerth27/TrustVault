@@ -116,9 +116,9 @@ graph TB
 
 **Scenario:** A user uploads malware, an executable disguised as an allowed type, a polyglot file, or a zip bomb.
 
-**Mitigation (implemented for upload/download):** Enforce a 10 MiB default size limit (including early `Content-Length` rejection), an extension and MIME allow-list, magic-byte/signature verification, filename validation, empty-file rejection, DOCX OOXML member limits, and NUL-free UTF-8 TXT validation. Executable types are not allowed. The backend computes the checksum, generates the storage key, and stores files privately. Uploaded content is never executed or rendered server-side. Downloads are forced as attachments with `nosniff` and no-store headers. Malware scanning remains future work.
+**Mitigation (implemented for upload/download):** Enforce a 10 MiB default size limit, including a pre-routing `Content-Length` check before body parsing or authentication, an extension and MIME allow-list, magic-byte/signature verification, filename validation, empty-file rejection, DOCX OOXML member limits, and NUL-free UTF-8 TXT validation. Executable types are not allowed. The backend computes the checksum, generates the storage key, and stores files privately. Uploaded content is never executed or rendered server-side. Downloads are forced as attachments with `nosniff` and no-store headers. Malware scanning remains future work.
 
-**Verification:** Unit tests cover each validation rule; integration tests cover mismatched extensions/content, unsafe names, empty files, oversized requests, Viewer denial, storage failure, and metadata-failure cleanup.
+**Verification:** Unit tests cover each validation rule, including DOCX member-count/uncompressed-size limits and Unicode format-control filenames. Integration tests cover mismatched extensions/content, missing content types, unsafe names, empty files, malformed multipart, unauthenticated oversized requests (413), chunked uploads without `Content-Length` (411), Viewer denial, storage failure, and metadata-failure cleanup.
 
 **Residual Risk:** Medium without antivirus scanning. Signature checks are not a malware scanner and can be bypassed by a valid but malicious document. A zero-day in a viewed document format is outside the application's control. Recommend adding scanning in a later phase.
 
@@ -128,9 +128,9 @@ graph TB
 
 **Scenario:** A crafted filename such as `../../etc/passwd` or a null-byte injection manipulates storage paths or local filesystem writes.
 
-**Mitigation (implemented for upload):** The application never uses client filenames as filesystem or storage paths. Phase 4 creates `documents/{owner_uuid}/{random_uuid}.{ext}` from server-side values. Path separators, NUL/control characters, and names over 255 characters are rejected; the original name is metadata only.
+**Mitigation (implemented for upload):** The application never uses client filenames as filesystem or storage paths. Phase 4 creates `documents/{owner_uuid}/{random_uuid}.{ext}` from server-side values. Path separators, NUL/control characters, Unicode format controls (including bidi overrides), and names over 255 characters are rejected; the original name is metadata only.
 
-**Verification:** Tests assert rejection of traversal/NUL/control-character filenames and verify generated storage keys do not contain the user filename.
+**Verification:** Tests assert rejection of traversal/NUL/control-character/bidi-format filenames and verify generated storage keys do not contain the user filename.
 
 **Residual Risk:** Low.
 
@@ -152,11 +152,11 @@ graph TB
 
 **Scenario:** An attacker or privileged insider modifies or deletes audit records to hide unauthorized activity.
 
-**Mitigation:** Audit writes are append-only at the application layer, with no UPDATE/DELETE endpoints. Events have a contiguous `chain_index`, previous-event hash, and canonical SHA-256 `event_hash`; verification detects modified, reordered, and removed events. An HMAC-SHA256 signed checkpoint binds the chain head, and `scripts/audit_integrity.py` verifies or creates it. RLS is not enabled, so the database role is not restricted from direct modification.
+**Mitigation:** Audit writes are append-only at the application layer, with no UPDATE/DELETE endpoints. Events have a contiguous `chain_index`, previous-event hash, and canonical SHA-256 `event_hash`; verification detects modified, reordered, and removed events at or before the latest checkpoint. An HMAC-SHA256 signed checkpoint binds the chain head, and `scripts/audit_integrity.py` verifies or creates it. Checkpoint creation refuses to replace an invalid checkpoint or move backward to an older chain head. RLS is not enabled, so the database role is not restricted from direct modification.
 
-**Limitation and Residual Risk:** **A hash chain and same-host checkpoint do not fully protect against a privileged attacker.** An attacker with direct database access can rewrite records and subsequent hashes, and an attacker with host filesystem access can delete or replace the checkpoint. Detection depends on retaining a trusted checkpoint outside the attacker's control. TrustVault still needs independently controlled, scheduled checkpoint publication to an append-only external store before this risk is adequately mitigated.
+**Limitation and Residual Risk:** **A hash chain and same-host checkpoint do not fully protect against a privileged attacker.** An attacker with direct database access can rewrite records and subsequent hashes, and an attacker with host filesystem access can delete or replace the checkpoint. Events appended after the latest checkpoint and then deleted are not detectable by that checkpoint, so checkpoint cadence determines the exposure window. Detection depends on retaining a trusted checkpoint outside the attacker's control. TrustVault still needs independently controlled, scheduled checkpoint publication to an append-only external store before this risk is adequately mitigated.
 
-**Verification:** Phase 7 tests confirm no API audit mutation path, detection of modified/middle-removed events, signed-checkpoint validation, staleness/truncation/signature failure handling, and mandatory-audit-write rollback. Residual risk remains without independent checkpoint storage.
+**Verification:** Phase 7 tests confirm no API audit mutation path, detection of modified/middle-removed events, signed-checkpoint validation, staleness/truncation/signature failure handling, and mandatory-audit-write rollback. Phase 8 re-audit tests confirm checkpoint creation refuses to replace a newer or invalid checkpoint. Residual risk remains without independent checkpoint storage.
 
 ---
 
@@ -202,7 +202,7 @@ graph TB
 
 **Mitigation:** HTTPS in production. Phase 3 keeps the access token in memory and the refresh token in an HttpOnly, path-scoped cookie with configurable Secure/SameSite flags. Access tokens are short-lived; refresh tokens rotate and are stored only as SHA-256 hashes. Reuse detection revokes the session family, and logout/disablement invalidates access through per-request session checks. A strong CSP remains planned for Phase 10.
 
-**Verification:** Token expiry tests; refresh rotation tests; reuse-detection tests; CSP header checks.
+**Verification:** Token expiry, refresh rotation, and reuse-detection tests; disabled-account and logout session invalidation tests across document and administrator audit endpoints. CSP header checks are not present because CSP remains planned for Phase 10.
 
 **Residual Risk:** Medium. Stolen access tokens remain valid until expiry; short TTLs limit the window.
 
@@ -224,9 +224,9 @@ graph TB
 
 **Scenario:** High-volume requests, large uploads, or expensive queries exhaust backend, database, or storage resources.
 
-**Mitigation:** Authentication rate limiting, a 10 MiB default upload limit (configurable up to 100 MiB), early `Content-Length` rejection, DOCX expansion limits, future query pagination/request limits, timeouts on external calls, and provider-level protections (Render/Vercel/Supabase). Health checks and monitoring.
+**Mitigation:** Authentication rate limiting, a 10 MiB default upload limit (configurable up to 100 MiB), pre-routing `Content-Length` rejection before body parsing or authentication, required `Content-Length` for uploads, DOCX member-count/uncompressed-size limits, future query pagination/request limits, timeouts on external calls, and provider-level protections (Render/Vercel/Supabase). Health checks and monitoring.
 
-**Verification:** Upload-size and DOCX-expansion tests pass; load tests and pagination caps remain later work.
+**Verification:** Tests cover unauthenticated oversized upload rejection (413), missing/duplicate/invalid `Content-Length` handling (411/400), DOCX member-count and uncompressed-size limits, and storage-free rejection. Load tests and pagination caps remain later work.
 
 **Residual Risk:** Medium. Managed providers absorb much of this, but application-level floods require continued tuning.
 
@@ -249,7 +249,7 @@ graph TB
 | Risk | Severity | Notes / Future Work |
 |------|----------|---------------------|
 | Downloaded copies cannot be recalled after revocation | Inherent | Communicate to users; consider watermarking |
-| Privileged DB/host attacker can rewrite local hash chain or delete same-host checkpoint | High | Retain signed checkpoints in an independently controlled append-only store; schedule publication |
+| Privileged DB/host attacker can rewrite local hash chain, delete events appended after the latest checkpoint, or delete the same-host checkpoint | High | Retain signed checkpoints in an independently controlled append-only store; schedule publication and run checkpoint creation as a single job |
 | Malware in uploaded files | Medium | Add antivirus scanning; validation is not scanning |
 | Live Wasabi bucket policy/connectivity unverified | Medium | Verify private policy, least-privilege keys, and upload/delete behavior before deployment |
 | Upload object and metadata are not transactional | Low–Medium | Best-effort cleanup only; monitor orphans and add reconciliation |
@@ -309,7 +309,7 @@ These notes record the authentication controls that are actually implemented. Pl
 These notes record the upload/storage controls that are actually implemented. Downloads, permissions, and audit writes remain planned.
 
 - **Authorization:** `POST /api/v1/documents/upload` requires an active `ADMINISTRATOR` or `DOCUMENT_OWNER`; Viewers receive 403 and anonymous callers 401. Ownership is taken from the authenticated user, never client input.
-- **Input validation:** Extension and declared-MIME allow-list, magic-byte/signature checks, empty-file rejection, 10 MiB default limit with early `Content-Length` rejection, filename length/control-character/path-separator rejection, DOCX member count/uncompressed-size checks, and NUL-free UTF-8 TXT validation.
+- **Input validation:** Extension and declared-MIME allow-list, magic-byte/signature checks, empty-file rejection, 10 MiB default limit with pre-routing `Content-Length` rejection, filename length/control/Unicode-format/path-separator rejection, DOCX member count/uncompressed-size checks, and NUL-free UTF-8 TXT validation.
 - **Key and checksum integrity:** Storage keys are generated from server-side UUIDs; the backend computes SHA-256 from received bytes and ignores client checksums. The user filename never becomes a path.
 - **Private access:** No direct/presigned URL or storage key is returned to the client. The frontend never receives Wasabi credentials.
 - **Failure behavior:** Missing/misconfigured storage or Wasabi failure returns generic 503 with no metadata row. A metadata commit failure after upload returns generic 500 and attempts best-effort object deletion.
@@ -367,23 +367,23 @@ These notes record the audit controls actually implemented. Live storage, Supaba
 
 ## 14. Phase 8 Verification Notes (Verified Locally)
 
-The dedicated security suite is `backend/tests/test_security.py`; it contains 40 cases named after the threat sections below. The full 198-test backend suite passed locally with 89% combined statement/branch coverage. CI is configured in `.github/workflows/backend-tests.yml` but has not yet run remotely.
+The dedicated security suite is `backend/tests/test_security.py`; it contains 46 cases named after the threat sections below. The full 213-test backend suite passed locally with 89% combined statement/branch coverage. A 2026-10-21 re-audit added pre-routing upload size enforcement, Unicode format-control rejection, checkpoint-monotonicity protection, and focused regressions for malformed multipart, DOCX expansion limits, disabled accounts, and forged audit roles. CI is configured in `.github/workflows/backend-tests.yml` but has not yet run remotely.
 
 | Threat | Automated verification |
 |--------|------------------------|
 | 4.1 IDOR | `test_threat_4_1_cross_user_document_operations_are_denied` (GET, download, PATCH, DELETE), `test_threat_4_1_4_4_mr10_grant_read_then_revoke_is_immediate_and_audited`, `test_threat_4_1_guessed_and_missing_ids_are_indistinguishable` |
 | 4.2 Unauthorized downloads | `test_threat_4_2_download_denial_precedes_storage_access`; existing cross-user and admin denial tests |
-| 4.3 Privilege escalation | `test_threat_4_3_role_injection_is_rejected_at_registration`, `test_threat_4_3_forged_role_claim_cannot_escalate_upload`, `test_threat_4_3_administrator_role_does_not_grant_content_or_sharing` |
+| 4.3 Privilege escalation | `test_threat_4_3_role_injection_is_rejected_at_registration`, `test_threat_4_3_forged_role_claim_cannot_escalate_upload`, `test_threat_4_3_4_8_forged_admin_claim_cannot_read_audit`, `test_threat_4_3_administrator_role_does_not_grant_content_or_sharing` |
 | 4.4 Access after revocation | `test_threat_4_1_4_4_mr10_grant_read_then_revoke_is_immediate_and_audited`; existing immediate-revocation tests |
-| 4.5 Malicious uploads | `test_threat_4_5_malicious_uploads_are_rejected_without_storage` (executable, MIME/signature mismatch, HTML-as-PNG, empty, malformed DOCX) |
-| 4.6 Path manipulation | `test_threat_4_6_path_manipulation_filenames_are_rejected`, `test_threat_4_6_control_characters_cannot_reach_storage_keys`, `test_threat_4_6_storage_keys_never_use_client_filenames` |
+| 4.5 Malicious uploads | `test_threat_4_5_malicious_uploads_are_rejected_without_storage` (executable, missing/mismatched MIME, signature mismatch, HTML-as-PNG, empty, malformed DOCX), `test_threat_4_5_malformed_multipart_is_rejected_without_storage`, plus DOCX member/uncompressed-size unit tests |
+| 4.6 Path manipulation | `test_threat_4_6_path_manipulation_filenames_are_rejected`, `test_threat_4_6_control_characters_cannot_reach_storage_keys`, `test_threat_4_6_storage_keys_never_use_client_filenames`, plus bidi-format filename validation |
 | 4.7 Unauthorized permission changes | `test_threat_4_7_recipient_cannot_manage_permissions` plus existing owner-only grant tests |
-| 4.8 Audit tampering | `test_threat_4_8_audit_api_rejects_mutation_methods` (POST/PUT/PATCH/DELETE on both audit endpoints), `test_threat_4_8_audit_api_has_no_event_mutation_route` |
+| 4.8 Audit tampering | `test_threat_4_8_audit_api_rejects_mutation_methods` (POST/PUT/PATCH/DELETE on both audit endpoints), `test_threat_4_8_audit_api_has_no_event_mutation_route`, `test_threat_4_3_4_8_forged_admin_claim_cannot_read_audit`, `test_checkpoint_creation_refuses_to_replace_newer_checkpoint` |
 | 4.9 Metadata leakage | `test_threat_4_9_denials_do_not_disclose_document_metadata`, `test_threat_4_1_guessed_and_missing_ids_are_indistinguishable` |
 | 4.10 Exposed credentials | `test_threat_4_10_internal_failures_do_not_expose_credentials`; secret-safe logging and repository scan remain operational checks |
 | 4.11 Weak RLS policies | `test_threat_4_11_application_authorization_is_authoritative_without_rls`; RLS is disabled and policy tests remain outstanding |
-| 4.12 Session and token theft | `test_threat_4_12_expired_access_token_is_rejected`, `test_threat_4_12_tampered_access_token_is_rejected`, `test_threat_4_12_logout_invalidates_previously_stolen_access_token` |
+| 4.12 Session and token theft | `test_threat_4_12_expired_access_token_is_rejected`, `test_threat_4_12_tampered_access_token_is_rejected`, `test_threat_4_12_logout_invalidates_previously_stolen_access_token`, `test_threat_4_12_disabled_users_cannot_access_documents_or_audit` |
 | 4.13 Brute force and credential stuffing | `test_threat_4_13_brute_force_is_rate_limited_without_disclosure` plus existing generic-error and registration-limit tests |
-| 4.14 Denial of service | `test_threat_4_14_oversized_upload_is_rejected_before_storage` plus existing DOCX expansion and upload-size tests |
+| 4.14 Denial of service | `test_threat_4_14_oversized_upload_is_rejected_before_storage`, `test_threat_4_14_oversized_upload_is_rejected_before_authentication`, `test_threat_4_14_upload_without_content_length_is_rejected`, and `test_request_limits.py` missing/invalid/duplicate/oversized header tests; DOCX expansion limits are unit-tested |
 
-**Limitations:** The suite verifies implemented controls, not the absence of vulnerabilities. RLS, malware scanning, live Wasabi policy/connectivity, shared multi-instance rate limiting, MFA, and independent checkpoint storage remain unimplemented or unverified.
+**Limitations:** The suite verifies implemented controls, not the absence of vulnerabilities. RLS, malware scanning, live Wasabi policy/connectivity, shared multi-instance rate limiting, MFA, and independent checkpoint storage remain unimplemented or unverified. Events appended after the latest checkpoint and then deleted cannot be detected by that checkpoint. Checkpoint creation is not locked against concurrent writers; run it as a single scheduled job.

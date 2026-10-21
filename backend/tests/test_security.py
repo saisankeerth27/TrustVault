@@ -14,7 +14,7 @@ from app.core.security import create_access_token
 from app.main import app
 from app.models.audit_event import AuditEvent
 from app.models.document import Document
-from app.models.enums import UserRole
+from app.models.enums import UserRole, UserStatus
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.services.auth import create_account
@@ -371,6 +371,42 @@ def test_threat_4_3_forged_role_claim_cannot_escalate_upload(
     assert denial.details["reason"] == "role_not_permitted"
 
 
+def test_threat_4_3_4_8_forged_admin_claim_cannot_read_audit(
+    api_client: TestClient,
+    db_session: Session,
+) -> None:
+    _, viewer_id, _ = _register_viewer(api_client)
+    db_session.expire_all()
+    session_id = db_session.scalar(
+        select(RefreshToken.family_id)
+        .where(
+            RefreshToken.user_id == UUID(viewer_id),
+            RefreshToken.revoked_at.is_(None),
+        )
+        .limit(1)
+    )
+    assert session_id is not None
+    forged_token = create_access_token(
+        UUID(viewer_id),
+        UserRole.ADMINISTRATOR.value,
+        session_id,
+    )
+
+    response = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(forged_token),
+    )
+
+    assert response.status_code == 403
+    assert "items" not in response.json()
+    denial = [
+        event
+        for event in _events(db_session)
+        if event.action == "AUDIT_ACCESS_DENIED"
+    ][-1]
+    assert denial.actor_id == UUID(viewer_id)
+
+
 def test_threat_4_3_administrator_role_does_not_grant_content_or_sharing(
     api_client: TestClient,
     db_session: Session,
@@ -405,6 +441,7 @@ def test_threat_4_3_administrator_role_does_not_grant_content_or_sharing(
         ("invoice.pdf", "application/pdf", b"MZ executable", 415),
         ("photo.png", "image/png", b"<html><script>alert(1)</script></html>", 415),
         ("empty.pdf", "application/pdf", b"", 422),
+        ("missing-type.pdf", "", PDF_BYTES, 415),
         ("resume.docx", "application/octet-stream", b"PK\x03\x04broken", 415),
     ],
 )
@@ -430,6 +467,36 @@ def test_threat_4_5_malicious_uploads_are_rejected_without_storage(
     )
 
     assert response.status_code == expected_status
+    assert fake_storage.uploads == []
+    db_session.expire_all()
+    after = int(db_session.scalar(select(func.count()).select_from(Document)) or 0)
+    assert after == before
+
+
+def test_threat_4_5_malformed_multipart_is_rejected_without_storage(
+    api_client: TestClient,
+    db_session: Session,
+    fake_storage: FakeStorage,
+) -> None:
+    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_token = _token_for(api_client, owner_email)
+    before = int(db_session.scalar(select(func.count()).select_from(Document)) or 0)
+
+    response = api_client.post(
+        "/api/v1/documents/upload",
+        headers={
+            **bearer(owner_token),
+            "Content-Type": "multipart/form-data; boundary=broken-boundary",
+        },
+        content=(
+            b"--broken-boundary\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="broken.pdf"\r\n'
+            b"Content-Type: application/pdf\r\n\r\n"
+            + PDF_BYTES
+        ),
+    )
+
+    assert response.status_code in {400, 422}
     assert fake_storage.uploads == []
     db_session.expire_all()
     after = int(db_session.scalar(select(func.count()).select_from(Document)) or 0)
@@ -481,7 +548,7 @@ def test_threat_4_6_control_characters_cannot_reach_storage_keys(
     assert key.startswith("documents/")
     assert "\x00" not in key
     assert "\x1f" not in key
-    assert "bad" not in key
+    assert filename not in key
     assert all(ord(character) >= 32 for character in response.json()["name"])
 
 
@@ -770,6 +837,40 @@ def test_threat_4_12_logout_invalidates_previously_stolen_access_token(
     assert denied.json()["error"]["message"] == "Session is no longer active."
 
 
+def test_threat_4_12_disabled_users_cannot_access_documents_or_audit(
+    api_client: TestClient,
+    db_session: Session,
+    fake_storage: FakeStorage,
+) -> None:
+    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_token = _token_for(api_client, owner_email)
+    document = _upload_ok(api_client, owner_token, filename="Disabled owner.pdf")
+    admin_email, admin = _create_role_user(db_session, UserRole.ADMINISTRATOR)
+    admin_token = _token_for(api_client, admin_email)
+
+    owner.status = UserStatus.DISABLED.value
+    admin.status = UserStatus.DISABLED.value
+    db_session.commit()
+
+    assert api_client.get(
+        "/api/v1/documents",
+        headers=bearer(owner_token),
+    ).status_code == 401
+    assert api_client.get(
+        f"/api/v1/documents/{document['id']}",
+        headers=bearer(owner_token),
+    ).status_code == 401
+    assert api_client.get(
+        f"/api/v1/documents/{document['id']}/download",
+        headers=bearer(owner_token),
+    ).status_code == 401
+    assert api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+    ).status_code == 401
+    assert fake_storage.downloads == []
+
+
 def test_threat_4_13_brute_force_is_rate_limited_without_disclosure(
     api_client: TestClient,
 ) -> None:
@@ -820,3 +921,33 @@ def test_threat_4_14_oversized_upload_is_rejected_before_storage(
     db_session.expire_all()
     after = int(db_session.scalar(select(func.count()).select_from(Document)) or 0)
     assert after == before
+
+
+def test_threat_4_14_oversized_upload_is_rejected_before_authentication(
+    api_client: TestClient,
+) -> None:
+    settings = get_settings()
+    oversized = PDF_BYTES + b"x" * (
+        settings.max_upload_size_bytes + 1024 * 1024 + 1024
+    )
+
+    response = api_client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("oversized.pdf", oversized, "application/pdf")},
+        data={"category": "Security", "description": "Unauthenticated oversize"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "payload_too_large"
+
+
+def test_threat_4_14_upload_without_content_length_is_rejected(
+    api_client: TestClient,
+) -> None:
+    response = api_client.post(
+        "/api/v1/documents/upload",
+        content=iter([PDF_BYTES]),
+    )
+
+    assert response.status_code == 411
+    assert response.json()["error"]["code"] == "length_required"

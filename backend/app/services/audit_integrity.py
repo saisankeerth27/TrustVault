@@ -13,7 +13,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -76,16 +76,14 @@ def _checkpoint_signature(payload: dict[str, Any], key: str) -> str:
 
 
 def verify_chain(session: Session) -> ChainVerification:
-    event_count = int(
-        session.scalar(select(func.count()).select_from(AuditEvent)) or 0
-    )
+    events = session.scalars(
+        select(AuditEvent).order_by(AuditEvent.chain_index.asc())
+    ).all()
+    event_count = len(events)
     expected_index = 1
     previous_hash: str | None = None
     last_event_hash: str | None = None
 
-    events = session.scalars(
-        select(AuditEvent).order_by(AuditEvent.chain_index.asc())
-    )
     for event in events:
         if event.chain_index != expected_index:
             return ChainVerification(
@@ -177,6 +175,19 @@ def create_checkpoint(
         raise CheckpointWriteError("A checkpoint cannot be created for an invalid chain.")
     if verification.event_count == 0:
         raise CheckpointWriteError("A checkpoint requires at least one audit event.")
+
+    existing = verify_checkpoint(session, settings=settings, chain=verification)
+    if existing.status == "INVALID":
+        raise CheckpointWriteError(
+            "A checkpoint cannot replace an invalid or newer existing checkpoint."
+        )
+    if (
+        existing.last_chain_index is not None
+        and verification.last_chain_index < existing.last_chain_index
+    ):
+        raise CheckpointWriteError(
+            "A checkpoint cannot move backward from the existing checkpoint."
+        )
 
     payload = {
         "schema": CHECKPOINT_SCHEMA,

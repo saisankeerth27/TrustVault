@@ -241,7 +241,7 @@ Storage behavior is verified with a mocked adapter. **Live Wasabi bucket policy,
 - Details are sanitized. Passwords, tokens, cookies, authorization headers, document content, session IDs, and other sensitive keys are rejected; request ID, direct socket client IP, and a length-limited user-agent are attached automatically when available.
 - `GET /api/v1/admin/audit-events` supports filtering by actor ID, document ID, action, outcome, and inclusive UTC date range, with newest-first pagination. `GET /api/v1/admin/audit-integrity` verifies both the chain and the signed checkpoint.
 - Both audit endpoints are global-administrator-only. There is no owner-scoped audit view or audit mutation endpoint in Phase 7.
-- The signed checkpoint binds the current chain head with HMAC-SHA256 and is written atomically by `python -m scripts.audit_integrity --create-checkpoint`. It detects database tampering only relative to the last trusted checkpoint; it does not prevent a privileged attacker from deleting both the database changes and the same-host checkpoint file.
+- The signed checkpoint binds the current chain head with HMAC-SHA256 and is written atomically by `python -m scripts.audit_integrity --create-checkpoint`. Checkpoint creation refuses to replace an invalid or newer checkpoint. It detects database tampering only relative to the last trusted checkpoint; events appended after the latest checkpoint and then deleted are not detectable by that checkpoint, and it does not prevent a privileged attacker from deleting both the database changes and the same-host checkpoint file.
 - The audit dashboard at `/admin/audit` provides filters, event detail expansion, pagination, and an integrity panel showing `VERIFIED`, stale/missing checkpoint, or invalid-chain states.
 
 ## Database
@@ -323,7 +323,7 @@ cd backend
 pytest
 ```
 
-The suite currently has **198 tests**, including **40 threat-mapped security cases** in `backend/tests/test_security.py`. It verifies:
+The suite currently has **213 tests**, including **46 threat-mapped security cases** in `backend/tests/test_security.py` and focused request-limit tests in `backend/tests/test_request_limits.py`. It verifies:
 
 - Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
 - Database URL normalization and Supabase pooler/SSL detection.
@@ -348,8 +348,8 @@ The suite currently has **198 tests**, including **40 threat-mapped security cas
 - Shared-with-me filtering of revoked and soft-deleted documents, pagination/sorting, immediate post-revocation denial, access-level reporting, and metadata-only administrator behavior.
 - Audit events for registration, login success/failure, logout, uploads, metadata updates, downloads, deletes, permission changes, and denied operations.
 - Administrator-only audit query access, filters, pagination, generic denial behavior, request-ID normalization, metadata/request-context sanitization, and denied audit access.
-- Hash-chain verification, middle-event tampering/removal detection, signed-checkpoint success/staleness/truncation/signature failure, and mandatory-audit-write rollback behavior.
-- Threat-model verification for IDOR, cross-user GET/download/edit/delete denial, grant/revoke audit coverage, forged role claims, administrator content boundaries, malicious uploads, path manipulation, audit API mutation attempts, metadata leakage, secret-safe failures, expired/tampered tokens, logout invalidation, brute-force limits, and oversized uploads.
+- Hash-chain verification, middle-event tampering/removal detection, signed-checkpoint success/staleness/truncation/signature failure, refusal to replace invalid/newer checkpoints, and mandatory-audit-write rollback behavior.
+- Threat-model verification for IDOR, cross-user GET/download/edit/delete denial, grant/revoke audit coverage, forged role claims, administrator content boundaries, malicious uploads, malformed multipart, DOCX expansion limits, Unicode format-control filenames, path manipulation, audit API mutation attempts, metadata leakage, secret-safe failures, expired/tampered tokens, logout/disabled-account invalidation, brute-force limits, pre-authentication oversized uploads, and uploads without `Content-Length`.
 
 Database tests start an **embedded PostgreSQL** instance in a temporary directory and never contact Supabase or read `DATABASE_URL`. Storage tests use a fake adapter; no test contacts Wasabi.
 
@@ -359,7 +359,7 @@ Coverage is generated separately from test success:
 pytest --cov=app --cov-report=term-missing
 ```
 
-The verified local full-suite run passed **198 tests** with **89% coverage** across 2,130 statements and 410 branches. Authorization and document services are exercised at 77%–88%, the administrator audit API at 96%, and `app/api/deps.py`, `app/main.py`, and the error/schema modules at 100%. Coverage is a diagnostic, not proof of security.
+The verified local full-suite run passed **213 tests** with **89% coverage** across 2,175 statements and 426 branches. Authorization and document services are exercised at 77%–88%, the administrator audit API at 96%, and `app/api/deps.py`, `app/main.py`, and the error/schema modules at 100%. Coverage is a diagnostic, not proof of security.
 
 The GitHub Actions workflow `.github/workflows/backend-tests.yml` runs the full backend suite with coverage on pushes and pull requests that change `backend/**`. Remote CI execution is not verified until the workflow runs on GitHub.
 
@@ -443,7 +443,7 @@ See [THREATS.md](THREATS.md) for the full threat model.
 ## Current Limitations
 
 - Live Wasabi connectivity and bucket policy have not been verified; upload/download/delete tests use a mocked adapter.
-- Audit history is append-only at the application layer, but database roles are not restricted from direct UPDATE/DELETE. The hash chain and signed checkpoint detect modifications only relative to a trusted checkpoint; the checkpoint is a same-host file, not an independent immutable store.
+- Audit history is append-only at the application layer, but database roles are not restricted from direct UPDATE/DELETE. The hash chain and signed checkpoint detect modifications only relative to a trusted checkpoint; events appended after the latest checkpoint and then deleted are not detected by that checkpoint. The checkpoint is a same-host file, not an independent immutable store.
 - The audit checkpoint is not written automatically on a schedule. Operators must run `python -m scripts.audit_integrity --create-checkpoint` and retain the signed file outside the application database.
 - Audit exports (CSV/JSON download) and owner-scoped audit views are not implemented; audit query access is global-administrator-only.
 - Client IP metadata uses the direct ASGI socket address, not a trusted `X-Forwarded-For` chain, so a reverse proxy may record the proxy address. Forwarded-header trust must be configured deliberately at deployment.

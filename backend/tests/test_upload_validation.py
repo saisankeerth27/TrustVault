@@ -6,6 +6,7 @@ import zipfile
 
 import pytest
 
+from app.services import upload_validation
 from app.services.upload_validation import (
     MIME_BY_EXTENSION,
     UploadValidationError,
@@ -77,6 +78,44 @@ def test_rejects_invalid_docx_package() -> None:
     assert exc_info.value.status_code == 415
 
 
+def test_rejects_docx_with_too_many_members(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upload_validation, "MAX_DOCX_MEMBERS", 1)
+
+    with pytest.raises(UploadValidationError) as exc_info:
+        validate_upload(
+            filename="letter.docx",
+            declared_content_type=(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ),
+            data=docx_bytes(),
+            allowed_extensions=ALLOWED,
+            max_size_bytes=1024 * 1024,
+        )
+
+    assert exc_info.value.status_code == 415
+
+
+def test_rejects_docx_that_expands_beyond_uncompressed_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upload_validation, "MAX_DOCX_UNCOMPRESSED_BYTES", 10)
+
+    with pytest.raises(UploadValidationError) as exc_info:
+        validate_upload(
+            filename="letter.docx",
+            declared_content_type=(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ),
+            data=docx_bytes(),
+            allowed_extensions=ALLOWED,
+            max_size_bytes=1024 * 1024,
+        )
+
+    assert exc_info.value.status_code == 415
+
+
 def test_rejects_extension_removed_from_configuration() -> None:
     with pytest.raises(UploadValidationError) as exc_info:
         validate_upload(
@@ -112,6 +151,7 @@ def test_unsupported_allowed_extension_fails_closed() -> None:
         "a\x00.pdf",
         "a" * 252 + ".pdf",
         "bad\x1f.pdf",
+        "report\u202egnp.pdf",
     ],
 )
 def test_rejects_unsafe_filenames(filename: str) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 
@@ -67,6 +68,8 @@ def _validated_filename(filename: str | None) -> str:
     if any(character in candidate for character in ("/", "\\", "\x00")):
         raise UploadValidationError("The filename is invalid.", status_code=400)
     if any(ord(character) < 32 or ord(character) == 127 for character in candidate):
+        raise UploadValidationError("The filename is invalid.", status_code=400)
+    if any(unicodedata.category(character) == "Cf" for character in candidate):
         raise UploadValidationError("The filename is invalid.", status_code=400)
 
     return candidate

@@ -6,6 +6,10 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.request_context import RequestIdMiddleware
+from app.core.request_limits import (
+    UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES,
+    UploadSizeLimitMiddleware,
+)
 
 
 def create_app() -> FastAPI:
@@ -24,6 +28,11 @@ def create_app() -> FastAPI:
         ),
     )
 
+    app.add_middleware(
+        UploadSizeLimitMiddleware,
+        max_body_bytes=settings.max_upload_size_bytes
+        + UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

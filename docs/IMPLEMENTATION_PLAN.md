@@ -345,7 +345,7 @@ feat(audit): implement protected audit trail
 
 ## Phase 8: Security Tests and Threat-Model Verification
 
-**Status:** Complete — awaiting review. Verified locally with 198 backend tests (40 security cases) and 89% coverage; the CI workflow is added but remote execution is pending. Live Wasabi, Supabase migration, RLS, and deployment remain unverified.
+**Status:** Complete — approved. Re-audited on 2026-10-21 and verified locally with 213 backend tests (46 security cases plus request-limit tests) and 89% coverage; the CI workflow is added but remote execution is pending. The re-audit added pre-authentication upload-size rejection, Unicode format-control filename rejection, checkpoint-monotonicity protection, and missing regressions. Live Wasabi, Supabase migration, RLS, and deployment remain unverified.
 
 **Objectives**
 Build a dedicated security test suite proving each threat-model control and cross-user access denial.
@@ -356,8 +356,9 @@ Build a dedicated security test suite proving each threat-model control and cros
 - Privilege escalation tests.
 - Cross-user access denial tests for GET, download, PUT, DELETE (MR-10).
 - Audit tampering tests.
-- Path traversal and malicious upload tests.
-- Token theft/expiry and brute-force rate-limit tests.
+- Path traversal, malformed multipart, DOCX expansion, and malicious upload tests.
+- Pre-authentication/oversized upload and missing/invalid `Content-Length` tests.
+- Token theft/expiry, disabled-account, and brute-force rate-limit tests.
 
 **Dependencies**
 - Phase 7 approved.
