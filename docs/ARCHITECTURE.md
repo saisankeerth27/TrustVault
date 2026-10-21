@@ -4,7 +4,7 @@
 
 TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and Wasabi S3-compatible private object storage. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 7):** authentication, database-backed roles, rotating refresh sessions, the protected JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, and an append-only hash-chained audit trail with signed checkpoints and an administrator audit dashboard are implemented and verified locally. Storage tests use a mocked Wasabi adapter; **live Wasabi connectivity, download, and object-deletion behavior have not been verified**. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
+> **Implementation status (Phase 8):** authentication, database-backed roles, rotating refresh sessions, the protected JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints and an administrator audit dashboard, and a threat-mapped security suite are implemented and verified locally. Storage tests use a mocked Wasabi adapter; **live Wasabi connectivity, download, and object-deletion behavior have not been verified**. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
 
 ### Architecture Diagram
 
@@ -63,8 +63,8 @@ graph TB
 | 4 | Private Wasabi storage and validated uploads | Complete (verified locally with mocked storage; live Wasabi unverified) |
 | 5 | Document listing, download proxy, management, and search | Complete (verified locally with mocked storage; live Wasabi unverified) |
 | 6 | Named-user READ/EDIT permissions, sharing, immediate revocation | Complete (verified locally with mocked storage; live Wasabi unverified) |
-| 7 | Audit write path, hash chain, signed checkpoint, admin activity | Complete (verified locally; awaiting review) |
-| 8 | Security tests and threat-model verification | Planned |
+| 7 | Audit write path, hash chain, signed checkpoint, admin activity | Complete (verified locally) |
+| 8 | Security tests and threat-model verification | Complete (verified locally; awaiting review) |
 | 9 | Complete frontend | Planned |
 | 10 | Deployment hardening and end-to-end verification | Planned |
 | 11 | Final submission and demo | Planned |
@@ -565,7 +565,7 @@ Planned policies:
 - **Role model:** `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER` are stored in PostgreSQL. Public registration creates Viewers only; elevated roles come from the provisioning CLI.
 - **CSRF and CORS:** auth POSTs enforce an exact Origin allow-list, CORS never combines credentials with a wildcard, and the refresh cookie is path-scoped. A per-session CSRF token is not implemented.
 - **Rate limiting:** an in-memory sliding window limits login/register attempts per process. A multi-instance deployment requires a shared store.
-- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 158 tests. It uses an ephemeral PostgreSQL instance.
+- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 198 tests. It uses an ephemeral PostgreSQL instance.
 - **Not implemented at Phase 3 completion:** document authorization, audit writes, RLS, MFA, account lockout, idle timeouts, and production deployment verification.
 
 ---
@@ -623,3 +623,19 @@ Planned policies:
 - **Frontend:** `/admin/audit` provides action/outcome/actor/document/date filters, pagination, detail expansion, denied indicators, and a chain/checkpoint integrity panel with refresh.
 - **Tests:** 158 backend tests pass (12 Phase 7 tests), including event coverage, admin authorization/filtering, tamper/removal detection, checkpoint staleness/truncation/signature failure, mandatory-audit rollback, metadata sanitization, and request-ID safety. Frontend lint/build pass; the build retains the existing chunk-size warning.
 - **Not implemented/verified:** live Wasabi behavior, live Supabase/deployment, scheduled independent checkpoint publication, audit export, owner-scoped audit views, RLS, and malware scanning.
+
+---
+
+## 22. Phase 8 Implementation Notes (Verified Locally)
+
+- **Threat-mapped suite:** `backend/tests/test_security.py` contains 40 security cases named by threat-model section, covering every scenario in `THREATS.md`.
+- **Cross-user denial:** User B is denied GET, download, edit/PATCH, and DELETE for User A's document without a grant. After a READ grant, User B can read and download but cannot edit or delete. Revocation restores immediate 404 denial for all four operations, and the grant/revoke/denial actions are audited.
+- **Object-level authorization:** Existing-but-unrelated UUIDs and random missing UUIDs return the same generic 404 body, and denial responses omit document names, owner identity, storage keys, and checksums.
+- **Privilege boundaries:** Registration rejects role injection, a validly signed token with a forged administrator role claim cannot escalate a Viewer, and administrator identity does not grant content, edit, delete, or permission-management access. Denials append the appropriate audit events.
+- **Upload and path attacks:** Executable, MIME/signature-mismatched, empty, and broken-document uploads are rejected before storage. Traversal and absolute filenames return 400, control characters cannot reach server-generated storage keys, and client filenames never become storage paths.
+- **Audit tampering:** POST, PUT, PATCH, and DELETE against both administrator audit endpoints return 405; event-specific mutation paths return 404. Audit row counts and the latest event remain unchanged.
+- **Token and brute-force defenses:** Expired and signature-tampered access tokens return 401, logout invalidates a previously issued access token through the active-session check, and the login limiter returns 429 with `Retry-After` without echoing the email or password.
+- **Denial of service:** An oversized upload is rejected with 413 before storage or metadata persistence.
+- **Coverage:** The full 198-test suite passes with 89% combined statement/branch coverage. Authorization and document services are at 77%-88%, the administrator audit API at 96%, and dependency, application, error, and audit-schema modules at 100%.
+- **CI:** `.github/workflows/backend-tests.yml` runs the full suite and coverage on backend pushes and pull requests. The workflow has not yet run on GitHub.
+- **Honest limitations:** RLS is still not enabled, so there are no database RLS policy tests; application-level authorization remains the primary boundary and is verified directly. Malware scanning, live Wasabi behavior, Supabase migration, and deployment remain outstanding. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.

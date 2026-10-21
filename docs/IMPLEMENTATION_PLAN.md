@@ -301,7 +301,7 @@ feat(permissions): implement document access grants and revocation
 
 ## Phase 7: Audit Trail and Administrator Activity
 
-**Status:** Complete — awaiting review. Verified locally with 158 backend tests and frontend lint/build; live Wasabi and Supabase/deployment behavior remain unverified.
+**Status:** Complete. Verified locally with 158 backend tests and frontend lint/build; live Wasabi and Supabase/deployment behavior remain unverified.
 
 **Objectives**
 Implement an append-only, tamper-evident audit trail with hash-chain and signed-checkpoint verification and a global-administrator audit activity view.
@@ -345,6 +345,8 @@ feat(audit): implement protected audit trail
 
 ## Phase 8: Security Tests and Threat-Model Verification
 
+**Status:** Complete — awaiting review. Verified locally with 198 backend tests (40 security cases) and 89% coverage; the CI workflow is added but remote execution is pending. Live Wasabi, Supabase migration, RLS, and deployment remain unverified.
+
 **Objectives**
 Build a dedicated security test suite proving each threat-model control and cross-user access denial.
 
@@ -368,8 +370,8 @@ Build a dedicated security test suite proving each threat-model control and cros
 - At least 20 security-specific test cases exist.
 
 **Tests**
-- Full security suite executed in CI.
-- Coverage report demonstrating authorization paths exercised.
+- Full security suite configured in GitHub Actions CI; local full-suite execution passed.
+- Coverage report demonstrating authorization paths exercised (89% combined statement/branch coverage).
 
 **Suggested Commit Message**
 ```

@@ -178,7 +178,7 @@ graph TB
 
 **Mitigation:** Secrets live only in environment variables. `.env` files are gitignored; `.env.example` contains placeholders only. Wasabi credentials are server-side settings returned by the backend configuration, never `VITE_*` values. Storage errors and logs omit credentials and keys. Secret scanning is required before each commit. Credentials are rotated if exposure is suspected.
 
-**Verification:** Phase 4 tests assert secret-safe storage logging; the final commit requires a staged-file secret scan and build-output review.
+**Verification:** Phase 4 tests assert secret-safe storage logging; Phase 8 verifies internal storage/configuration failures do not echo credentials into API responses. Repository and frontend build-output secret scans remain required before each commit.
 
 **Residual Risk:** Medium if operational discipline lapses. Any leaked credential must be treated as compromised and rotated immediately.
 
@@ -190,7 +190,7 @@ graph TB
 
 **Mitigation:** RLS is defense-in-depth, not the primary control. The service role key is used only server-side. Policies are reviewed and tested. Application-level authorization is authoritative.
 
-**Verification:** Policy tests for each table; tests confirming the client never receives the service role key.
+**Verification:** RLS is not enabled, so no database RLS policy tests exist. Phase 8 verifies that application-level authorization remains authoritative even when the database role can read all rows, and existing tests confirm the client never receives the service role key. This is a documented residual risk, not RLS coverage.
 
 **Residual Risk:** Low–Medium. RLS mistakes are caught by application-level checks, but policy drift must be reviewed.
 
@@ -362,3 +362,28 @@ These notes record the audit controls actually implemented. Live storage, Supaba
 - **Administrator boundary:** audit query and integrity endpoints are global-administrator-only; non-admin attempts are denied and audited. No API allows audit modification or deletion.
 - **Verification:** 158 backend tests pass, including 12 Phase 7 tests for event coverage, admin authorization/filtering, tamper and middle-removal detection, checkpoint staleness/truncation/signature failure, audit-write rollback, metadata sanitization, and unsafe request IDs. Frontend lint/build pass.
 - **Residual risk:** No independent immutable checkpoint store or scheduled checkpoint publication exists. A privileged attacker who controls both database and host filesystem can still alter history; the signed same-host checkpoint only detects changes relative to the last trusted copy. Audit exports, aggregate summaries, owner audit views, RLS, live Wasabi verification, malware scanning, and deployment remain outstanding.
+
+---
+
+## 14. Phase 8 Verification Notes (Verified Locally)
+
+The dedicated security suite is `backend/tests/test_security.py`; it contains 40 cases named after the threat sections below. The full 198-test backend suite passed locally with 89% combined statement/branch coverage. CI is configured in `.github/workflows/backend-tests.yml` but has not yet run remotely.
+
+| Threat | Automated verification |
+|--------|------------------------|
+| 4.1 IDOR | `test_threat_4_1_cross_user_document_operations_are_denied` (GET, download, PATCH, DELETE), `test_threat_4_1_4_4_mr10_grant_read_then_revoke_is_immediate_and_audited`, `test_threat_4_1_guessed_and_missing_ids_are_indistinguishable` |
+| 4.2 Unauthorized downloads | `test_threat_4_2_download_denial_precedes_storage_access`; existing cross-user and admin denial tests |
+| 4.3 Privilege escalation | `test_threat_4_3_role_injection_is_rejected_at_registration`, `test_threat_4_3_forged_role_claim_cannot_escalate_upload`, `test_threat_4_3_administrator_role_does_not_grant_content_or_sharing` |
+| 4.4 Access after revocation | `test_threat_4_1_4_4_mr10_grant_read_then_revoke_is_immediate_and_audited`; existing immediate-revocation tests |
+| 4.5 Malicious uploads | `test_threat_4_5_malicious_uploads_are_rejected_without_storage` (executable, MIME/signature mismatch, HTML-as-PNG, empty, malformed DOCX) |
+| 4.6 Path manipulation | `test_threat_4_6_path_manipulation_filenames_are_rejected`, `test_threat_4_6_control_characters_cannot_reach_storage_keys`, `test_threat_4_6_storage_keys_never_use_client_filenames` |
+| 4.7 Unauthorized permission changes | `test_threat_4_7_recipient_cannot_manage_permissions` plus existing owner-only grant tests |
+| 4.8 Audit tampering | `test_threat_4_8_audit_api_rejects_mutation_methods` (POST/PUT/PATCH/DELETE on both audit endpoints), `test_threat_4_8_audit_api_has_no_event_mutation_route` |
+| 4.9 Metadata leakage | `test_threat_4_9_denials_do_not_disclose_document_metadata`, `test_threat_4_1_guessed_and_missing_ids_are_indistinguishable` |
+| 4.10 Exposed credentials | `test_threat_4_10_internal_failures_do_not_expose_credentials`; secret-safe logging and repository scan remain operational checks |
+| 4.11 Weak RLS policies | `test_threat_4_11_application_authorization_is_authoritative_without_rls`; RLS is disabled and policy tests remain outstanding |
+| 4.12 Session and token theft | `test_threat_4_12_expired_access_token_is_rejected`, `test_threat_4_12_tampered_access_token_is_rejected`, `test_threat_4_12_logout_invalidates_previously_stolen_access_token` |
+| 4.13 Brute force and credential stuffing | `test_threat_4_13_brute_force_is_rate_limited_without_disclosure` plus existing generic-error and registration-limit tests |
+| 4.14 Denial of service | `test_threat_4_14_oversized_upload_is_rejected_before_storage` plus existing DOCX expansion and upload-size tests |
+
+**Limitations:** The suite verifies implemented controls, not the absence of vulnerabilities. RLS, malware scanning, live Wasabi policy/connectivity, shared multi-instance rate limiting, MFA, and independent checkpoint storage remain unimplemented or unverified.

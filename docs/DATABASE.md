@@ -254,7 +254,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management/audit tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 158 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management/audit tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 198 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
 
 Run the suite:
 

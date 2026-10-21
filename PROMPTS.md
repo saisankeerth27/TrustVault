@@ -327,6 +327,36 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Configured checkpoint settings in the tamper test environment so checkpoint verification could be exercised.
   - Reconciled stale Phase 6 status, README test counts, audit API descriptions, checkpoint limitations, and implementation-plan deliverables with the actual code.
   - Recorded the Phase 6 commit hash/link and left the Phase 7 hash/link pending for reporting after the single final commit.
-- **Commit hash:** pending final Phase 7 commit/push; reported in the final response.
-- **GitHub link:** pending final Phase 7 commit/push.
-- **Human review and decision:** Phase 7 review pending; Phase 8 must not begin until approval is given.
+- **Commit hash:** `fd7005f2d115478ab29db5384c990d8d5ac92bec`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/fd7005f2d115478ab29db5384c990d8d5ac92bec
+- **Human review and decision:** Approved; Phase 8 was subsequently authorized.
+
+---
+
+## 2026-10-21 — Phase 8: Security Tests and Threat-Model Verification
+
+- **Date and phase:** 2026-10-21 — Phase 8 (Security Tests and Threat-Model Verification)
+- **Objective:** Add a dedicated security suite mapped to `THREATS.md`, prove cross-user denial for GET/download/edit/delete, verify privilege-escalation denial with audit records, prove the audit API has no mutation path, cover malicious uploads/path traversal/token abuse/rate limits, run the full suite with coverage, add CI integration, update documentation, make exactly one commit, and push once.
+- **Prompt / instruction summary:** The human instructed continuation with “Continue if you have next steps” after reviewing the Phase 7 summary, authorizing completion of the remaining Phase 8 requirements. The work preserved Phases 0–7, used the existing JavaScript/JSX frontend, avoided secrets, and retained the one-commit/one-push phase convention.
+- **Files or code produced:**
+  - New `backend/tests/test_security.py` with 40 threat-mapped cases covering IDOR, MR-10 cross-user denial and immediate revocation, privilege escalation, malicious uploads, path manipulation, permission changes, audit API tampering, metadata leakage, credential-safe failures, token expiry/tampering/logout, brute force, and oversized uploads.
+  - New `backend/.coveragerc`, `pytest-cov==7.1.0` in `backend/requirements-dev.txt`, coverage output ignores, and a new `.github/workflows/backend-tests.yml` running the full suite with coverage on backend pushes and pull requests.
+  - Documentation updates in `README.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/REQUIREMENTS.md`, `docs/IMPLEMENTATION_PLAN.md`, and `THREATS.md`, including a threat-to-test mapping table and Phase 8 status notes.
+- **Tests and verification performed:**
+  - Dedicated security suite: **40 passed**.
+  - Full backend suite: **198 passed**, two Starlette/httpx deprecation warnings (the existing TestClient transport warning and the existing deprecated 413 constant).
+  - Coverage: **89%** combined statement/branch coverage across 2,130 statements and 410 branches; authorization and document services 77%–88%, admin audit API 96%.
+  - Frontend lint and production build re-run with no JavaScript/JSX changes.
+  - Not performed: remote GitHub Actions execution, live Wasabi verification, Supabase migration, RLS, malware scanning, or deployment.
+- **Issues discovered:**
+  - HTTP multipart parsing strips NUL/control characters before the application filename validator sees them; the integration test therefore verifies rejection or safe normalization, no control characters in server-generated keys, and no client filename in storage paths. The direct validator continues to reject control characters.
+  - Coverage XML generation was run separately with `coverage xml` after a local pytest-coverage invocation; the CI workflow follows the same split.
+  - RLS remains disabled, so the RLS threat cannot be verified with policy tests; Phase 8 explicitly documents application-level authorization as the authoritative boundary instead of claiming RLS coverage.
+  - The GitHub Actions workflow cannot be executed locally and its first remote run will occur on push.
+- **Corrections made:**
+  - Kept historical Phase 7 test counts while updating current suite counts to 198.
+  - Removed a duplicate Phase 8 row from the README project-status table.
+  - Recorded the Phase 7 commit hash/link and approval decision in this log.
+- **Commit hash:** pending final Phase 8 commit/push; reported in the final response.
+- **GitHub link:** pending final Phase 8 commit/push.
+- **Human review and decision:** Phase 8 review pending; Phase 9 must not begin until approval is given.

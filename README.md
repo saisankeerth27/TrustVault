@@ -2,8 +2,8 @@
 
 TrustVault is a secure, multi-tenant document vault that lets organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
-> **Status: Phase 7 — Tamper-evident audit trail and administrator activity views implemented and verified locally (awaiting review).**
-> Phases 0–7 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, an authenticated document library, owner-managed READ/EDIT sharing with immediate revocation, and an append-only hash-chained audit trail with a signed checkpoint and administrator audit dashboard. Storage behavior is tested with a mocked Wasabi adapter; **live Wasabi bucket connectivity, download, and object-deletion behavior were not verified** because no storage credentials were supplied. There is no live deployment, and migrations have **not** been applied to the Supabase project.
+> **Status: Phase 8 — Security tests and threat-model verification implemented and verified locally (awaiting review).**
+> Phases 0–8 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, an authenticated document library, owner-managed READ/EDIT sharing with immediate revocation, and an append-only hash-chained audit trail with a signed checkpoint and administrator audit dashboard. Phase 8 adds a 40-case threat-mapped security suite covering cross-user denial, privilege escalation, audit mutation attempts, upload attacks, token abuse, and rate limits. Storage behavior is tested with a mocked Wasabi adapter; **live Wasabi bucket connectivity, download, and object-deletion behavior were not verified** because no storage credentials were supplied. There is no live deployment, and migrations have **not** been applied to the Supabase project.
 
 ## Project Objective
 
@@ -323,7 +323,7 @@ cd backend
 pytest
 ```
 
-The suite currently has **158 tests**. It verifies:
+The suite currently has **198 tests**, including **40 threat-mapped security cases** in `backend/tests/test_security.py`. It verifies:
 
 - Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
 - Database URL normalization and Supabase pooler/SSL detection.
@@ -349,8 +349,19 @@ The suite currently has **158 tests**. It verifies:
 - Audit events for registration, login success/failure, logout, uploads, metadata updates, downloads, deletes, permission changes, and denied operations.
 - Administrator-only audit query access, filters, pagination, generic denial behavior, request-ID normalization, metadata/request-context sanitization, and denied audit access.
 - Hash-chain verification, middle-event tampering/removal detection, signed-checkpoint success/staleness/truncation/signature failure, and mandatory-audit-write rollback behavior.
+- Threat-model verification for IDOR, cross-user GET/download/edit/delete denial, grant/revoke audit coverage, forged role claims, administrator content boundaries, malicious uploads, path manipulation, audit API mutation attempts, metadata leakage, secret-safe failures, expired/tampered tokens, logout invalidation, brute-force limits, and oversized uploads.
 
 Database tests start an **embedded PostgreSQL** instance in a temporary directory and never contact Supabase or read `DATABASE_URL`. Storage tests use a fake adapter; no test contacts Wasabi.
+
+Coverage is generated separately from test success:
+
+```powershell
+pytest --cov=app --cov-report=term-missing
+```
+
+The verified local full-suite run passed **198 tests** with **89% coverage** across 2,130 statements and 410 branches. Authorization and document services are exercised at 77%–88%, the administrator audit API at 96%, and `app/api/deps.py`, `app/main.py`, and the error/schema modules at 100%. Coverage is a diagnostic, not proof of security.
+
+The GitHub Actions workflow `.github/workflows/backend-tests.yml` runs the full backend suite with coverage on pushes and pull requests that change `backend/**`. Remote CI execution is not verified until the workflow runs on GitHub.
 
 ### Frontend
 
@@ -459,9 +470,8 @@ See [THREATS.md](THREATS.md) for the full threat model.
 | 4 — Private Storage and Validated Uploads | Complete |
 | 5 — Document Management and Search | Complete |
 | 6 — Document Permissions and Revocation | Complete |
-| 7 — Audit Trail and Administrator Activity | Complete — awaiting review |
-| 8 — Security Tests and Threat-Model Verification | Not started (next) |
-| 8 — Security Tests and Threat-Model Verification | Not started |
+| 7 — Audit Trail and Administrator Activity | Complete |
+| 8 — Security Tests and Threat-Model Verification | Complete — awaiting review |
 | 9 — Complete Frontend | Not started |
 | 10 — Deployment Hardening and End-to-End Verification | Not started |
 | 11 — Final Submission and Demo | Not started |
