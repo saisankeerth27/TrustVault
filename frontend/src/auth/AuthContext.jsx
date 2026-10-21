@@ -6,6 +6,7 @@ import {
   getCurrentUser,
   login as loginRequest,
   logout as logoutRequest,
+  register as registerRequest,
 } from '@/services/auth'
 
 export function AuthProvider({ children }) {
@@ -54,6 +55,14 @@ export function AuthProvider({ children }) {
     return session.user
   }, [])
 
+  const register = useCallback(async (details) => {
+    const session = await registerRequest(details)
+    setAccessToken(session.access_token)
+    setUser(session.user)
+    setStatus('authenticated')
+    return session.user
+  }, [])
+
   const logout = useCallback(async () => {
     try {
       await logoutRequest()
@@ -65,8 +74,8 @@ export function AuthProvider({ children }) {
   }, [])
 
   const value = useMemo(
-    () => ({ status, user, login, logout }),
-    [status, user, login, logout],
+    () => ({ status, user, login, register, logout }),
+    [status, user, login, register, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

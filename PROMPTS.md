@@ -363,6 +363,53 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 
 ---
 
+## 2026-10-21 — Phase 9: Complete Frontend
+
+- **Date and phase:** 2026-10-21 — Phase 9 (Complete Frontend)
+- **Objective:** Complete and verify every Phase 9 frontend surface, integrate it with the real backend contracts, add automated frontend coverage, update documentation, and deliver the phase as one commit and one push.
+- **Prompt / instruction summary:** The human authorized completion of Phase 9 with the existing JavaScript/JSX-only React frontend, real backend APIs, no mock success paths, no secrets, and no TypeScript. The phase had to be fully verified before exactly one commit (`feat(frontend): complete TrustVault user interface`) and one push, followed by a stop before Phase 10.
+- **Files or code produced:**
+  - New `frontend/src/pages/RegisterPage.jsx` with name/email/password/confirmation validation, 12-character and 72-byte password limits, server-error display, automatic sign-in, and public-only Viewer messaging.
+  - Registration wiring in `frontend/src/services/auth.js`, `frontend/src/auth/AuthContext.jsx`, and `frontend/src/app/App.jsx`; a registration link on the login page.
+  - Rebuilt `frontend/src/pages/DashboardPage.jsx` around real authenticated API data: accessible, shared, and owned document counts plus recent permitted documents and role-aware quick actions, with loading, error, retry, and empty states.
+  - New `frontend/src/pages/UploadPage.jsx` and `/upload` route with owner/administrator gating; the reusable upload panel retains file/category/description validation and progress feedback. The library now links to the dedicated page instead of embedding the upload form.
+  - Rebuilt `frontend/src/components/AppLayout.jsx` with a desktop sidebar, compact mobile header, scrollable labelled mobile navigation, role-separated administrator destinations, and accessible sign-out controls.
+  - Document library owner-ID filter with UUID validation in `frontend/src/pages/DocumentsPage.jsx`; raw input is separated from the applied filter so invalid or partial UUIDs are never sent to the API. Broader UUID acceptance was applied to the library and audit filters.
+  - Owner account UUID display and route-keyed state reset in `frontend/src/pages/DocumentDetailsPage.jsx`, making the exact owner filter discoverable and preventing stale details when only `documentId` changes.
+  - Bounded validation-detail extraction in `frontend/src/services/api.js`; backend validation messages are surfaced without echoing raw submitted values.
+  - Vitest, jsdom, React Testing Library, jest-dom, and user-event configuration in `frontend/package.json`, `frontend/vite.config.js`, and `frontend/src/test/setup.js`.
+  - New tests: `frontend/src/services/api.test.js`, `frontend/src/components/AppLayout.test.jsx`, `frontend/src/pages/DashboardPage.test.jsx`, and `frontend/src/pages/UploadPage.test.jsx`.
+  - Documentation updates in `README.md`, `docs/ARCHITECTURE.md`, `docs/REQUIREMENTS.md`, `docs/IMPLEMENTATION_PLAN.md`, and this entry.
+- **Tests and verification performed:**
+  - `npm run lint`: 0 warnings and 0 errors.
+  - `npm test`: 9 tests passed across 4 files.
+  - `npm run build`: succeeded; retained the existing chunk-size warning.
+  - Backend full suite was re-run to confirm Phase 9 introduced no server regressions.
+  - Code-level review covered route gating, registration/login copy, dashboard API wiring, owner filtering state, dedicated upload routing, sidebar/mobile navigation, owner-only controls, error-detail handling, and loading/error/empty states.
+  - Not performed: browser-based multi-role walkthrough, live backend/Wasabi verification, Supabase migration, or deployment.
+- **Issues discovered:**
+  - The backend registration endpoint and frontend service were complete, but the frontend had no registration page or route; login text referenced public registration without a link.
+  - The dashboard was mostly static security/health copy and did not show real permitted document or sharing counts.
+  - Upload was embedded in the library rather than exposed as a dedicated page, and the layout used a top navigation bar instead of a responsive sidebar/mobile shell.
+  - The library exposed name, category, and date filters but not the backend's owner-ID filter.
+  - An initial owner-filter implementation drove requests from raw input, so partial invalid UUIDs could be sent to the API; the owner UUID was also not visible in the UI.
+  - Mobile navigation used icon-only links without accessible names, administrator navigation could become crowded on narrow viewports, and route reuse could retain stale detail state when only the document ID changed.
+  - Login copy stated that all accounts were administrator-provisioned, contradicting the newly exposed public Viewer registration. Several pages still described Phase 6/7 as current or future state, including a dashboard statement that audit history was still pending.
+  - There was no frontend test harness, and API validation failures were reduced to a generic status message.
+- **Corrections made:**
+  - Added the registration route and automatic session establishment; phased-out labels were replaced with task-oriented labels.
+  - Replaced static dashboard content with API-backed counts and recent documents, including explicit failure and retry states.
+  - Added the dedicated upload route, sidebar/mobile navigation shell, and accessible short labels.
+  - Added exact owner filtering with a separate applied filter, a permissive UUID check that accepts all standard UUID versions, and owner-UUID display on details.
+  - Added bounded validation-detail support to the API error helper and covered it with tests.
+  - Added Vitest/React Testing Library and focused tests for error handling, role navigation, dashboard data, and upload authorization.
+  - Corrected login/dashboard/admin copy so public Viewer registration and administrator provisioning are described consistently.
+- **Commit hash:** The final Phase 9 commit created from this working tree. Its hash is reported in the completion response because a commit cannot contain its own hash without rewriting history.
+- **GitHub link:** Reported with the pushed Phase 9 commit.
+- **Human review and decision:** Awaiting review. The phase workflow uses one final commit and one push, then stops before Phase 10.
+
+---
+
 ## 2026-10-21 — Phase 8 Security Re-Audit
 
 - **Date and phase:** 2026-10-21 — Phase 8 re-audit (security tests and threat-model verification), preserving uncommitted Phase 9 work.
@@ -384,6 +431,6 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Audit events appended after the latest checkpoint and then deleted are not detectable by that checkpoint; independent scheduled checkpoint publication is still required. Checkpoint creation is not serialized against concurrent writers.
   - Orphaned storage objects are only logged; no reconciliation tool exists.
   - Disabled-account re-enable semantics, account-enumeration signals, in-memory rate limiting, and missing CSP/HSTS remain as previously documented limitations.
-- **Commit hash:** this local Phase 8 commit; Phase 9 remains uncommitted in the local working tree.
-- **GitHub link:** not applicable; no push performed.
-- **Human review and decision:** Approved for the local Phase 8 commit; Phase 9 remains uncommitted.
+- **Commit hash:** `d4243ac132c7b68efb468b2714f4596df4bd273f`
+- **GitHub link:** not applicable; the Phase 8 re-audit commit was created locally without a push.
+- **Human review and decision:** Approved for the local Phase 8 commit; Phase 9 was then completed in the working tree.

@@ -83,7 +83,7 @@ export function SharedDocumentsPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 6"
+        eyebrow="Sharing"
         title="Shared with me"
         description="Documents another owner has shared with your account. READ grants allow viewing and downloads; EDIT grants also allow metadata updates. Access changes take effect on your next request."
         actions={

@@ -70,6 +70,10 @@ function MetadataItem({ icon: Icon, label, children, className }) {
 
 export function DocumentDetailsPage() {
   const { documentId } = useParams()
+  return <DocumentDetailsView key={documentId} documentId={documentId} />
+}
+
+function DocumentDetailsView({ documentId }) {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [documentRecord, setDocumentRecord] = useState(null)
@@ -405,6 +409,9 @@ export function DocumentDetailsPage() {
                 {documentRecord.owner_id === user?.id ? (
                   <span className="ml-2 text-xs text-muted-foreground">(you)</span>
                 ) : null}
+                <span className="mt-1 block font-mono text-xs text-muted-foreground break-all">
+                  {documentRecord.owner_id}
+                </span>
               </MetadataItem>
               <MetadataItem icon={FileText} label="Category">
                 {documentRecord.category || 'Uncategorized'}

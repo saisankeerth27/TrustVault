@@ -4,7 +4,7 @@
 
 TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and Wasabi S3-compatible private object storage. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 8):** authentication, database-backed roles, rotating refresh sessions, the protected JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints and an administrator audit dashboard, and a threat-mapped security suite are implemented and verified locally. Storage tests use a mocked Wasabi adapter; **live Wasabi connectivity, download, and object-deletion behavior have not been verified**. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
+> **Implementation status (Phase 9):** authentication, database-backed roles, rotating refresh sessions, the complete JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints and an administrator audit dashboard, and a threat-mapped security suite are implemented and verified locally. The frontend includes public Viewer registration, login, a live access dashboard, a dedicated upload page, search/filter/sort/pagination, document details and metadata editing, owner-only permission management, the administrator audit viewer, desktop sidebar and mobile navigation, loading/error/empty states, and automated component/service tests. Storage tests use a mocked Wasabi adapter; **live Wasabi connectivity, download, and object-deletion behavior have not been verified**. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
 
 ### Architecture Diagram
 
@@ -64,8 +64,8 @@ graph TB
 | 5 | Document listing, download proxy, management, and search | Complete (verified locally with mocked storage; live Wasabi unverified) |
 | 6 | Named-user READ/EDIT permissions, sharing, immediate revocation | Complete (verified locally with mocked storage; live Wasabi unverified) |
 | 7 | Audit write path, hash chain, signed checkpoint, admin activity | Complete (verified locally) |
-| 8 | Security tests and threat-model verification | Complete (verified locally; awaiting review) |
-| 9 | Complete frontend | Planned |
+| 8 | Security tests and threat-model verification | Complete (verified locally) |
+| 9 | Complete frontend | Complete (verified locally; awaiting review) |
 | 10 | Deployment hardening and end-to-end verification | Planned |
 | 11 | Final submission and demo | Planned |
 
@@ -77,7 +77,7 @@ The implemented schema is documented in full in [DATABASE.md](DATABASE.md).
 
 The React SPA runs entirely in the user's browser. It is responsible for:
 
-- **Rendering the UI** — login, authenticated dashboard, document library/details, shared-with-me view, owner permission management, role-gated administrator area, and the administrator audit dashboard.
+- **Rendering the UI** — registration and login, authenticated dashboard, document library/details, shared-with-me view, owner permission management, role-gated administrator area, and the administrator audit dashboard.
 - **Client-side routing** — single-page navigation via React Router.
 - **Client-side form validation** — for user experience only. All validation is re-performed server-side.
 - **API communication** — all data interactions go through the FastAPI backend via HTTPS REST calls using a centralized Axios client.
@@ -640,3 +640,15 @@ Planned policies:
 - **Coverage:** The full 213-test suite passes with 89% combined statement/branch coverage across 2,175 statements and 426 branches. Authorization and document services are at 77%-88%, the administrator audit API at 96%, and dependency, application, error, and audit-schema modules at 100%.
 - **CI:** `.github/workflows/backend-tests.yml` runs the full suite and coverage on backend pushes and pull requests. The workflow has not yet run on GitHub.
 - **Honest limitations:** RLS is still not enabled, so there are no database RLS policy tests; application-level authorization remains the primary boundary and is verified directly. Malware scanning, live Wasabi behavior, Supabase migration, and deployment remain outstanding. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.
+
+---
+
+## 23. Phase 9 Implementation Notes (Verified Locally)
+
+- **Registration:** `/register` is public, validates name, email, password length/UTF-8 byte limits, and password confirmation, then signs the new Viewer in through the existing `AuthResponse` flow. Public registration cannot submit a role.
+- **Navigation and accessibility:** desktop routes use a sidebar workspace shell; mobile uses a compact top bar with scrollable, labelled navigation. Links and sign-out retain accessible names, and administrator destinations are separated from workspace destinations.
+- **Dashboard:** `/dashboard` loads real permitted-document, shared-document, and owned-document counts plus recent documents from the authenticated list endpoints. It does not display sample accounts or fabricated activity.
+- **Document library:** name search, category, exact owner-ID, created-date filters, allow-listed sorting, and pagination are exposed through the backend query contract. Invalid owner UUIDs are never sent to the API, and document details expose the owner ID needed for exact filtering.
+- **Complete surfaces:** the dedicated `/upload` page provides validation/progress feedback; details provide metadata editing, download, and owner deletion; owners can grant, update, revoke, and review history; administrators can filter audit events and verify integrity. All of these actions use the real backend contracts.
+- **Error handling:** API errors use the backend envelope and include bounded validation field messages without exposing raw submitted values. Forms retain loading, error, empty, success, confirmation, forbidden, and not-found states.
+- **Verification:** `npm run lint` reports 0 warnings/errors, `npm test` passes 9 Vitest/React Testing Library tests, and `npm run build` succeeds while retaining the existing chunk-size warning. A browser-based multi-role walkthrough and live backend/Wasabi/deployment behavior remain unverified.

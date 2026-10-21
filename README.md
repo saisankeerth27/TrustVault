@@ -2,8 +2,8 @@
 
 TrustVault is a secure, multi-tenant document vault that lets organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
-> **Status: Phase 8 — Security tests and threat-model verification implemented and verified locally (awaiting review).**
-> Phases 0–8 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, an authenticated document library, owner-managed READ/EDIT sharing with immediate revocation, and an append-only hash-chained audit trail with a signed checkpoint and administrator audit dashboard. Phase 8 adds a 40-case threat-mapped security suite covering cross-user denial, privilege escalation, audit mutation attempts, upload attacks, token abuse, and rate limits. Storage behavior is tested with a mocked Wasabi adapter; **live Wasabi bucket connectivity, download, and object-deletion behavior were not verified** because no storage credentials were supplied. There is no live deployment, and migrations have **not** been applied to the Supabase project.
+> **Status: Phase 9 — Complete frontend implemented and verified locally (awaiting review).** The Phase 8 security re-audit is committed locally as `d4243ac`.
+> Phases 0–9 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, an authenticated document library, owner-managed READ/EDIT sharing with immediate revocation, an append-only hash-chained audit trail with a signed checkpoint and administrator audit dashboard, a 46-case threat-mapped security suite, and the complete React frontend. The frontend includes registration and login, a live access dashboard, a dedicated upload page with validation feedback, search/filter/sort/pagination, document details and metadata editing, owner-only permission management, an administrator audit viewer, desktop sidebar and mobile navigation, loading/error/empty states, and automated component/service tests. Storage behavior is tested with a mocked Wasabi adapter; **live Wasabi bucket connectivity, download, and object-deletion behavior were not verified** because no storage credentials were supplied. There is no live deployment, and migrations have **not** been applied to the Supabase project.
 
 ## Project Objective
 
@@ -184,9 +184,11 @@ The Vite development server is available at <http://localhost:5173>. `VITE_API_B
 
 | Route | Purpose | Access |
 |-------|---------|--------|
-| `/login` | Real login form and session bootstrap | Public |
-| `/dashboard` | Authenticated health/status dashboard | Any signed-in user |
-| `/documents` | Searchable document library with filters, pagination, and upload for Owner/Admin | Any signed-in user; includes owned and directly shared documents |
+| `/login` | Login form and session bootstrap | Public |
+| `/register` | Viewer account registration with validation and automatic sign-in | Public |
+| `/dashboard` | Live document, owned, and shared counts with recent permitted documents | Any signed-in user |
+| `/documents` | Searchable document library with name/category/owner/date filters, sorting, and pagination | Any signed-in user; includes owned and directly shared documents |
+| `/upload` | Dedicated validated upload page with progress feedback | Document Owner or Administrator |
 | `/shared-with-me` | Documents with an active READ/EDIT grant for the signed-in user | Any signed-in user |
 | `/documents/:documentId` | Access-aware metadata details and download/edit/delete/manage actions | Any signed-in user with metadata visibility |
 | `/documents/:documentId/permissions` | Owner-only grant, level update, revocation, and grant history | Document owner only |
@@ -229,7 +231,7 @@ Phases 5–6 implement the authenticated document library and named-user sharing
 - Permission management is owner-only. Administrators do not gain owner or sharing powers. Permission lists include active and revoked rows, with `total` and `active_total`.
 - Successful document, permission, registration, login, and logout actions append audit events in the same database transaction as the protected change. Denials are recorded best-effort so an audit failure cannot turn an authorization denial into a success.
 
-The frontend provides a searchable/filterable library, a "Shared with me" view, access-level badges, an upload panel, an access-aware details page, and an owner-only sharing page with grant, level update, revoke confirmation, and history. Administrator metadata review remains read-only.
+The frontend provides registration and login, a live dashboard with permitted-document counts and recent activity, a searchable/filterable library with name, category, owner-ID, and date filters, sorting, and pagination; a "Shared with me" view; access-level badges; a dedicated upload page with validation and progress feedback; an access-aware details page with metadata editing and download; and an owner-only sharing page with grant, level update, revoke confirmation, and history. Administrators get a metadata-review interface and the audit viewer; administrator metadata review remains read-only. Desktop uses a sidebar navigation shell, while mobile uses a compact top bar and scrollable navigation.
 
 Storage behavior is verified with a mocked adapter. **Live Wasabi bucket policy, connectivity, download, and object deletion were not verified** because no credentials were supplied. The bucket must remain private.
 
@@ -368,10 +370,11 @@ The GitHub Actions workflow `.github/workflows/backend-tests.yml` runs the full 
 ```powershell
 cd frontend
 npm run lint
+npm test
 npm run build
 ```
 
-Both commands pass. The frontend is JavaScript/JSX only, and `npm run build` runs the Vite production build.
+All three commands pass. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The 9 automated tests cover safe API error extraction, role-aware navigation, dashboard API-backed counts and failure handling, and upload-route authorization. A browser-based walkthrough with each live role, live backend/Wasabi behavior, and deployment remain unverified.
 
 ## API Baseline
 
@@ -471,8 +474,8 @@ See [THREATS.md](THREATS.md) for the full threat model.
 | 5 — Document Management and Search | Complete |
 | 6 — Document Permissions and Revocation | Complete |
 | 7 — Audit Trail and Administrator Activity | Complete |
-| 8 — Security Tests and Threat-Model Verification | Complete — awaiting review |
-| 9 — Complete Frontend | Not started |
+| 8 — Security Tests and Threat-Model Verification | Complete |
+| 9 — Complete Frontend | Complete — awaiting review |
 | 10 — Deployment Hardening and End-to-End Verification | Not started |
 | 11 — Final Submission and Demo | Not started |
 

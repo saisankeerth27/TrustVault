@@ -46,8 +46,7 @@ const EMPTY_RESULT = {
   has_next: false,
   has_previous: false,
 }
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const fieldClassName =
   'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
@@ -396,7 +395,7 @@ export function AuditPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 7"
+        eyebrow="Administration"
         title="Audit trail"
         description="Review tamper-evident authentication, document, permission, and denial events across TrustVault. Only the event's recorded metadata is shown; file contents and credentials are never included."
         actions={

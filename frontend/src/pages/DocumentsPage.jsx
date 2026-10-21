@@ -4,15 +4,14 @@ import {
   ArrowRight,
   FileText,
   LoaderCircle,
-  Plus,
   RefreshCw,
   Search,
+  UploadCloud,
   X,
 } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
-import { UploadDocumentPanel } from '@/components/documents/UploadDocumentPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
@@ -29,6 +28,7 @@ import { getApiErrorMessage } from '@/services/api'
 import { listDocuments } from '@/services/documents'
 
 const PAGE_SIZE = 10
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const EMPTY_RESULT = {
   items: [],
   total: 0,
@@ -53,6 +53,9 @@ export function DocumentsPage() {
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [category, setCategory] = useState('')
+  const [ownerId, setOwnerId] = useState('')
+  const [ownerFilter, setOwnerFilter] = useState('')
+  const [ownerError, setOwnerError] = useState(null)
   const [sort, setSort] = useState(SORT_OPTIONS[0].value)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -62,10 +65,14 @@ export function DocumentsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(() => location.state?.notice ?? null)
-  const [showUpload, setShowUpload] = useState(false)
 
   const hasFilters = Boolean(
-    query.trim() || category.trim() || dateFrom || dateTo || sort !== SORT_OPTIONS[0].value,
+    query.trim() ||
+      category.trim() ||
+      ownerId.trim() ||
+      dateFrom ||
+      dateTo ||
+      sort !== SORT_OPTIONS[0].value,
   )
 
   useEffect(() => {
@@ -91,6 +98,9 @@ export function DocumentsPage() {
     if (category.trim()) {
       params.category = category.trim()
     }
+    if (ownerFilter) {
+      params.owner_id = ownerFilter
+    }
     if (dateFrom) {
       params.created_from = dateFrom
     }
@@ -115,7 +125,7 @@ export function DocumentsPage() {
       })
 
     return () => controller.abort()
-  }, [category, dateFrom, dateTo, debouncedQuery, page, refreshKey, sort])
+  }, [category, dateFrom, dateTo, debouncedQuery, ownerFilter, page, refreshKey, sort])
 
   const rangeLabel = useMemo(() => {
     if (result.total === 0) {
@@ -137,11 +147,36 @@ export function DocumentsPage() {
     setPage(1)
   }
 
+  function updateOwner(value) {
+    const next = value.trim()
+    setOwnerId(value)
+
+    if (next && !UUID_PATTERN.test(next)) {
+      setOwnerError('Owner ID must be a valid UUID.')
+      if (ownerFilter) {
+        setOwnerFilter('')
+        beginRequest()
+        setPage(1)
+      }
+      return
+    }
+
+    setOwnerError(null)
+    if (next !== ownerFilter || page !== 1) {
+      beginRequest()
+    }
+    setOwnerFilter(next)
+    setPage(1)
+  }
+
   function clearFilters() {
     beginRequest()
     setQuery('')
     setDebouncedQuery('')
     setCategory('')
+    setOwnerId('')
+    setOwnerFilter('')
+    setOwnerError(null)
     setSort(SORT_OPTIONS[0].value)
     setDateFrom('')
     setDateTo('')
@@ -153,17 +188,10 @@ export function DocumentsPage() {
     setRefreshKey((key) => key + 1)
   }
 
-  function handleUploaded(documentRecord) {
-    beginRequest()
-    setNotice(`${documentRecord.name} was uploaded successfully.`)
-    setPage(1)
-    setRefreshKey((key) => key + 1)
-  }
-
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 6"
+        eyebrow="Library"
         title="Document library"
         description={
           canUpload
@@ -172,35 +200,13 @@ export function DocumentsPage() {
         }
         actions={
           canUpload ? (
-            <Button
-              type="button"
-              onClick={() => {
-                setShowUpload((visible) => !visible)
-                setNotice(null)
-              }}
-            >
-              {showUpload ? (
-                <>
-                  <X className="size-4" aria-hidden="true" />
-                  Close upload
-                </>
-              ) : (
-                <>
-                  <Plus className="size-4" aria-hidden="true" />
-                  Upload document
-                </>
-              )}
-            </Button>
+            <Link to="/upload" className={buttonVariants()}>
+              <UploadCloud className="size-4" aria-hidden="true" />
+              Upload document
+            </Link>
           ) : undefined
         }
       />
-
-      {showUpload && canUpload ? (
-        <UploadDocumentPanel
-          onUploaded={handleUploaded}
-          onCancel={() => setShowUpload(false)}
-        />
-      ) : null}
 
       {notice ? (
         <div
@@ -237,8 +243,8 @@ export function DocumentsPage() {
             ) : null}
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr]">
-            <div className="space-y-2">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="space-y-2 md:col-span-2">
               <label htmlFor="document-search" className="text-sm font-medium">
                 Search by name
               </label>
@@ -281,6 +287,34 @@ export function DocumentsPage() {
                   <option key={option} value={option} />
                 ))}
               </datalist>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="document-owner-filter" className="text-sm font-medium">
+                Owner ID
+              </label>
+              <input
+                id="document-owner-filter"
+                type="text"
+                value={ownerId}
+                spellCheck={false}
+                placeholder="Exact owner UUID"
+                onChange={(event) => updateOwner(event.target.value)}
+                aria-invalid={ownerError ? true : undefined}
+                aria-describedby={
+                  ownerError ? 'document-owner-filter-error' : 'document-owner-filter-help'
+                }
+                className={cn(fieldClassName, 'font-mono text-xs')}
+              />
+              <p
+                id={ownerError ? 'document-owner-filter-error' : 'document-owner-filter-help'}
+                className={cn(
+                  'text-xs',
+                  ownerError ? 'text-destructive' : 'text-muted-foreground',
+                )}
+              >
+                {ownerError || 'Paste an owner account UUID. It is shown on document details.'}
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -397,7 +431,7 @@ export function DocumentsPage() {
                 </h3>
                 <p className="max-w-md text-sm text-muted-foreground">
                   {hasFilters
-                    ? 'Adjust the search, category, or date filters and try again.'
+                    ? 'Adjust the search, category, owner, or date filters and try again.'
                     : canUpload
                       ? 'Upload your first document to start building the library.'
                       : 'No documents have been shared with your account yet.'}
@@ -462,7 +496,10 @@ export function DocumentsPage() {
                         {documentRecord.category || 'Uncategorized'}
                       </td>
                       <td className="px-4 py-4">
-                        <span className="block max-w-40 truncate">
+                        <span
+                          className="block max-w-40 truncate"
+                          title={`Owner ID: ${documentRecord.owner_id}`}
+                        >
                           {documentRecord.owner_name}
                         </span>
                         {documentRecord.owner_id === user?.id ? (

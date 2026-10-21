@@ -356,7 +356,7 @@ export function DocumentPermissionsPage() {
       </Link>
 
       <PageHeader
-        eyebrow="Phase 6"
+        eyebrow="Sharing"
         title="Manage access"
         description={
           documentRecord

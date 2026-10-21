@@ -1,256 +1,348 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight,
-  CheckCircle2,
   FileText,
-  KeyRound,
-  LockKeyhole,
-  ServerCog,
+  LoaderCircle,
+  RefreshCw,
+  Share2,
+  ShieldCheck,
+  UploadCloud,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
+import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
 import { PageHeader } from '@/components/PageHeader'
+import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { cn } from '@/lib/utils'
-import { formatRole } from '@/lib/roles'
-import { apiBaseUrl, apiClient, getApiErrorMessage, isApiConfigured } from '@/services/api'
+import { formatBytes, formatDate, isDocumentManager } from '@/lib/documents'
+import { getApiErrorMessage } from '@/services/api'
+import { listDocuments, listSharedDocuments } from '@/services/documents'
 
-function StatusPill({ tone, children }) {
+const RECENT_PAGE_SIZE = 4
+const EMPTY_SUMMARY = {
+  items: [],
+  total: 0,
+  page: 1,
+  page_size: RECENT_PAGE_SIZE,
+  pages: 0,
+  has_next: false,
+  has_previous: false,
+}
+
+function isAbortError(error) {
+  return error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError'
+}
+
+function StatCard({ icon: Icon, label, value, hint, to, isLoading }) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium',
-        tone === 'success' && 'bg-emerald-50 text-emerald-700',
-        tone === 'warning' && 'bg-amber-50 text-amber-700',
-        tone === 'neutral' && 'bg-muted text-muted-foreground',
-      )}
+    <Link
+      to={to}
+      className="group rounded-xl border bg-card p-5 shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
-      <span
-        className={cn(
-          'size-1.5 rounded-full',
-          tone === 'success' && 'bg-emerald-500',
-          tone === 'warning' && 'bg-amber-500',
-          tone === 'neutral' && 'bg-muted-foreground',
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm text-muted-foreground">{label}</p>
+          <p className="mt-2 text-3xl font-semibold tracking-tight">
+            {isLoading ? (
+              <span
+                className="inline-block h-8 w-12 animate-pulse rounded bg-muted align-middle"
+                aria-label="Loading"
+              />
+            ) : (
+              (value ?? '—')
+            )}
+          </p>
+        </div>
+        <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="size-5" aria-hidden="true" />
+        </span>
+      </div>
+      <p className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground">
+        {hint}
+        <ArrowRight
+          className="size-3.5 transition-transform group-hover:translate-x-0.5"
+          aria-hidden="true"
+        />
+      </p>
+    </Link>
+  )
+}
+
+function RecentDocuments({ title, description, documents, isLoading, emptyMessage }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        {isLoading ? (
+          <div className="space-y-2 px-5 pb-5" aria-busy="true" aria-live="polite">
+            {[0, 1, 2].map((row) => (
+              <div key={row} className="flex items-center gap-3 rounded-lg border p-3">
+                <div className="size-9 animate-pulse rounded-lg bg-muted" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+                  <div className="h-3 w-1/4 animate-pulse rounded bg-muted" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : documents.length === 0 ? (
+          <div className="px-5 pb-6">
+            <p className="rounded-lg border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+              {emptyMessage}
+            </p>
+          </div>
+        ) : (
+          <ul className="divide-y border-t">
+            {documents.map((documentRecord) => (
+              <li key={documentRecord.id}>
+                <Link
+                  to={`/documents/${documentRecord.id}`}
+                  className="flex items-center gap-3 px-5 py-3.5 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+                    <FileText className="size-4" aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">
+                      {documentRecord.name}
+                    </span>
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                      {documentRecord.owner_name} · {formatBytes(documentRecord.file_size)} ·{' '}
+                      {formatDate(documentRecord.updated_at)}
+                    </span>
+                  </span>
+                  <AccessLevelBadge accessLevel={documentRecord.access_level} />
+                </Link>
+              </li>
+            ))}
+          </ul>
         )}
-        aria-hidden="true"
-      />
-      {children}
-    </span>
+      </CardContent>
+    </Card>
   )
 }
 
 export function DashboardPage() {
   const { user } = useAuth()
-  const [health, setHealth] = useState(() =>
-    isApiConfigured
-      ? { status: 'loading', message: 'Checking backend health...' }
-      : { status: 'unconfigured', message: 'VITE_API_BASE_URL is not configured.' },
-  )
+  const [documents, setDocuments] = useState(EMPTY_SUMMARY)
+  const [shared, setShared] = useState(EMPTY_SUMMARY)
+  const [owned, setOwned] = useState(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
-    if (!isApiConfigured) {
-      return
+    if (!user?.id) {
+      return undefined
     }
 
-    let active = true
+    const controller = new AbortController()
 
-    apiClient
-      .get('/health')
-      .then(({ data }) => {
-        if (active) {
-          setHealth({
-            status: 'online',
-            message: `${data.service} v${data.version} responded successfully.`,
-          })
+    Promise.all([
+      listDocuments(
+        {
+          page: 1,
+          page_size: RECENT_PAGE_SIZE,
+          sort_by: 'updated_at',
+          order: 'desc',
+        },
+        controller.signal,
+      ),
+      listSharedDocuments(
+        {
+          page: 1,
+          page_size: RECENT_PAGE_SIZE,
+          sort_by: 'updated_at',
+          order: 'desc',
+        },
+        controller.signal,
+      ),
+      listDocuments(
+        {
+          page: 1,
+          page_size: 1,
+          owner_id: user.id,
+        },
+        controller.signal,
+      ),
+    ])
+      .then(([documentSummary, sharedSummary, ownedSummary]) => {
+        if (!controller.signal.aborted) {
+          setDocuments(documentSummary)
+          setShared(sharedSummary)
+          setOwned(ownedSummary)
         }
       })
-      .catch((error) => {
-        if (active) {
-          setHealth({ status: 'offline', message: getApiErrorMessage(error) })
+      .catch((requestError) => {
+        if (!isAbortError(requestError)) {
+          setError(getApiErrorMessage(requestError))
+          setDocuments(EMPTY_SUMMARY)
+          setShared(EMPTY_SUMMARY)
+          setOwned(null)
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsLoading(false)
         }
       })
 
-    return () => {
-      active = false
+    return () => controller.abort()
+  }, [refreshKey, user?.id])
+
+  const canUpload = isDocumentManager(user)
+  const visibleTotal = isLoading ? null : documents.total
+  const sharedTotal = isLoading ? null : shared.total
+  const ownedTotal = isLoading ? null : (owned?.total ?? 0)
+
+  const quickLinks = useMemo(() => {
+    const links = [
+      { to: '/documents', label: 'Browse the document library' },
+      { to: '/shared-with-me', label: 'Review documents shared with you' },
+    ]
+    if (canUpload) {
+      links.push({ to: '/upload', label: 'Upload a new document' })
     }
-  }, [])
-
-  const healthTone =
-    health.status === 'online' ? 'success' : health.status === 'loading' ? 'neutral' : 'warning'
+    if (user?.role === 'ADMINISTRATOR') {
+      links.push({ to: '/admin/audit', label: 'Review the administrator audit trail' })
+    }
+    return links
+  }, [canUpload, user?.role])
 
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Phase 6"
-        title={user ? `Welcome back, ${user.name.split(' ')[0]}` : 'Application dashboard'}
-        description="You are signed in to TrustVault. Authentication, secure uploads, document management, named-user READ/EDIT grants, and immediate revocation are live. Immutable audit history arrives in Phase 7."
+        eyebrow="Overview"
+        title={user ? `Welcome back, ${user.name.split(' ')[0]}` : 'Dashboard'}
+        description="Your current document access, recent shares, and the actions available to your account."
         actions={
-          <Link to="/documents" className={buttonVariants({ variant: 'outline' })}>
-            View documents
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </Link>
+          <>
+            {canUpload ? (
+              <Link to="/upload" className={buttonVariants()}>
+                <UploadCloud className="size-4" aria-hidden="true" />
+                Upload document
+              </Link>
+            ) : null}
+            <Link
+              to="/documents"
+              className={buttonVariants({ variant: canUpload ? 'outline' : 'default' })}
+            >
+              View documents
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Link>
+          </>
         }
       />
 
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle>Authentication</CardTitle>
-              <StatusPill tone="success">Live</StatusPill>
-            </div>
-            <CardDescription>Your session is verified by the backend.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-3 text-sm">
-              {[
-                'Short-lived access token held in memory',
-                'Rotating HttpOnly refresh session',
-                'Database-backed role and account checks',
-              ].map((item) => (
-                <li key={item} className="flex items-start gap-2.5">
-                  <CheckCircle2
-                    className="mt-0.5 size-4 shrink-0 text-emerald-600"
-                    aria-hidden="true"
-                  />
-                  <span>{item}</span>
-                </li>
-              ))}
-              <li className="flex items-center justify-between gap-3 border-t pt-3">
-                <span className="text-muted-foreground">Signed in as</span>
-                <span className="text-right font-medium">
-                  {user ? formatRole(user.role) : ''}
-                </span>
-              </li>
-            </ul>
-          </CardContent>
-        </Card>
+      {error ? (
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-4 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between"
+        >
+          <span>{error}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setIsLoading(true)
+              setError(null)
+              setRefreshKey((key) => key + 1)
+            }}
+          >
+            <RefreshCw className="size-4" aria-hidden="true" />
+            Retry
+          </Button>
+        </div>
+      ) : null}
+
+      <section aria-label="Document summary" className="grid gap-4 md:grid-cols-3">
+        <StatCard
+          icon={FileText}
+          label="Accessible documents"
+          value={visibleTotal}
+          hint={
+            user?.role === 'ADMINISTRATOR'
+              ? 'Metadata visible to your administrator account'
+              : 'Owned or shared with your account'
+          }
+          to="/documents"
+          isLoading={isLoading}
+        />
+        <StatCard
+          icon={Share2}
+          label="Shared with me"
+          value={sharedTotal}
+          hint="Active READ or EDIT grants"
+          to="/shared-with-me"
+          isLoading={isLoading}
+        />
+        <StatCard
+          icon={ShieldCheck}
+          label="Owned by me"
+          value={ownedTotal}
+          hint="Documents uploaded under your account"
+          to="/documents"
+          isLoading={isLoading}
+        />
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
+        <div className="grid gap-5">
+          <RecentDocuments
+            title="Recently updated"
+            description="The latest documents visible to your account, ordered by update time."
+            documents={documents.items}
+            isLoading={isLoading}
+            emptyMessage={
+              canUpload
+                ? 'No accessible documents yet. Upload your first document to get started.'
+                : 'No documents are visible to your account yet.'
+            }
+          />
+          <RecentDocuments
+            title="Recently shared with you"
+            description="Documents with an active grant from another owner."
+            documents={shared.items}
+            isLoading={isLoading}
+            emptyMessage="No active shares are available to your account."
+          />
+        </div>
 
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle>API connection</CardTitle>
-              <StatusPill tone={healthTone}>
-                {health.status === 'online'
-                  ? 'Online'
-                  : health.status === 'loading'
-                    ? 'Checking'
-                    : health.status === 'offline'
-                      ? 'Offline'
-                      : 'Not configured'}
-              </StatusPill>
-            </div>
-            <CardDescription>Live result from the backend health endpoint.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p className="text-muted-foreground">{health.message}</p>
-            <div className="rounded-md bg-muted px-3 py-2 font-mono text-xs break-all">
-              {isApiConfigured ? apiBaseUrl : 'VITE_API_BASE_URL is not set'}
-            </div>
-            {!isApiConfigured ? (
-              <p className="text-xs leading-5 text-muted-foreground">
-                Copy <code className="font-mono">frontend/.env.example</code> to{' '}
-                <code className="font-mono">frontend/.env</code> and start the backend.
-              </p>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle>Document access</CardTitle>
-              <StatusPill tone="success">Sharing live</StatusPill>
-            </div>
-            <CardDescription>
-              Owners can share READ or EDIT access with named users.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <FileText className="size-4" aria-hidden="true" />
-              Searchable library covering owned and directly shared documents.
-            </div>
-            <div className="flex items-center gap-2">
-              <LockKeyhole className="size-4" aria-hidden="true" />
-              Authenticated download proxy with no exposed storage keys.
-            </div>
-            <div className="flex items-center gap-2">
-              <KeyRound className="size-4" aria-hidden="true" />
-              Immediate grants and revocation backed by PostgreSQL history rows.
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-[2fr_1fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Security model</CardTitle>
-            <CardDescription>How TrustVault enforces access today and later.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm leading-6 text-muted-foreground">
-            <div className="flex items-start gap-3">
-              <ServerCog className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-              <p>
-                The FastAPI backend is the sole authorization enforcement point. Hiding frontend
-                controls is a user-experience choice, not a security control.
-              </p>
-            </div>
-            <div className="flex items-start gap-3">
-              <LockKeyhole className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-              <p>
-                Every protected request validates the access token, active server-side session,
-                and current database role. Signing out revokes the refresh session immediately.
-              </p>
-            </div>
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-              READ and EDIT grants are enforced from current database state on every request.
-              Revocation is immediate. Immutable audit event tracking is the remaining Phase 7
-              capability.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick links</CardTitle>
-            <CardDescription>Navigate the current application.</CardDescription>
+            <CardTitle>Quick actions</CardTitle>
+            <CardDescription>Common tasks for your current role.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
-            <Link
-              to="/documents"
-              className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"
-            >
-              Documents
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </Link>
-            <Link
-              to="/shared-with-me"
-              className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"
-            >
-              Shared with me
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </Link>
-            {user?.role === 'ADMINISTRATOR' ? (
+            {quickLinks.map((link) => (
               <Link
-                to="/admin"
-                className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"
+                key={link.to}
+                to={link.to}
+                className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
-                Administrator area
-                <ArrowRight className="size-4" aria-hidden="true" />
+                <span>{link.label}</span>
+                <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
               </Link>
-            ) : null}
-            <a
-              href="https://github.com/saisankeerth27/TrustVault"
-              className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Project repository
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </a>
+            ))}
+            <div className="mt-2 rounded-lg bg-muted/50 px-4 py-3 text-xs leading-5 text-muted-foreground">
+              <p className="flex items-center gap-2 font-medium text-foreground">
+                {isLoading ? (
+                  <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <ShieldCheck className="size-3.5" aria-hidden="true" />
+                )}
+                {isLoading ? 'Refreshing access summary' : 'Backend-enforced access'}
+              </p>
+              <p className="mt-1">
+                This dashboard only shows documents the backend returns for your active session.
+                Access changes apply on the next request.
+              </p>
+            </div>
           </CardContent>
         </Card>
       </div>

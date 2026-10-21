@@ -215,6 +215,15 @@ Administrators cannot modify or delete audit records through the application.
 - **Verification:** 213 backend tests pass locally with 89% coverage across 2,175 statements and 426 branches. A GitHub Actions workflow runs the suite with coverage, but remote CI execution has not yet been verified.
 - **Not yet met / unverified:** RLS policy tests (RLS remains disabled; application authorization is the primary boundary), malware scanning, live Wasabi behavior, Supabase migration, and deployment.
 
+### Phase 9 Implementation Status (Verified Locally)
+
+- **MR-2 / MR-7:** The frontend exposes registration and login, a live access dashboard, a dedicated upload page with validation/progress feedback, a document library with name, category, exact owner-ID, and date filters plus sorting and pagination, document details, metadata editing, download, and owner-only deletion.
+- **MR-9:** Administrators can reach the role-gated administrator area and audit viewer, including event filters, pagination, denied indicators, metadata details, and hash-chain/signed-checkpoint integrity verification.
+- **MR-3 / MR-4:** Owners can grant, update, and revoke READ/EDIT access through the sharing page and review active grants and revoked history. Permission changes refresh immediately after the backend confirms them; no administrator override is presented.
+- **UI quality:** Desktop uses a sidebar workspace shell and mobile uses labelled scrollable navigation. Forms validate input and surface bounded server error details. Major routes provide loading, error, empty, success, confirmation, forbidden, and not-found states.
+- **Verification:** `npm run lint` reports 0 warnings/errors, `npm test` passes 9 Vitest/React Testing Library tests, and `npm run build` succeeds with the existing chunk-size warning.
+- **Not yet met / unverified:** A browser-based manual walkthrough of each live role remains outstanding. Live backend, Wasabi, Supabase, RLS, malware scanning, and deployment behavior remain unverified.
+
 ---
 
 ## 4. Functional Acceptance Criteria
@@ -281,9 +290,9 @@ Administrators cannot modify or delete audit records through the application.
 | MR-4   | Owner-controlled grant and revocation          | Phase 6, 7 (implemented) | Immediate revocation, history, and permission audit tests pass |
 | MR-5   | Backend enforcement of authorization           | Phase 5, 6, 8        | Direct API and threat-mapped security tests bypassing frontend |
 | MR-6   | Audit records for all significant actions      | Phase 7 (implemented) | Event-driven audit, chain integrity, and checkpoint tests pass |
-| MR-7   | Search by name, owner, category, date          | Phase 5              | Filtered search tests with permission scoping|
-| MR-8   | File upload validation                         | Phase 4              | Implemented; validation/unit tests pass      |
-| MR-9   | Administrator activity and permission views    | Phase 7 (partial)    | Admin access/filter/denial tests pass; summaries/export deferred |
+| MR-7   | Search by name, owner, category, date          | Phase 5, 9          | Filtered search tests with permission scoping; library exposes name/category/owner/date filters |
+| MR-8   | File upload validation                        | Phase 4              | Implemented; validation/unit tests pass      |
+| MR-9   | Administrator activity and permission views    | Phase 7, 9 (partial) | Admin access/filter/denial tests pass; audit viewer implemented; summaries/export deferred |
 | MR-10  | Automated cross-user access denial tests       | Phase 8 (implemented) | Dedicated 46-case security suite; full suite configured in CI |
 
 ## 8. Out of Scope for Phase 0

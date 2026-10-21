@@ -53,7 +53,7 @@ export function AdminPage() {
                 <ShieldCheck className="size-5" aria-hidden="true" />
               </span>
               <div>
-                <CardTitle>Role enforcement is live</CardTitle>
+                <CardTitle>Backend-enforced roles</CardTitle>
                 <CardDescription>Backend authorization remains authoritative.</CardDescription>
               </div>
             </div>

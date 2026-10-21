@@ -100,7 +100,7 @@ export function LoginPage() {
 
         <div className="relative max-w-md space-y-6">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">
-            Authentication is live
+            Secure access
           </p>
           <h1 className="text-3xl font-semibold leading-tight tracking-tight">
             Share documents with confidence, not hope.
@@ -122,8 +122,8 @@ export function LoginPage() {
         </div>
 
         <p className="relative text-xs text-white/60">
-          Accounts are provisioned by an administrator. Public registration creates Viewer
-          accounts only.
+          Viewer accounts can be created through public registration. Owner and Administrator
+          accounts are provisioned by an administrator.
         </p>
       </section>
 
@@ -139,8 +139,8 @@ export function LoginPage() {
             </p>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Sign in</h1>
             <p className="text-sm leading-6 text-muted-foreground">
-              Use the account provisioned for you. Contact an administrator if you need access or
-              an elevated role.
+              Sign in with your TrustVault account. Contact an administrator if you need an
+              elevated role.
             </p>
           </div>
 
@@ -212,6 +212,16 @@ export function LoginPage() {
               )}
             </Button>
           </form>
+
+          <p className="text-sm text-muted-foreground">
+            New to TrustVault?{' '}
+            <Link
+              to="/register"
+              className="font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Create a Viewer account
+            </Link>
+          </p>
 
           <p className="text-xs leading-5 text-muted-foreground">
             Access is rate limited. Repeated failed attempts are rejected temporarily. If you
