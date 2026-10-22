@@ -23,8 +23,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { z } from 'zod'
 import { useAuth } from '@/auth/useAuth'
 import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
+import { DocumentActivityHistory } from '@/components/documents/DocumentActivityHistory'
 import { DocumentPreview } from '@/components/documents/DocumentPreview'
 import { DocumentTextEditor } from '@/components/documents/DocumentTextEditor'
+import { PdfAnnotationEditor } from '@/components/documents/PdfAnnotationEditor'
 import { ReplaceDocumentVersion } from '@/components/documents/ReplaceDocumentVersion'
 import { VersionHistory } from '@/components/documents/VersionHistory'
 import { PageHeader } from '@/components/PageHeader'
@@ -34,7 +36,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   ACCESS_LEVEL_META,
   canDeleteDocument,
+  canDeleteHistoricalVersion,
   canEditDocument,
+  canEditPdfContent,
   canEditTextContent,
   canManageDocumentPermissions,
   canReadDocument,
@@ -47,10 +51,12 @@ import {
 import { getApiErrorMessage } from '@/services/api'
 import {
   deleteDocument,
+  deleteDocumentVersion,
   downloadDocument,
   downloadDocumentVersion,
   getDocument,
   listDocumentVersions,
+  previewDocument,
   updateDocument,
 } from '@/services/documents'
 
@@ -98,6 +104,10 @@ function DocumentDetailsView({ documentId }) {
   const [notice, setNotice] = useState(null)
   const [isEditing, setIsEditing] = useState(false)
   const [isEditingContent, setIsEditingContent] = useState(false)
+  const [isEditingPdf, setIsEditingPdf] = useState(false)
+  const [pdfBlob, setPdfBlob] = useState(null)
+  const [isLoadingPdfBlob, setIsLoadingPdfBlob] = useState(false)
+  const [pdfBlobError, setPdfBlobError] = useState(null)
   const [isReplacingFile, setIsReplacingFile] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadingVersion, setDownloadingVersion] = useState(null)
@@ -107,6 +117,8 @@ function DocumentDetailsView({ documentId }) {
   const [isLoadingVersions, setIsLoadingVersions] = useState(true)
   const [versionsError, setVersionsError] = useState(null)
   const [versionsRefreshKey, setVersionsRefreshKey] = useState(0)
+  const [versionActionError, setVersionActionError] = useState(null)
+  const [deletingVersion, setDeletingVersion] = useState(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const {
     register,
@@ -149,14 +161,43 @@ function DocumentDetailsView({ documentId }) {
   const canRead = canReadDocument(documentRecord)
   const canEdit = canEditDocument(documentRecord)
   const canEditContent = canEditTextContent(documentRecord)
+  const canEditPdf = canEditPdfContent(documentRecord)
   const canReplaceFile = canReplaceDocumentFile(documentRecord)
   const canDelete = canDeleteDocument(documentRecord)
   const canManagePermissions = canManageDocumentPermissions(documentRecord)
+  const canDeleteVersion = canDeleteHistoricalVersion(documentRecord)
   const isMetadataOnly = documentRecord?.access_level === 'ADMINISTRATOR'
   const accessMeta = ACCESS_LEVEL_META[documentRecord?.access_level]
   const isNotFound = loadError?.response?.status === 404
   const recordId = documentRecord?.id
   const currentVersion = versions.find((version) => version.is_current) ?? null
+
+  useEffect(() => {
+    if (!isEditingPdf || !recordId || pdfBlob) {
+      return undefined
+    }
+
+    const controller = new AbortController()
+    setIsLoadingPdfBlob(true)
+    setPdfBlobError(null)
+
+    previewDocument(recordId, controller.signal)
+      .then(({ blob }) => {
+        setPdfBlob(blob)
+      })
+      .catch((err) => {
+        if (!isAbortError(err)) {
+          setPdfBlobError(getApiErrorMessage(err))
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsLoadingPdfBlob(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [isEditingPdf, recordId, pdfBlob])
 
   useEffect(() => {
     if (!recordId || !canRead) {
@@ -199,6 +240,8 @@ function DocumentDetailsView({ documentId }) {
         .map((version) => ({ ...version, is_current: false })),
     ])
     setIsEditingContent(false)
+    setIsEditingPdf(false)
+    setPdfBlob(null)
     setIsReplacingFile(false)
     setActionError(null)
     setNotice(`Version ${result.version.version_number} created.`)
@@ -286,6 +329,22 @@ function DocumentDetailsView({ documentId }) {
     } catch (error) {
       setActionError(getApiErrorMessage(error))
       setIsDeleting(false)
+    }
+  }
+
+  async function handleVersionDelete(version) {
+    setVersionActionError(null)
+    setDeletingVersion(version.version_number)
+    try {
+      const result = await deleteDocumentVersion(documentRecord.id, version.version_number)
+      setVersions((current) => current.filter((v) => v.version_number !== version.version_number))
+      setNotice(
+        `Version ${version.version_number} deleted. Storage freed: ${result.storage_deleted ? 'Yes' : 'No'}.`,
+      )
+    } catch (error) {
+      setVersionActionError(getApiErrorMessage(error))
+    } finally {
+      setDeletingVersion(null)
     }
   }
 
@@ -385,6 +444,7 @@ function DocumentDetailsView({ documentId }) {
                 onClick={() => {
                   setIsEditing((editing) => !editing)
                   setIsEditingContent(false)
+                  setIsEditingPdf(false)
                   setIsReplacingFile(false)
                   setActionError(null)
                   setNotice(null)
@@ -405,6 +465,7 @@ function DocumentDetailsView({ documentId }) {
                 onClick={() => {
                   setIsEditingContent((editing) => !editing)
                   setIsEditing(false)
+                  setIsEditingPdf(false)
                   setIsReplacingFile(false)
                   setActionError(null)
                   setNotice(null)
@@ -419,6 +480,28 @@ function DocumentDetailsView({ documentId }) {
                 {isEditingContent ? 'Cancel text edit' : 'Edit text'}
               </Button>
             ) : null}
+            {canEditPdf ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsEditingPdf((editing) => !editing)
+                  setIsEditing(false)
+                  setIsEditingContent(false)
+                  setIsReplacingFile(false)
+                  setActionError(null)
+                  setNotice(null)
+                }}
+                disabled={!currentVersion || isLoadingVersions}
+              >
+                {isEditingPdf ? (
+                  <X className="size-4" aria-hidden="true" />
+                ) : (
+                  <PencilLine className="size-4" aria-hidden="true" />
+                )}
+                {isEditingPdf ? 'Cancel PDF edit' : 'Edit PDF'}
+              </Button>
+            ) : null}
             {canReplaceFile ? (
               <Button
                 type="button"
@@ -427,6 +510,7 @@ function DocumentDetailsView({ documentId }) {
                   setIsReplacingFile((replacing) => !replacing)
                   setIsEditing(false)
                   setIsEditingContent(false)
+                  setIsEditingPdf(false)
                   setActionError(null)
                   setNotice(null)
                 }}
@@ -555,7 +639,35 @@ function DocumentDetailsView({ documentId }) {
         </Card>
       ) : null}
 
-      {canRead ? (
+      {isEditingPdf && canEditPdf ? (
+        isLoadingPdfBlob ? (
+          <Card>
+            <CardContent className="flex min-h-48 items-center justify-center gap-3 p-8 text-sm text-muted-foreground">
+              <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
+              Loading PDF for editing...
+            </CardContent>
+          </Card>
+        ) : pdfBlobError ? (
+          <div
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+          >
+            {pdfBlobError}
+          </div>
+        ) : pdfBlob ? (
+          <PdfAnnotationEditor
+            blob={pdfBlob}
+            filename={documentRecord.name}
+            documentRecord={documentRecord}
+            currentVersion={currentVersion}
+            onSaved={applyVersionResult}
+            onConflict={handleVersionConflict}
+            onCancel={() => setIsEditingPdf(false)}
+          />
+        ) : null
+      ) : null}
+
+      {!isEditingPdf && canRead ? (
         <Card>
           <CardHeader>
             <CardTitle>Secure content preview</CardTitle>
@@ -653,12 +765,21 @@ function DocumentDetailsView({ documentId }) {
         <VersionHistory
           versions={versions}
           currentVersionNumber={currentVersion?.version_number ?? null}
+          totalSize={versions.reduce((sum, v) => sum + (v.file_size || 0), 0)}
           isLoading={isLoadingVersions}
           error={versionsError}
+          actionError={versionActionError}
           onRefresh={refreshVersions}
           onDownload={handleVersionDownload}
           downloadingVersion={downloadingVersion}
+          canDeleteVersion={canDeleteVersion}
+          onDeleteVersion={handleVersionDelete}
+          deletingVersion={deletingVersion}
         />
+      ) : null}
+
+      {canDelete ? (
+        <DocumentActivityHistory documentId={documentRecord.id} />
       ) : null}
 
       {isEditing && canEdit ? (

@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.models.audit_event import AuditEvent
 from app.services.audit import (
+    AUDIT_HASH_SCHEMA_V1,
+    SUPPORTED_HASH_SCHEMAS,
     canonical_event_payload,
     canonical_json_bytes,
     calculate_event_hash,
@@ -111,6 +113,19 @@ def verify_chain(session: Session) -> ChainVerification:
                 ),
             )
 
+        if event.hash_schema not in SUPPORTED_HASH_SCHEMAS:
+            return ChainVerification(
+                status="INVALID",
+                event_count=event_count,
+                last_chain_index=expected_index - 1,
+                last_event_hash=last_event_hash,
+                failure_chain_index=event.chain_index,
+                message=(
+                    "The event at sequence "
+                    f"{event.chain_index} uses an unsupported hash schema."
+                ),
+            )
+
         payload = canonical_event_payload(
             chain_index=event.chain_index,
             event_id=event.id,
@@ -122,8 +137,15 @@ def verify_chain(session: Session) -> ChainVerification:
             request_id=event.request_id,
             details=event.details,
             previous_hash=event.previous_hash,
+            hash_schema=event.hash_schema,
         )
         if calculate_event_hash(payload) != event.event_hash:
+            legacy_hint = (
+                " This legacy event hashed mutable actor/document references, so "
+                "deleting either record can invalidate its hash."
+                if event.hash_schema == AUDIT_HASH_SCHEMA_V1
+                else ""
+            )
             return ChainVerification(
                 status="INVALID",
                 event_count=event_count,
@@ -132,7 +154,7 @@ def verify_chain(session: Session) -> ChainVerification:
                 failure_chain_index=event.chain_index,
                 message=(
                     "The event hash does not match the stored event at "
-                    f"sequence {event.chain_index}."
+                    f"sequence {event.chain_index}.{legacy_hint}"
                 ),
             )
 

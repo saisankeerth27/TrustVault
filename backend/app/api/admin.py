@@ -26,7 +26,6 @@ from app.schemas.admin import (
 )
 from app.schemas.audit import (
     AuditEventListResponse,
-    AuditEventResponse,
     AuditIntegrityResponse,
     ChainIntegrityResponse,
     CheckpointIntegrityResponse,
@@ -42,6 +41,7 @@ from app.services.admin_accounts import (
 )
 from app.services.audit import record_best_effort
 from app.services.audit_integrity import verify_audit_trail
+from app.services.audit_presenter import audit_event_response
 from app.services.permissions import list_permissions
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -83,34 +83,6 @@ def _validate_date_range(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="occurred_from must be on or before occurred_to.",
         )
-
-
-def _event_response(event: AuditEvent) -> AuditEventResponse:
-    actor_name = event.actor.name if event.actor is not None else None
-    if actor_name is None:
-        stored_actor_name = event.details.get("actor_name")
-        actor_name = stored_actor_name if isinstance(stored_actor_name, str) else None
-
-    target_user_id = event.details.get("target_user_id")
-    if not isinstance(target_user_id, str):
-        target_user_id = None
-    resource_type = event.details.get("resource_type")
-
-    return AuditEventResponse(
-        id=event.id,
-        chain_index=event.chain_index,
-        occurred_at=event.occurred_at,
-        actor_id=event.actor_id,
-        actor_name=actor_name,
-        document_id=event.document_id,
-        document_name=event.document.name if event.document is not None else None,
-        target_user_id=target_user_id,
-        resource_type=resource_type if isinstance(resource_type, str) else None,
-        action=event.action,
-        outcome=event.outcome,
-        request_id=event.request_id,
-        details=event.details,
-    )
 
 
 def _escape_like(value: str) -> str:
@@ -537,7 +509,7 @@ def list_audit_events(
     pages = (total + page_size - 1) // page_size
     response.headers["Cache-Control"] = "no-store"
     return AuditEventListResponse(
-        items=[_event_response(event) for event in events],
+        items=[audit_event_response(event) for event in events],
         total=total,
         page=page,
         page_size=page_size,

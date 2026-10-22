@@ -52,6 +52,7 @@ class VersionStorage:
         self.deletions: list[str] = []
         self.fail_upload: Exception | None = None
         self.fail_download: Exception | None = None
+        self.fail_delete: Exception | None = None
 
     def upload_bytes(self, *, key: str, data: bytes, content_type: str) -> None:
         if self.fail_upload is not None:
@@ -68,6 +69,8 @@ class VersionStorage:
         return io.BytesIO(self.objects[key])
 
     def delete_object(self, *, key: str) -> None:
+        if self.fail_delete is not None:
+            raise self.fail_delete
         self.deletions.append(key)
         self.objects.pop(key, None)
 
@@ -689,3 +692,286 @@ def test_preview_and_version_download_audit_failures_are_safe(
         "The download could not be completed."
     )
     assert "SECRET" not in download.text
+
+def test_owner_can_delete_historical_version(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    owner_email, _ = _create_user(db_session, name="Owner User")
+    owner_token = _token_for(api_client, owner_email)
+    document = _upload(api_client, owner_token, filename="contract.pdf")
+
+    # Create version 2
+    res2 = api_client.put(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+        files={"file": ("contract-v2.pdf", b"%PDF-1.4\nrevised-content", "application/pdf")},
+        data={"expected_version_number": "1", "change_summary": "Revised terms"},
+    )
+    assert res2.status_code == 201
+
+    # Check versions list: 2 versions, total_size is sum
+    list_res = api_client.get(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+    )
+    assert list_res.status_code == 200
+    versions = list_res.json()["items"]
+    assert len(versions) == 2
+    initial_total_size = list_res.json()["total_size"]
+
+    # Delete historical version 1
+    del_res = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/1",
+        headers=bearer(owner_token),
+    )
+    assert del_res.status_code == 200
+    del_body = del_res.json()
+    assert del_body["deleted_version_number"] == 1
+    assert del_body["storage_deleted"] is True
+    assert del_body["retained_total_size"] < initial_total_size
+
+    # Verify version 1 is gone from versions list and storage
+    list_after = api_client.get(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+    )
+    assert list_after.status_code == 200
+    after_versions = list_after.json()["items"]
+    assert len(after_versions) == 1
+    assert after_versions[0]["version_number"] == 2
+    assert after_versions[0]["is_current"] is True
+    assert list_after.json()["total_size"] == del_body["retained_total_size"]
+
+    # Verify audit event remains
+    events = list(
+        db_session.scalars(
+            select(AuditEvent)
+            .where(AuditEvent.document_id == UUID(document["id"]))
+            .order_by(AuditEvent.chain_index.asc())
+        ).all()
+    )
+    delete_events = [e for e in events if e.action == "DOCUMENT_VERSION_DELETE"]
+    assert len(delete_events) == 1
+    assert delete_events[0].outcome == "SUCCESS"
+    assert delete_events[0].details["version_number"] == 1
+
+
+def test_cannot_delete_current_version_or_single_version_document(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    owner_email, _ = _create_user(db_session)
+    owner_token = _token_for(api_client, owner_email)
+    document = _upload(api_client, owner_token)
+
+    # Attempt to delete single version (which is current)
+    del_res = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/1",
+        headers=bearer(owner_token),
+    )
+    assert del_res.status_code == 400
+    assert "current version cannot be deleted" in del_res.json()["error"]["message"].lower()
+
+    # Create version 2
+    api_client.put(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+        files={"file": ("v2.pdf", b"%PDF-1.4\nv2", "application/pdf")},
+        data={"expected_version_number": "1"},
+    )
+
+    # Attempt to delete version 2 (the current version)
+    del_res2 = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/2",
+        headers=bearer(owner_token),
+    )
+    assert del_res2.status_code == 400
+    assert "current version cannot be deleted" in del_res2.json()["error"]["message"].lower()
+
+
+def test_edit_and_read_recipients_cannot_delete_historical_version(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    owner_email, _ = _create_user(db_session, name="Owner")
+    editor_email, _ = _create_user(db_session, name="Editor")
+    reader_email, _ = _create_user(db_session, name="Reader")
+    owner_token = _token_for(api_client, owner_email)
+    editor_token = _token_for(api_client, editor_email)
+    reader_token = _token_for(api_client, reader_email)
+
+    document = _upload(api_client, owner_token)
+    api_client.post(
+        f"/api/v1/documents/{document['id']}/permissions",
+        headers=bearer(owner_token),
+        json={"email": editor_email, "permission": "EDIT"},
+    )
+    api_client.post(
+        f"/api/v1/documents/{document['id']}/permissions",
+        headers=bearer(owner_token),
+        json={"email": reader_email, "permission": "READ"},
+    )
+
+    # Create version 2
+    api_client.put(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+        files={"file": ("v2.pdf", b"%PDF-1.4\nv2", "application/pdf")},
+        data={"expected_version_number": "1"},
+    )
+
+    # Editor attempt to delete version 1 -> 403 Forbidden
+    del_editor = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/1",
+        headers=bearer(editor_token),
+    )
+    assert del_editor.status_code == 403
+    assert "only the document owner" in del_editor.json()["error"]["message"].lower()
+
+    # Reader attempt to delete version 1 -> 403 Forbidden
+    del_reader = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/1",
+        headers=bearer(reader_token),
+    )
+    assert del_reader.status_code == 403
+
+    # Check denial audit event
+    events = list(
+        db_session.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.document_id == UUID(document["id"]),
+                AuditEvent.action == "DOCUMENT_VERSION_DELETE",
+            )
+        ).all()
+    )
+    assert any(e.outcome == "DENIED" for e in events)
+
+
+def test_user_a_cannot_delete_user_b_historical_version(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    user_a_email, _ = _create_user(db_session, name="User A")
+    user_b_email, _ = _create_user(db_session, name="User B")
+    token_a = _token_for(api_client, user_a_email)
+    token_b = _token_for(api_client, user_b_email)
+
+    document_a = _upload(api_client, token_a)
+    api_client.put(
+        f"/api/v1/documents/{document_a['id']}/versions",
+        headers=bearer(token_a),
+        files={"file": ("v2.pdf", b"%PDF-1.4\nv2", "application/pdf")},
+        data={"expected_version_number": "1"},
+    )
+
+    # User B tries to delete version 1 of document A
+    res = api_client.delete(
+        f"/api/v1/documents/{document_a['id']}/versions/1",
+        headers=bearer(token_b),
+    )
+    assert res.status_code in (403, 404)
+
+
+def test_delete_historical_version_rejects_invalid_version_safely(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    owner_email, _ = _create_user(db_session)
+    owner_token = _token_for(api_client, owner_email)
+    document = _upload(api_client, owner_token)
+
+    res = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/999",
+        headers=bearer(owner_token),
+    )
+    assert res.status_code == 404
+    assert res.json()["error"]["message"] == "Document version not found."
+
+
+def test_failed_storage_deletion_does_not_report_success(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    owner_email, _ = _create_user(db_session)
+    owner_token = _token_for(api_client, owner_email)
+    document = _upload(api_client, owner_token)
+
+    api_client.put(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+        files={"file": ("v2.pdf", b"%PDF-1.4\nv2", "application/pdf")},
+        data={"expected_version_number": "1"},
+    )
+
+    version_storage.fail_delete = StorageOperationError("Storage network failure")
+    res = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/1",
+        headers=bearer(owner_token),
+    )
+    assert res.status_code == 503
+    assert "could not be safely deleted" in res.json()["error"]["message"].lower()
+
+    # Verify version 1 was NOT deleted from DB
+    list_res = api_client.get(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+    )
+    assert len(list_res.json()["items"]) == 2
+
+
+def test_document_activity_endpoint_owner_only_and_records_change_history(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    owner_email, _ = _create_user(db_session, name="Akash Owner")
+    editor_email, _ = _create_user(db_session, name="Akash Editor")
+    owner_token = _token_for(api_client, owner_email)
+    editor_token = _token_for(api_client, editor_email)
+
+    document = _upload(api_client, owner_token, filename="notes.txt", content_type="text/plain", content=b"Initial notes\n")
+    api_client.post(
+        f"/api/v1/documents/{document['id']}/permissions",
+        headers=bearer(owner_token),
+        json={"email": editor_email, "permission": "EDIT"},
+    )
+
+    # Editor updates description
+    patch_res = api_client.patch(
+        f"/api/v1/documents/{document['id']}",
+        headers=bearer(editor_token),
+        json={"description": "Updated semester notes"},
+    )
+    assert patch_res.status_code == 200
+
+    # Owner views document activity
+    act_res = api_client.get(
+        f"/api/v1/documents/{document['id']}/activity",
+        headers=bearer(owner_token),
+    )
+    assert act_res.status_code == 200
+    items = act_res.json()["items"]
+    assert len(items) >= 2
+
+    # Check the metadata update event
+    meta_events = [e for e in items if e["action"] == "DOCUMENT_METADATA_UPDATE"]
+    assert len(meta_events) == 1
+    meta_event = meta_events[0]
+    assert meta_event["actor_name"] == "Akash Editor"
+    assert "description" in meta_event["details"]["field_changes"]
+    assert meta_event["details"]["field_changes"]["description"]["new"] == "Updated semester notes"
+
+    # Editor cannot view document activity (owner-only)
+    act_denied = api_client.get(
+        f"/api/v1/documents/{document['id']}/activity",
+        headers=bearer(editor_token),
+    )
+    assert act_denied.status_code == 403

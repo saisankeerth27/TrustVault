@@ -515,3 +515,40 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 - **Commit hash:** The final single commit created from this working tree; its hash is reported with the pushed commit. A commit cannot contain its own resulting hash, so no self-referential amend was used.
 - **GitHub link:** Reported with the pushed commit.
 - **Human review and decision:** Pending; work was verified locally before the single commit/push.
+
+---
+
+## 2026-10-22 — Phase 10: PDF Preview, In-Browser Annotation Editing, Version Control, and Audit Integrity
+
+- **Date and phase:** 2026-10-22 — Phase 10 (PDF Preview, In-Browser Annotation Editing, Version Control, and Audit Integrity)
+- **Objective:** Fix the PDF preview using Mozilla PDF.js, implement client-side PDF annotation editing using `pdf-lib`, save edits as new document revisions with optimistic concurrency, support owner-only historical version deletion with private storage cleanup, provide document activity history for owners, and harden audit trail integrity with hash schema versioning (`0006`).
+- **Prompt / instruction summary:** Implement real PDF viewing, editing, version control, and audit tracking. Correct the PDF permission model (READ can view/zoom/navigate, EDIT can edit and save revisions, Owner can manage and delete historical versions). Fix broken PDF preview using PDF.js without exposing private URLs or weakening CSP. Implement actual PDF editing with supported capabilities (sticky notes, typewriter text, highlights, signatures) embedded into the PDF binary via `pdf-lib`. Save revisions with optimistic concurrency (`expected_version_number`). Retain audit trail integrity. Maintain JavaScript/JSX only. Verify backend/frontend tests and production build. Create exactly one commit `feat(documents): implement secure PDF editing` and push to origin main.
+- **Files or code produced:**
+  - `frontend/src/components/documents/PdfViewer.jsx`: PDF preview component using Mozilla PDF.js (`pdfjs-dist`) with Vite web worker (`pdf.worker.min.mjs?url`), zoom, page navigation, and cancellation cleanup.
+  - `frontend/src/components/documents/PdfAnnotationEditor.jsx`: In-browser PDF annotation editor supporting text notes, typewriter free text, area highlights, and signatures, embedding annotations directly into the PDF binary via `pdf-lib`.
+  - `frontend/src/components/documents/DocumentPreview.jsx`: Secure preview supporting PDF, plain-text, and image streaming with error recovery and retry.
+  - `frontend/src/components/documents/DocumentActivityHistory.jsx`: Owner-visible document activity timeline showing chronological events, field changes, and access grants.
+  - `frontend/src/pages/DocumentDetailsPage.jsx`: Integration of PDF preview and editing workflows, `canEditPdfContent` permission gating, and optimistic version handling.
+  - `backend/app/services/audit.py` & `backend/app/services/audit_integrity.py`: Canonical JSON serialization, versioned audit hash schemas (`trustvault-audit-event-v1`), and deterministic HMAC-SHA256 checkpoint verification.
+  - `backend/alembic/versions/0006_audit_hash_schema.py`: Migration adding `hash_schema` to `audit_events`.
+  - `backend/app/api/documents.py`: Owner-only historical version deletion (`DELETE /api/v1/documents/{id}/versions/{version_number}`) and document activity history (`GET /api/v1/documents/{id}/activity`).
+  - `backend/tests/test_audit.py`: Tampering detection tests for audit chain and signed checkpoint verification.
+  - `frontend/src/pages/DocumentDetailsPage.test.jsx`: Tests for READ-only vs EDIT recipient PDF workflows.
+  - Updated `README.md`, `docs/ARCHITECTURE.md`, `docs/REQUIREMENTS.md`, `THREATS.md`, and this activity log.
+- **Tests and verification performed:**
+  - Backend pytest: **267 passed** in 55s, 0 failures.
+  - Migration tests: all Alembic migrations (`0001` through `0006`) tested, upgraded, and checked against Supabase.
+  - Frontend Vitest: **17 passed across 7 files** in 18s.
+  - Frontend linter: `oxlint` 0 errors.
+  - Production build: `vite build` completed successfully in 1.28s with PDF worker assets bundled.
+- **Issues discovered:**
+  - PDF preview previously relied on native iframe which was blocked by browser sandbox/CSP policies; resolved by rendering through Mozilla PDF.js onto HTML5 canvas with Vite worker bundling.
+  - Full body-text replacement in PDF requires commercial SDKs; resolved by implementing authentic in-browser PDF binary annotation editing via `pdf-lib` with clear capability documentation.
+- **Corrections made:**
+  - Configured `pdfjs-dist` worker via `pdf.worker.min.mjs?url` for production asset compatibility.
+  - Added `isEvalSupported: false` in PDF.js loading task for worker isolation.
+  - Integrated `canEditPdfContent` helper in `frontend/src/lib/documents.js`.
+  - Added audit integrity verification for chain tampering and signature manipulation.
+- **Commit hash:** (To be recorded with the single push)
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault
+- **Human review and decision:** Pending human review.

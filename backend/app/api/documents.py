@@ -22,20 +22,25 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.core.request_limits import UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES
 from app.db.session import get_db
+from app.models.audit_event import AuditEvent
 from app.models.document_permission import DocumentPermission
+from app.models.document_version import DocumentVersion
 from app.models.enums import AuditAction, AuditOutcome, DocumentAccessLevel
 from app.models.user import User
+from app.schemas.audit import AuditEventListResponse
 from app.schemas.document import (
     DocumentContentUpdate,
     DocumentListResponse,
     DocumentResponse,
     DocumentUpdate,
+    DocumentVersionDeletionResponse,
     DocumentVersionListResponse,
     DocumentVersionReplacementResponse,
     DocumentVersionResponse,
@@ -45,6 +50,7 @@ from app.schemas.document import (
     PermissionUpdateRequest,
 )
 from app.services.audit import record_best_effort, record_event
+from app.services.audit_presenter import audit_event_response
 from app.services.document_access import (
     DocumentAccessDeniedError,
     DocumentCapability,
@@ -52,13 +58,17 @@ from app.services.document_access import (
     authorize_document,
 )
 from app.services.document_versions import (
+    CurrentDocumentVersionDeletionError,
     DocumentVersionConflictError,
+    DocumentVersionDeletionError,
     DocumentVersionNotFoundError,
     DocumentVersionOperationError,
+    delete_historical_version,
     get_current_version,
     get_document_version,
     list_document_versions,
     replace_document_version,
+    total_document_version_size,
 )
 from app.services.documents import (
     DocumentDeletionError,
@@ -88,6 +98,7 @@ from app.services.storage import (
     SupabaseStorage,
     get_storage_service,
 )
+from app.services.text_changes import summarize_text_changes
 from app.services.upload_validation import (
     UploadValidationError,
     normalize_optional_text,
@@ -190,6 +201,43 @@ def _stream_body(body: IO[bytes]) -> Iterator[bytes]:
             yield chunk
     finally:
         body.close()
+
+
+def _text_change_stats(
+    *,
+    storage: SupabaseStorage,
+    current,
+    upload,
+    updated_text: str | None,
+    max_size_bytes: int,
+) -> dict[str, int] | None:
+    if current is None or current.mime_type != "text/plain":
+        return None
+    if updated_text is None and upload.mime_type != "text/plain":
+        return None
+
+    body = None
+    try:
+        body = storage.open_download(key=current.storage_key)
+        previous_bytes = body.read(max_size_bytes + 1)
+        if len(previous_bytes) > max_size_bytes:
+            return None
+        previous_text = previous_bytes.decode("utf-8", errors="replace")
+        next_text = (
+            updated_text
+            if updated_text is not None
+            else upload.content.decode("utf-8", errors="replace")
+        )
+        return summarize_text_changes(previous_text, next_text)
+    except Exception:
+        logger.warning("Text change summary could not be calculated.")
+        return None
+    finally:
+        if body is not None:
+            try:
+                body.close()
+            except Exception:
+                pass
 
 
 def _enforce_request_size(request: Request, max_size_bytes: int) -> None:
@@ -428,6 +476,7 @@ def update_document(
             document=authorized.document,
             changes=payload.model_dump(exclude_unset=True),
             actor=current_user,
+            access_level=authorized.access_level.value,
         )
     except DocumentUpdateError as exc:
         raise HTTPException(
@@ -476,9 +525,75 @@ def list_versions(
             for version in versions
         ],
         total=len(versions),
+        total_size=total_document_version_size(
+            session,
+            document_id=authorized.document.id,
+        ),
         current_version_number=(
             current.version_number if current is not None else None
         ),
+    )
+
+
+@router.get(
+    "/{document_id}/activity",
+    response_model=AuditEventListResponse,
+)
+def list_document_activity(
+    document_id: UUID,
+    response: Response,
+    page: Annotated[int, Query(ge=1, le=100_000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> AuditEventListResponse:
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.READ,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document activity access denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document activity access denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+
+    if authorized.access_level is not DocumentAccessLevel.OWNER:
+        raise _access_denied()
+
+    conditions = [AuditEvent.document_id == authorized.document.id]
+    total = int(
+        session.scalar(
+            select(func.count()).select_from(AuditEvent).where(*conditions)
+        )
+        or 0
+    )
+    events = list(
+        session.scalars(
+            select(AuditEvent)
+            .where(*conditions)
+            .options(
+                selectinload(AuditEvent.actor),
+                selectinload(AuditEvent.document),
+            )
+            .order_by(AuditEvent.chain_index.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+    )
+    pages = (total + page_size - 1) // page_size
+    response.headers["Cache-Control"] = "no-store"
+    return AuditEventListResponse(
+        items=[audit_event_response(event) for event in events],
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=pages,
+        has_next=page < pages,
+        has_previous=page > 1 and pages > 0,
     )
 
 
@@ -538,6 +653,18 @@ def create_document_version(
             detail=exc.message,
         ) from exc
 
+    current = get_current_version(
+        session,
+        document_id=authorized.document.id,
+    )
+    change_stats = _text_change_stats(
+        storage=storage,
+        current=current,
+        upload=upload,
+        updated_text=None,
+        max_size_bytes=settings.max_upload_size_bytes,
+    )
+
     try:
         updated, version = replace_document_version(
             session,
@@ -548,6 +675,8 @@ def create_document_version(
             actor=current_user,
             storage=storage,
             source="UPLOAD",
+            access_level=authorized.access_level.value,
+            change_stats=change_stats,
         )
     except DocumentVersionConflictError as exc:
         raise HTTPException(
@@ -639,6 +768,14 @@ def update_document_text_content(
             detail=exc.message,
         ) from exc
 
+    change_stats = _text_change_stats(
+        storage=storage,
+        current=current,
+        upload=upload,
+        updated_text=payload.content,
+        max_size_bytes=settings.max_upload_size_bytes,
+    )
+
     try:
         updated, version = replace_document_version(
             session,
@@ -649,6 +786,8 @@ def update_document_text_content(
             actor=current_user,
             storage=storage,
             source="INLINE_EDITOR",
+            access_level=authorized.access_level.value,
+            change_stats=change_stats,
         )
     except DocumentVersionConflictError as exc:
         raise HTTPException(
@@ -778,6 +917,108 @@ def download_document_version(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
+    )
+
+
+@router.delete(
+    "/{document_id}/versions/{version_number}",
+    response_model=DocumentVersionDeletionResponse,
+)
+def delete_document_version(
+    document_id: UUID,
+    version_number: int,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage_service),
+) -> DocumentVersionDeletionResponse:
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.READ,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document version delete denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document version delete denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+
+    if authorized.access_level is not DocumentAccessLevel.OWNER:
+        record_best_effort(
+            session,
+            action=AuditAction.DOCUMENT_VERSION_DELETE,
+            outcome=AuditOutcome.DENIED,
+            actor=current_user,
+            document_id=authorized.document.id,
+            details={
+                "version_number": version_number,
+                "resource_type": "DOCUMENT",
+                "reason": "only_owner_can_delete_versions",
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the document owner can delete document versions.",
+        )
+
+    try:
+        version = get_document_version(
+            session,
+            document=authorized.document,
+            version_number=version_number,
+        )
+    except DocumentVersionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document version not found.",
+        ) from exc
+
+    total_versions = int(
+        session.scalar(
+            select(func.count()).select_from(DocumentVersion).where(
+                DocumentVersion.document_id == authorized.document.id
+            )
+        )
+        or 0
+    )
+    if version.is_current or total_versions <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "The current version cannot be deleted. Use the document "
+                "deletion workflow to delete the entire document."
+            ),
+        )
+
+    try:
+        deleted_file_size, retained_total_size, storage_deleted = (
+            delete_historical_version(
+                session,
+                document=authorized.document,
+                version=version,
+                actor=current_user,
+                storage=storage,
+                access_level=authorized.access_level.value,
+            )
+        )
+    except CurrentDocumentVersionDeletionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The current version cannot be deleted.",
+        ) from exc
+    except DocumentVersionDeletionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The document version content could not be safely deleted.",
+        ) from exc
+
+    return DocumentVersionDeletionResponse(
+        deleted_version_number=version_number,
+        deleted_file_size=deleted_file_size,
+        retained_total_size=retained_total_size,
+        storage_deleted=storage_deleted,
     )
 
 

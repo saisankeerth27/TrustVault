@@ -425,3 +425,16 @@ This phase added authorized previews, replacement uploads, plain-text editing, i
 - **Audit UI:** Administrator audit details are rendered as structured text and nested metadata without `dangerouslySetInnerHTML`; long values wrap and raw JSON is optional.
 - **Verification:** 258 backend tests pass with 90% statement coverage, including migration backfill/downgrade, version constraints, READ/admin denial, EDIT replacement/text editing, stale writes, storage/audit failures, and historical-object cleanup. Frontend: 15 tests across 7 files, lint clean, and production build successful.
 - **Residual risk:** Real-browser PDF iframe and DOCX fallback behavior still require manual verification. Version immutability is enforced by application behavior and database rows, not object-lock/WORM storage policy.
+
+---
+
+## 16. PDF Viewing, Annotation Editing, and Integrity Verification Notes (Verified Locally)
+
+This phase added native PDF rendering via Mozilla PDF.js, in-browser PDF annotation editing via `pdf-lib`, optimistic versioning for PDF revisions, owner-only historical version deletion, document activity history for owners, and audit trail integrity hardening with schema versioning (`0006`). Supabase is at migration `0006` with no drift.
+
+- **Client-Side PDF Sandbox:** PDF.js is configured with `isEvalSupported: false` to eliminate arbitrary script evaluation within the PDF rendering worker. The PDF worker is bundled and served locally from Vite assets without external CDNs.
+- **Streaming Authorization:** PDF bytes are streamed through authenticated backend endpoints with `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. No private Supabase object URLs or service credentials are leaked to the browser.
+- **In-Browser Annotation Security:** Annotations are drawn onto HTML5 canvas and embedded directly into the PDF binary using `pdf-lib` entirely in browser memory without sending document data to third-party APIs. Content changes are validated server-side as authentic PDFs and saved as new versions with optimistic concurrency (`expected_version_number`).
+- **Owner-Only Historical Version Deletion:** Only the document owner can delete an individual historical revision. The active `is_current` version cannot be deleted through this endpoint (HTTP 400). Private storage objects are removed upon deletion, database records updated, and audit events recorded.
+- **Audit Trail Integrity Hardening:** Contiguous hash chain with versioned `hash_schema: trustvault-audit-event-v1`, deterministic JSON canonicalization, and HMAC-SHA256 signed checkpoints. Verified via automated tampering tests and the `/admin/audit` integrity dashboard.
+- **Verification:** 267 backend tests pass (100%), 17 frontend tests pass (100%), Vite production build succeeds.

@@ -754,3 +754,76 @@ def test_audit_metadata_rejects_sensitive_or_unsupported_values() -> None:
         sanitize_details({"score": 1.5})
     with pytest.raises(AuditMetadataError):
         sanitize_details({"nested": {"bad key": "value"}})
+
+def test_audit_integrity_tampering_detected(
+    api_client: TestClient,
+    db_session: Session,
+) -> None:
+    email = unique_email("tamper-audit")
+    register(api_client, email=email)
+    events = _events(db_session)
+    assert len(events) >= 1
+
+    # Verify untampered
+    chain = verify_chain(db_session)
+    assert chain.status == "VALID"
+
+    # Tamper with the details of the latest event directly in database
+    latest = events[-1]
+    db_session.execute(
+        update(AuditEvent)
+        .where(AuditEvent.id == latest.id)
+        .values(details={"tampered": "unauthorized-change"})
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    # Re-verify: must fail with INVALID at latest.chain_index
+    tampered_chain = verify_chain(db_session)
+    assert tampered_chain.status == "INVALID"
+    assert tampered_chain.failure_chain_index == latest.chain_index
+    assert f"sequence {latest.chain_index}" in tampered_chain.message
+
+
+def test_audit_checkpoint_verification_valid_and_tampered_signatures(
+    api_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = _configure_checkpoint(monkeypatch, tmp_path)
+    settings = get_settings()
+
+    # Unconfigured check
+    unconfigured_settings = settings.model_copy(update={"audit_checkpoint_signing_key": None})
+    trail_unconfigured = verify_audit_trail(db_session, settings=unconfigured_settings)
+    assert trail_unconfigured.checkpoint.status == "UNCONFIGURED"
+
+    # Missing check
+    trail_missing = verify_audit_trail(db_session, settings=settings)
+    assert trail_missing.checkpoint.status == "MISSING"
+
+    # Generate events
+    email = unique_email("checkpoint-audit")
+    register(api_client, email=email)
+
+    # Create checkpoint
+    cp = create_checkpoint(db_session, settings=settings)
+    assert cp["payload"]["last_chain_index"] >= 1
+
+    # Verify trail -> VERIFIED
+    trail_valid = verify_audit_trail(db_session, settings=settings)
+    assert trail_valid.status == "VERIFIED"
+    assert trail_valid.checkpoint.status == "VALID"
+
+    # Tamper with checkpoint signature
+    with open(checkpoint_path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    doc["signature"] = "0" * 64
+    with open(checkpoint_path, "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+
+    trail_bad_sig = verify_audit_trail(db_session, settings=settings)
+    assert trail_bad_sig.status == "INVALID"
+    assert trail_bad_sig.checkpoint.status == "INVALID"
+    assert "signature is invalid" in trail_bad_sig.checkpoint.message.lower()

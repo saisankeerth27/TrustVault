@@ -22,6 +22,7 @@ class AuditEventResponse(BaseModel):
     action: str
     outcome: AuditOutcome
     request_id: str | None
+    hash_schema: str
     details: dict[str, Any]
 
 

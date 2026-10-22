@@ -32,8 +32,12 @@ Organizations need a secure, auditable document management system that enforces 
 
 **Description:** Document owners grant READ or EDIT access to specific named users on a per-document basis. Permissions are stored at the individual document-user level, not at group or role level. A user without explicit permission has no access.
 
-**Phase:** 6 (Document Permissions and Revocation)
-**Verification:** Phase 6 tests confirm owner-only grants, READ/EDIT capability boundaries, immediate post-revocation denial, grant-history retention, and shared-document listing. Phase 7 verifies grant, update, revoke, and denied-permission audit events.
+- **READ permission:** Authorized users can view metadata, preview documents inline (PDF with Mozilla PDF.js, plain text, PNG/JPEG), zoom and navigate pages, download if permitted, and view permitted version history. READ recipients cannot edit document content, modify metadata, upload replacements, delete versions, or alter sharing permissions.
+- **EDIT permission:** Authorized users can perform all READ operations, edit document content (plain-text editing and in-browser PDF annotation editing with text notes, typewriter text, area highlights, and signatures), and save changes as a new document revision with optimistic concurrency protection. EDIT recipients cannot delete the document, delete historical versions, or change permissions.
+- **Document owner:** Owners have full control: view, edit, upload replacements, grant/revoke sharing, delete individual historical versions, and delete the document.
+
+**Phase:** 6 (Document Permissions and Revocation), 9–10 (Content Preview, In-Browser PDF Editing, and Versioning)
+**Verification:** Automated tests verify owner grants, READ/EDIT capability boundaries, immediate post-revocation denial, PDF rendering with worker isolation, in-browser PDF annotation embedding with `pdf-lib`, optimistic concurrency conflicts (HTTP 409), and owner-only version deletion.
 
 ---
 

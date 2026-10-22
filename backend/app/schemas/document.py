@@ -56,12 +56,20 @@ class DocumentVersionResponse(BaseModel):
 class DocumentVersionListResponse(BaseModel):
     items: list[DocumentVersionResponse]
     total: int
+    total_size: int
     current_version_number: int | None
 
 
 class DocumentVersionReplacementResponse(BaseModel):
     document: DocumentResponse
     version: DocumentVersionResponse
+
+
+class DocumentVersionDeletionResponse(BaseModel):
+    deleted_version_number: int
+    deleted_file_size: int
+    retained_total_size: int
+    storage_deleted: bool
 
 
 class DocumentContentUpdate(BaseModel):

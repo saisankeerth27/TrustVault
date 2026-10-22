@@ -99,6 +99,21 @@ export async function downloadDocumentVersion(
   }
 }
 
+export async function deleteDocumentVersion(documentId, versionNumber) {
+  const { data } = await apiClient.delete(
+    `/api/v1/documents/${documentId}/versions/${versionNumber}`,
+  )
+  return data
+}
+
+export async function listDocumentActivity(documentId, signal) {
+  const { data } = await apiClient.get(
+    `/api/v1/documents/${documentId}/activity`,
+    { signal },
+  )
+  return data
+}
+
 export async function previewDocument(documentId, signal) {
   const response = await apiClient.get(
     `/api/v1/documents/${documentId}/preview`,

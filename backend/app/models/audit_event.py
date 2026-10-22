@@ -97,6 +97,11 @@ class AuditEvent(Base):
     )
     previous_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     event_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    hash_schema: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        server_default=text("'trustvault-audit-event-v1'"),
+    )
 
     actor: Mapped[Optional[User]] = relationship(foreign_keys=[actor_id])
     document: Mapped[Optional[Document]] = relationship(foreign_keys=[document_id])

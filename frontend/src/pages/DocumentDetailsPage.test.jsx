@@ -191,4 +191,65 @@ describe('DocumentDetailsPage content workflows', () => {
     )
     expect(await screen.findByText('Version 2 created.')).toBeInTheDocument()
   })
+
+  it('allows EDIT recipient to see Edit PDF button for PDF document', async () => {
+    const pdfDocument = {
+      ...textDocument,
+      name: 'agreement.pdf',
+      mime_type: 'application/pdf',
+      access_level: 'EDIT',
+    }
+    getDocument.mockResolvedValue(pdfDocument)
+    render(
+      <AuthContext.Provider
+        value={{
+          status: 'authenticated',
+          user: owner,
+          login: vi.fn(),
+          register: vi.fn(),
+          logout: vi.fn(),
+        }}
+      >
+        <MemoryRouter initialEntries={[`/documents/${pdfDocument.id}`]}>
+          <Routes>
+            <Route path="/documents/:documentId" element={<DocumentDetailsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    )
+
+    expect(await screen.findByRole('button', { name: 'Edit PDF' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull()
+  })
+
+  it('prevents READ-only recipient from seeing Edit PDF button for PDF document', async () => {
+    const pdfDocument = {
+      ...textDocument,
+      name: 'agreement.pdf',
+      mime_type: 'application/pdf',
+      access_level: 'READ',
+    }
+    getDocument.mockResolvedValue(pdfDocument)
+    render(
+      <AuthContext.Provider
+        value={{
+          status: 'authenticated',
+          user: owner,
+          login: vi.fn(),
+          register: vi.fn(),
+          logout: vi.fn(),
+        }}
+      >
+        <MemoryRouter initialEntries={[`/documents/${pdfDocument.id}`]}>
+          <Routes>
+            <Route path="/documents/:documentId" element={<DocumentDetailsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    )
+
+    expect(await screen.findByText('agreement.pdf')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit PDF' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull()
+  })
 })

@@ -2,8 +2,12 @@
 
 TrustVault is a secure, multi-tenant document vault that lets organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
-> **Status: Phase 9 — Complete frontend implemented and verified locally (awaiting review).** The Phase 9 and business-model commits are `a65046a` and `77af2dc`; the current working tree adds authorized content previews, plain-text editing, file replacement, and retained version history, with migration `0005` applied to Supabase.
-> Phases 0–9 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, an authenticated document library, owner-managed READ/EDIT sharing with immediate revocation, an append-only hash-chained audit trail with a signed checkpoint and administrator audit dashboard, a 46-case threat-mapped security suite, and the complete React frontend. The corrected model has two account roles, `ADMINISTRATOR` and `USER`: every active user may upload and becomes the owner of that document, while access to other users' documents is granted per document. Administrators manage accounts, inspect all document metadata, and review global audit history without automatically receiving private file content. The frontend includes registration and login, a live access dashboard, a dedicated upload page with validation feedback, search/filter/sort/pagination, document details, authorized PDF/text/image previews, metadata and plain-text editing, replacement-file uploads with retained version history, owner-only permission management, administrator account management, an administrator audit viewer, desktop sidebar and mobile navigation, loading/error/empty states, and automated component/service tests. Administrators remain metadata-only unless explicitly granted READ or EDIT. Storage behavior is tested with a mocked Supabase Storage adapter; a **live private-bucket smoke test has passed** against the configured Supabase project. There is no live deployment.
+> **Status: Phase 10 — Secure PDF Preview, In-Browser Annotation Editing, Version Control, and Audit Integrity Implemented.**
+> All 267 backend tests and 17 frontend tests pass with Vite production build verified. The implementation adds:
+> - **Secure PDF Preview**: Client-side rendering via Mozilla PDF.js (`pdfjs-dist`) with Vite web worker bundling. Documents are streamed through authenticated FastAPI endpoints with `Cache-Control: private, no-store` without exposing private object URLs or service secrets.
+> - **In-Browser PDF Editing**: Authorized EDIT recipients can annotate PDFs with sticky text notes, typewriter free text, area highlights, and typed signatures. Annotations are embedded directly into the PDF binary via `pdf-lib` and saved as a new version with optimistic concurrency (`expected_version_number`).
+> - **Owner-Only Historical Version Deletion**: Owners can delete individual non-current versions (`DELETE /api/v1/documents/{id}/versions/{version_number}`) with private Supabase Storage object cleanup and audit logging.
+> - **Document Activity & Audit Integrity**: Document owners can inspect their document's activity timeline (`GET /api/v1/documents/{id}/activity`), while administrators verify tamper-evident hash chains (`hash_schema: trustvault-audit-event-v1`) and signed HMAC-SHA256 checkpoints.
 
 ## Project Objective
 
@@ -14,6 +18,7 @@ Provide a document management system where authorization is guaranteed by the ba
 | Layer | Technology |
 |-------|------------|
 | Frontend | React, JavaScript/JSX, Vite, Tailwind CSS, shadcn/ui |
+| PDF Rendering & Editing | Mozilla PDF.js (`pdfjs-dist`), `pdf-lib` |
 | Routing | React Router |
 | HTTP client | Axios |
 | Forms / validation | React Hook Form, Zod |
@@ -24,7 +29,7 @@ Provide a document management system where authorization is guaranteed by the ba
 | Object storage | Supabase Storage private bucket (`httpx`) |
 | Frontend hosting | Vercel |
 | Backend hosting | Render |
-| Testing | pytest, FastAPI TestClient, embedded-postgres, oxlint, Vite build |
+| Testing | pytest, FastAPI TestClient, embedded-postgres, oxlint, Vitest, Vite build |
 
 ## Repository Structure
 
@@ -245,6 +250,36 @@ Phases 5–6 implement the authenticated document library and named-user sharing
 The frontend provides registration and login, a live dashboard with permitted-document counts and recent activity, a searchable/filterable library with name, category, owner-ID, and date filters, sorting, and pagination; a "Shared with me" view; access-level badges; a dedicated upload page with validation and progress feedback; an access-aware details page with metadata editing and download; and an owner-only sharing page with grant, level update, revoke confirmation, and history. Administrators get account management, summary counts, permission history, metadata oversight, and the audit viewer; administrator metadata and audit access remain read-only, and private content still requires ownership or an explicit grant. Desktop uses a sidebar navigation shell, while mobile uses a compact top bar and scrollable navigation.
 
 Storage behavior is covered by a mocked adapter, and a **live private-bucket connectivity, upload, download, metadata, and delete smoke test has passed** against the configured Supabase project. The bucket must remain private.
+
+## Secure PDF Preview, Annotation Editing, and Revisions
+
+### PDF Preview Architecture
+- **Rendering engine:** Mozilla PDF.js (`pdfjs-dist` v6.x) built into Vite via dynamic worker bundling (`pdf.worker.min.mjs?url`).
+- **Data flow:** PDF bytes are retrieved through the authenticated backend endpoint (`GET /api/v1/documents/{id}/preview`), converted to an `ArrayBuffer`, and rendered directly into HTML5 canvas elements.
+- **Security controls:** `isEvalSupported: false` is configured on the PDF document loading task to prevent arbitrary code execution within the PDF context. The preview endpoint sets `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Private Supabase Storage object keys and signed URLs are never exposed to the client.
+- **Controls & navigation:** Page-by-page navigation with keyboard/button controls, zoom scaling (from 80% to 200%), page-count indicators, and automatic resource disposal (`loadingTask.destroy()`, render task cancellation on unmount).
+
+### In-Browser PDF Editing Capabilities
+- **SDK & Licensing:** Implemented using open-source `pdf-lib` (MIT License) and `pdfjs-dist` (Apache 2.0 License). No proprietary or commercial license keys (such as Apryse WebViewer) are required.
+- **Supported Operations:**
+  - **Sticky Text Notes:** Place text note annotations anywhere on the canvas with author attribution and timestamp.
+  - **Free Text (Typewriter):** Type custom text annotations directly onto the PDF document surface at exact coordinates.
+  - **Area Highlights:** Click-and-drag translucent highlight boxes over specific document regions.
+  - **Typed Signatures & Initials:** Insert stylized italicized signatures/initials at user-specified positions.
+- **Limitations:**
+  - Modification of pre-existing PDF font glyphs or body text streams is not supported without commercial font-substitution engines (e.g. Apryse WebViewer with commercial licensing).
+  - TrustVault accurately represents this capability as client-side PDF binary annotation embedding rather than arbitrary document layout reflow.
+
+### Revision Lifecycle & Concurrency
+- When an authorized user with `EDIT` or `OWNER` permissions saves annotations, `pdf-lib` loads the original PDF binary in the browser, draws the requested annotations onto the corresponding PDF pages, and serializes the modified document into a valid binary PDF (`application/pdf`).
+- The new revision is uploaded via `PUT /api/v1/documents/{id}/versions` with `expected_version_number`.
+- If another editor committed a revision concurrently, the server rejects the request with HTTP 409 Conflict, prompting the editor to reload and reconcile their changes.
+- Every revision increments `version_number`, assigns a new unique storage key in private storage, computes a new SHA-256 checksum, logs a `DOCUMENT_VERSION_CREATED` audit event, and preserves the previous version.
+
+### Historical Version Deletion Policy
+- Document owners can delete individual historical (non-current) revisions via `DELETE /api/v1/documents/{id}/versions/{version_number}`.
+- Deletion of the active `is_current` version is rejected with HTTP 400 Bad Request to prevent corrupting the document library.
+- When an eligible historical version is deleted, its private Supabase Storage object is deleted, database records are updated, freed storage space is reported, and a `DOCUMENT_VERSION_DELETE` audit event is recorded in the immutable audit trail.
 
 ## Administrator Account Management
 

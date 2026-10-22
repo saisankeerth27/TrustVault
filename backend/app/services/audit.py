@@ -21,7 +21,10 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
-AUDIT_HASH_SCHEMA = "trustvault-audit-event-v1"
+AUDIT_HASH_SCHEMA_V1 = "trustvault-audit-event-v1"
+AUDIT_HASH_SCHEMA_V2 = "trustvault-audit-event-v2"
+AUDIT_HASH_SCHEMA = AUDIT_HASH_SCHEMA_V2
+SUPPORTED_HASH_SCHEMAS = frozenset({AUDIT_HASH_SCHEMA_V1, AUDIT_HASH_SCHEMA_V2})
 _AUDIT_CHAIN_LOCK_ID = 0x54525641554C54
 _MAX_DETAILS_BYTES = 8 * 1024
 _MAX_DETAIL_DEPTH = 5
@@ -130,13 +133,15 @@ def canonical_event_payload(
     request_id: str | None,
     details: dict[str, Any],
     previous_hash: str | None,
+    hash_schema: str = AUDIT_HASH_SCHEMA,
 ) -> dict[str, Any]:
-    return {
-        "schema": AUDIT_HASH_SCHEMA,
+    if hash_schema not in SUPPORTED_HASH_SCHEMAS:
+        raise ValueError("Unsupported audit hash schema.")
+
+    payload = {
+        "schema": hash_schema,
         "chain_index": chain_index,
         "event_id": str(event_id),
-        "actor_id": str(actor_id) if actor_id else None,
-        "document_id": str(document_id) if document_id else None,
         "action": action,
         "outcome": outcome,
         "occurred_at": _canonical_datetime(occurred_at),
@@ -144,6 +149,10 @@ def canonical_event_payload(
         "details": details,
         "previous_hash": previous_hash,
     }
+    if hash_schema == AUDIT_HASH_SCHEMA_V1:
+        payload["actor_id"] = str(actor_id) if actor_id else None
+        payload["document_id"] = str(document_id) if document_id else None
+    return payload
 
 
 def calculate_event_hash(payload: dict[str, Any]) -> str:
@@ -167,6 +176,9 @@ def record_event(
             normalized_details.setdefault(key, value)
         if actor is not None:
             normalized_details["actor_name"] = actor.name
+            normalized_details["actor_user_id"] = str(actor.id)
+        if document_id is not None:
+            normalized_details["document_id"] = str(document_id)
         if len(canonical_json_bytes(normalized_details)) > _MAX_DETAILS_BYTES:
             raise AuditMetadataError("Audit metadata is too large.")
 
@@ -195,6 +207,7 @@ def record_event(
             request_id=get_request_id(),
             details=normalized_details,
             previous_hash=previous_hash,
+            hash_schema=AUDIT_HASH_SCHEMA,
         )
         event = AuditEvent(
             id=event_id,
@@ -208,6 +221,7 @@ def record_event(
             details=normalized_details,
             previous_hash=previous_hash,
             event_hash=calculate_event_hash(payload),
+            hash_schema=AUDIT_HASH_SCHEMA,
         )
         session.add(event)
         session.flush()

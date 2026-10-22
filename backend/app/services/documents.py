@@ -236,10 +236,29 @@ def update_document_metadata(
     document: Document,
     changes: dict[str, object],
     actor: User,
+    access_level: str | None = None,
 ) -> Document:
+    field_changes = {}
     for field in ("name", "category", "description"):
-        if field in changes:
-            setattr(document, field, changes[field])
+        if field not in changes:
+            continue
+        previous = getattr(document, field)
+        value = changes[field]
+        if previous == value:
+            continue
+        field_changes[field] = {"previous": previous, "new": value}
+        setattr(document, field, value)
+
+    if not field_changes:
+        return document
+
+    details: dict[str, object] = {
+        "changed_fields": sorted(field_changes),
+        "field_changes": field_changes,
+        "resource_type": "DOCUMENT",
+    }
+    if access_level:
+        details["access_level"] = access_level
 
     try:
         record_event(
@@ -248,10 +267,7 @@ def update_document_metadata(
             outcome=AuditOutcome.SUCCESS,
             actor=actor,
             document_id=document.id,
-            details={
-                "changed_fields": sorted(changes),
-                "resource_type": "DOCUMENT",
-            },
+            details=details,
         )
         session.commit()
     except Exception as exc:

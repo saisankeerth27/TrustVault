@@ -113,6 +113,10 @@ export function canDeleteDocument(documentRecord) {
   return accessLevelOf(documentRecord) === 'OWNER'
 }
 
+export function canDeleteHistoricalVersion(documentRecord) {
+  return accessLevelOf(documentRecord) === 'OWNER'
+}
+
 export function canManageDocumentPermissions(documentRecord) {
   return accessLevelOf(documentRecord) === 'OWNER'
 }
@@ -137,6 +141,10 @@ export function previewKindOf(documentRecord) {
 
 export function canEditTextContent(documentRecord) {
   return canReplaceDocumentFile(documentRecord) && previewKindOf(documentRecord) === 'text'
+}
+
+export function canEditPdfContent(documentRecord) {
+  return canReplaceDocumentFile(documentRecord) && previewKindOf(documentRecord) === 'pdf'
 }
 
 export function categoryChoices(currentCategory) {
