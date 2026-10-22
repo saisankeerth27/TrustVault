@@ -137,16 +137,16 @@ export function RegisterPage() {
             Public registration
           </p>
           <h1 className="text-3xl font-semibold leading-tight tracking-tight">
-            Create an account and open only what is shared with you.
+            Create an account, upload your documents, and share on your terms.
           </h1>
           <p className="text-sm leading-6 text-white/80">
-            New accounts receive the Viewer role. Document owners and administrators are
-            provisioned separately so public sign-up cannot escalate access.
+            New accounts are normal users. You can upload and own documents immediately, and
+            documents appear when another owner grants you READ or EDIT access.
           </p>
           <ul className="space-y-3 text-sm text-white/85">
             <li className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Viewer access only: documents appear when an owner grants READ or EDIT.
+              Own your uploads and share them with named users using READ or EDIT grants.
             </li>
             <li className="flex items-start gap-3">
               <LockKeyhole className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -156,8 +156,8 @@ export function RegisterPage() {
         </div>
 
         <p className="relative text-xs text-white/60">
-          Need elevated access? Ask an administrator to provision an Owner or Administrator
-          account.
+          Need administrator oversight access? Ask an existing administrator to update your
+          account role.
         </p>
       </section>
 
@@ -173,7 +173,7 @@ export function RegisterPage() {
             </p>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Create account</h1>
             <p className="text-sm leading-6 text-muted-foreground">
-              Register for Viewer access. You will be signed in automatically after creating your
+              Register as a normal user. You will be signed in automatically after creating your
               account.
             </p>
           </div>
@@ -307,7 +307,7 @@ export function RegisterPage() {
           </p>
 
           <p className="text-xs leading-5 text-muted-foreground">
-            Registration is rate limited. Public sign-up always creates a Viewer account.
+            Registration is rate limited. Public sign-up always creates a normal user account.
           </p>
         </div>
       </section>

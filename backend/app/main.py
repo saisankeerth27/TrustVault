@@ -23,8 +23,8 @@ def create_app() -> FastAPI:
             "TrustVault API. Authentication is available under /api/v1/auth. Secure upload, "
             "document listing/search, metadata management, proxied download, soft deletion, and "
             "owner-managed READ/EDIT permissions are available under /api/v1/documents. "
-            "Administrator audit history and integrity verification are available under "
-            "/api/v1/admin."
+            "Administrator account management, document metadata oversight, audit history, and "
+            "integrity verification are available under /api/v1/admin."
         ),
     )
 

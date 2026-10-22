@@ -34,8 +34,8 @@ function renderUploadPage(role) {
 }
 
 describe('UploadPage', () => {
-  it('provides the validated upload form to document managers', () => {
-    renderUploadPage('DOCUMENT_OWNER')
+  it('provides the validated upload form to normal users', () => {
+    renderUploadPage('USER')
 
     expect(
       screen.getByRole('heading', { level: 1, name: 'Upload a document' }),
@@ -43,12 +43,5 @@ describe('UploadPage', () => {
     expect(screen.getByLabelText('Document file')).toBeInTheDocument()
     expect(screen.getByLabelText('Category')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Upload document' })).toBeInTheDocument()
-  })
-
-  it('denies the upload route to viewers', () => {
-    renderUploadPage('VIEWER')
-
-    expect(screen.getByRole('heading', { name: 'Access denied' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('Document file')).not.toBeInTheDocument()
   })
 })

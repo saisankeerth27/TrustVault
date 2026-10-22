@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,11 +26,9 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
-    wasabi_endpoint_url: str | None = None
-    wasabi_region: str = "us-east-1"
-    wasabi_bucket_name: str | None = None
-    wasabi_access_key_id: SecretStr | None = None
-    wasabi_secret_access_key: SecretStr | None = None
+    supabase_url: str | None = None
+    supabase_storage_bucket: str | None = None
+    supabase_service_role_key: SecretStr | None = None
     max_upload_size_bytes: int = 10 * 1024 * 1024
     allowed_upload_extensions: str = "pdf,txt,docx,png,jpg,jpeg"
 
@@ -58,8 +57,8 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "wasabi_endpoint_url",
-        "wasabi_bucket_name",
+        "supabase_url",
+        "supabase_storage_bucket",
         mode="before",
     )
     @classmethod
@@ -69,7 +68,7 @@ class Settings(BaseSettings):
             return stripped or None
         return value
 
-    @field_validator("wasabi_access_key_id", "wasabi_secret_access_key", mode="before")
+    @field_validator("supabase_service_role_key", mode="before")
     @classmethod
     def empty_storage_secret_to_none(cls, value: object) -> object:
         if isinstance(value, str):
@@ -98,23 +97,23 @@ class Settings(BaseSettings):
             raise ValueError("AUDIT_CHECKPOINT_PATH must be an absolute path.")
         return str(path)
 
-    @field_validator("wasabi_endpoint_url")
+    @field_validator("supabase_url")
     @classmethod
-    def secure_wasabi_endpoint(cls, value: str | None) -> str | None:
+    def secure_supabase_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.rstrip("/")
-        if not normalized.startswith("https://"):
-            raise ValueError("WASABI_ENDPOINT_URL must use HTTPS.")
-        return normalized
-
-    @field_validator("wasabi_region")
-    @classmethod
-    def valid_wasabi_region(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("WASABI_REGION must not be blank.")
-        return stripped
+        parsed = urlsplit(value.strip())
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("SUPABASE_URL must be an HTTPS URL.")
+        if (
+            parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError("SUPABASE_URL must be the project URL without a path.")
+        return f"{parsed.scheme}://{parsed.netloc}"
 
     @field_validator("max_upload_size_bytes")
     @classmethod
@@ -133,7 +132,9 @@ class Settings(BaseSettings):
         }
         if not extensions:
             raise ValueError("ALLOWED_UPLOAD_EXTENSIONS must contain at least one extension.")
-        if any(not extension.isalnum() for extension in extensions):
+        if any(
+            not extension.isalnum() for extension in extensions
+        ):
             raise ValueError("Upload extensions must contain only letters and numbers.")
         return ",".join(sorted(extensions))
 

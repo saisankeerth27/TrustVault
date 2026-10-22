@@ -2,9 +2,9 @@
 
 ## 1. System Overview
 
-TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and Wasabi S3-compatible private object storage. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
+TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and private Supabase Storage buckets. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 9):** authentication, database-backed roles, rotating refresh sessions, the complete JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints and an administrator audit dashboard, and a threat-mapped security suite are implemented and verified locally. The frontend includes public Viewer registration, login, a live access dashboard, a dedicated upload page, search/filter/sort/pagination, document details and metadata editing, owner-only permission management, the administrator audit viewer, desktop sidebar and mobile navigation, loading/error/empty states, and automated component/service tests. Storage tests use a mocked Wasabi adapter; **live Wasabi connectivity, download, and object-deletion behavior have not been verified**. TrustVault has **no live deployment**, and migrations have **not** been applied to the Supabase project.
+> **Implementation status (Phase 9 + business-model correction):** authentication, database-backed roles, rotating refresh sessions, the complete JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints, administrator account management and audit dashboard, and a threat-mapped security suite are implemented and verified locally. The corrected model has two account roles, `ADMINISTRATOR` and `USER`; every active user can upload and owns their uploads, while other-document access requires a per-document grant. The frontend includes public User registration, login, a live access dashboard, a dedicated upload page, search/filter/sort/pagination, document details and metadata editing, owner-only permission management, administrator account/metadata oversight, the administrator audit viewer, desktop sidebar and mobile navigation, loading/error/empty states, and automated component/service tests. Storage tests use a mocked Supabase Storage adapter; a **live private-bucket connectivity/upload/download/delete smoke test passed** against Supabase Storage. TrustVault has **no live deployment**, and the current Supabase database is at migration `0003`; migration `0004` exists locally and has not been applied to Supabase.
 
 ### Architecture Diagram
 
@@ -26,7 +26,7 @@ graph TB
 
     subgraph "Data Zone — Trusted"
         DB["Supabase PostgreSQL<br/>RLS planned, not enabled"]
-        S3["Wasabi S3<br/>Private Bucket"]
+        S3["Supabase Storage<br/>Private Bucket"]
     end
 
     Browser -->|"HTTPS"| ReactSPA
@@ -37,7 +37,7 @@ graph TB
     API --- FileVal
     API --- DocMgmt
     API -->|"SQLAlchemy + psycopg 3"| DB
-    API -->|"boto3 (mock-tested)"| S3
+    API -->|"httpx (mock-tested)"| S3
 
     style Browser fill:#f9f,stroke:#333
     style ReactSPA fill:#bbf,stroke:#333
@@ -60,9 +60,9 @@ graph TB
 | 1 | Frontend/backend scaffold, health endpoint, CORS, tests | Complete |
 | 2 | Database models, initial migration, connection module | Complete (verified locally) |
 | 3 | Authentication, roles, refresh tokens | Complete (verified locally) |
-| 4 | Private Wasabi storage and validated uploads | Complete (verified locally with mocked storage; live Wasabi unverified) |
-| 5 | Document listing, download proxy, management, and search | Complete (verified locally with mocked storage; live Wasabi unverified) |
-| 6 | Named-user READ/EDIT permissions, sharing, immediate revocation | Complete (verified locally with mocked storage; live Wasabi unverified) |
+| 4 | Private Supabase Storage and validated uploads | Complete (mocked tests plus live storage smoke test) |
+| 5 | Document listing, download proxy, management, and search | Complete (mocked tests plus live storage smoke test) |
+| 6 | Named-user READ/EDIT permissions, sharing, immediate revocation | Complete (mocked tests plus live storage smoke test) |
 | 7 | Audit write path, hash chain, signed checkpoint, admin activity | Complete (verified locally) |
 | 8 | Security tests and threat-model verification | Complete (verified locally) |
 | 9 | Complete frontend | Complete (verified locally; awaiting review) |
@@ -86,7 +86,7 @@ The React SPA runs entirely in the user's browser. It is responsible for:
 
 **The frontend NEVER:**
 - Connects directly to the database.
-- Connects directly to Wasabi S3.
+- Connects directly to Supabase Storage.
 - Makes authorization decisions. Frontend controls (disabled buttons, hidden menus) are UX convenience, not security.
 - Stores secrets or API keys (other than the backend URL).
 
@@ -97,7 +97,7 @@ The React SPA runs entirely in the user's browser. It is responsible for:
 The backend is the **intended sole enforcement point** for security. It is responsible for the following. Items marked *planned* are not implemented yet.
 
 ### Authentication (implemented — Phase 3)
-- Public registration always creates a `VIEWER`; elevated roles are provisioned with `scripts/create_user.py`.
+- Public registration always creates a `USER`; administrator accounts are provisioned with `scripts/create_user.py` or changed by an authorized administrator.
 - Passwords are hashed with bcrypt (cost configurable; production default 12) with a 12-character minimum and 72-byte maximum. Unknown accounts perform dummy-hash work and return the same generic error.
 - Login returns a short-lived HS256 JWT access token and sets an opaque rotating refresh token in an HttpOnly cookie scoped to `/api/v1/auth`.
 - Refresh tokens are stored only as SHA-256 hashes and grouped by session family. Reuse of a rotated token revokes the whole family.
@@ -121,7 +121,7 @@ The backend is the **intended sole enforcement point** for security. It is respo
 ### Document Operations
 **Upload (implemented — Phase 4):**
 - `POST /api/v1/documents/upload` accepts multipart `file`, optional `category`, and optional `description`.
-- Requires an active `ADMINISTRATOR` or `DOCUMENT_OWNER`. Ownership comes from the authenticated user; client-supplied owner, storage key, and checksum are ignored.
+- Requires any active authenticated user. Ownership comes from the authenticated user; client-supplied owner, storage key, and checksum are ignored.
 - Validates the extension, declared MIME type, content signature, filename, empty content, and size. DOCX OOXML structure and TXT encoding are checked. The checksum is computed by the backend.
 - Stores with a generated key and commits metadata only after the object upload succeeds. A database failure triggers best-effort object deletion.
 
@@ -131,7 +131,7 @@ The backend is the **intended sole enforcement point** for security. It is respo
 - `GET /api/v1/documents/{id}` returns safe metadata and effective `access_level` for visible active documents.
 - `PATCH /api/v1/documents/{id}` accepts only `name`, `category`, and `description`. Owners and EDIT recipients may update; READ recipients and metadata-only administrators receive 403.
 - `GET /api/v1/documents/{id}/download` permits owners, READ recipients, and EDIT recipients, and proxies the private object with safe attachment and no-store headers.
-- `DELETE /api/v1/documents/{id}` is owner-only and sets `deleted_at`; the Wasabi object is deleted best-effort after the database commit.
+- `DELETE /api/v1/documents/{id}` is owner-only and sets `deleted_at`; the Supabase Storage object is deleted best-effort after the database commit.
 - Permission endpoints are owner-only: `GET/POST /documents/{id}/permissions` and `PATCH/DELETE /documents/{id}/permissions/{permission_id}`. Lists include revoked history.
 - Successful and denied actions are written to the append-only audit trail. Mandatory success events share the business transaction; denial events are best-effort.
 
@@ -156,7 +156,7 @@ The backend is the **intended sole enforcement point** for security. It is respo
 
 ## 5. Database Architecture (Implemented)
 
-The schema contains five tables. Migrations `0001`–`0003` establish the schema and audit chain sequence. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
+The schema contains five tables. Migrations `0001`–`0004` establish the schema, audit chain sequence, current two-role model, login tracking, and account indexes. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
 
 | Table | Purpose |
 |-------|---------|
@@ -169,7 +169,7 @@ The schema contains five tables. Migrations `0001`–`0003` establish the schema
 ### Design Decisions
 
 - **UUID primary keys** generated by PostgreSQL `gen_random_uuid()`. UUIDs are not a security control; authorization never depends on ID secrecy.
-- **Roles and statuses as constrained strings.** `users.role` is checked against `ADMINISTRATOR`, `DOCUMENT_OWNER`, `VIEWER`; `users.status` against `ACTIVE`, `DISABLED`. Constrained strings avoid the migration friction of native PostgreSQL enums while still being validated at the database. Python-side `StrEnum` values live in `app/models/enums.py`.
+- **Roles and statuses as constrained strings.** `users.role` is checked against `ADMINISTRATOR`, `USER`; `users.status` against `ACTIVE`, `DISABLED`. Constrained strings avoid the migration friction of native PostgreSQL enums while still being validated at the database. Python-side `StrEnum` values live in `app/models/enums.py`.
 - **Email normalization.** `users.email` is stored lowercase and must already be lowercase (check constraint), with a unique constraint. Normalization happens before insert; the database guarantees no mixed-case duplicates.
 - **Required `password_hash`.** The column is `NOT NULL`; Phase 3 always stores a bcrypt hash, so an account can never exist without a credential.
 - **Explicit owner FK.** `documents.owner_id` references `users.id` with `ON DELETE RESTRICT`; a user who owns documents cannot be deleted until ownership is transferred.
@@ -192,15 +192,15 @@ The schema is applied only through Alembic. The initial migration `0001_initial_
 
 ---
 
-## 6. Wasabi Private Storage Responsibilities (Implemented — Phase 4)
+## 6. Supabase Storage Responsibilities (Implemented — Phase 4)
 
-Wasabi provides S3-compatible object storage for document content.
+Supabase Storage provides private object storage for document content.
 
 - Bucket is **private**; no public access policy or direct frontend access.
-- All access goes through the FastAPI backend using `boto3`.
-- Server-side settings are `WASABI_ENDPOINT_URL`, `WASABI_REGION`, `WASABI_BUCKET_NAME`, `WASABI_ACCESS_KEY_ID`, and `WASABI_SECRET_ACCESS_KEY`. They are never committed or exposed to Vite.
-- The client is configured for the Wasabi endpoint with path-style addressing. Missing configuration maps to 503; storage errors are logged without credentials or internal detail.
-- `python -m scripts.check_storage` performs a safe `head_bucket` check for operators.
+- All access goes through the FastAPI backend using `httpx`.
+- Server-side settings are `SUPABASE_URL`, `SUPABASE_STORAGE_BUCKET`, and `SUPABASE_SERVICE_ROLE_KEY`. They are never committed or exposed to Vite.
+- The client uses the HTTPS Storage API with server-side service-role credentials. Missing configuration maps to 503; storage errors are logged without credentials or internal detail.
+- `python -m scripts.check_storage` verifies connectivity and rejects a public bucket.
 
 ### File Organization
 
@@ -218,7 +218,7 @@ Storage keys are system-generated; the user-supplied filename is metadata only. 
 2. **Download (implemented):** backend verifies ownership → `get_object()` and streams the body. Presigned URLs are not part of the design.
 3. **Delete (implemented):** backend verifies ownership → commits `deleted_at` → attempts `delete_object()`. Cleanup failure is logged and leaves the metadata soft-deleted.
 
-The frontend **never** receives a direct or presigned Wasabi URL. The live bucket policy has not been verified.
+The frontend **never** receives a direct or presigned Supabase Storage URL. `scripts.check_storage` verifies that the bucket remains private.
 
 ---
 
@@ -292,7 +292,7 @@ The backend verifies identity and session state on **every** protected request. 
 1. Client sends `POST /api/v1/documents/upload` with multipart `file`, optional `category`, and optional `description`.
 2. Backend validates the JWT/session and requires an active owner or administrator role.
 3. File validation: size limit with a pre-routing `Content-Length` check before body parsing or authentication (413), required length for uploads (411), extension/MIME allow-list, magic-byte/signature check, filename safety including Unicode format controls, empty-file rejection, DOCX structure and expansion limits, and TXT encoding.
-4. Backend computes SHA-256, generates `documents/{owner_uuid}/{random_uuid}.{ext}`, uploads to Wasabi, then commits the `documents` row.
+4. Backend computes SHA-256, generates `documents/{owner_uuid}/{random_uuid}.{ext}`, uploads to Supabase Storage, then commits the `documents` row.
 5. The response contains safe metadata only; it excludes `storage_key` and all credentials.
 6. If storage fails, no database row is created and the response is a generic 503. If the database commit fails after upload, object deletion is attempted and a generic 500 is returned. Cleanup is best-effort, not transactional.
 7. `DOCUMENT_UPLOAD` is appended in the same transaction as the metadata row; a failed audit write rolls back the row and returns a generic 500.
@@ -303,14 +303,14 @@ The backend verifies identity and session state on **every** protected request. 
 2. Backend builds the visible scope from ownership and active grants (or all active metadata for administrators), then applies literal escaped name search, category/owner/date filters, a stable sort, and bounded pagination.
 3. Missing and inaccessible document IDs both return a generic 404. Visible documents with insufficient capability return 403.
 4. `PATCH` accepts only mutable metadata; owners and EDIT recipients may update, while READ recipients and metadata-only administrators are denied. Protected storage and integrity fields are rejected with 422.
-5. `DELETE` is owner-only and commits `deleted_at` first, then attempts Wasabi object deletion. The object cleanup is best-effort and not part of the database transaction.
+5. `DELETE` is owner-only and commits `deleted_at` first, then attempts Supabase Storage object deletion. The object cleanup is best-effort and not part of the database transaction.
 6. `DOCUMENT_METADATA_UPDATE` and `DOCUMENT_DELETE` share the protected transaction. Denials append typed denial events best-effort and preserve the intended 403/404.
 
 ### Download (implemented)
 
 1. Client sends `GET /api/v1/documents/{id}/download` with the in-memory bearer token.
 2. Backend validates the JWT/session and resolves OWNER, EDIT, or READ capability from current database state.
-3. Backend fetches from Wasabi and streams with the stored MIME type, `Content-Disposition: attachment`, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`.
+3. Backend fetches from Supabase Storage and streams with the stored MIME type, `Content-Disposition: attachment`, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`.
 4. Storage not-found maps to 404; configuration/operation failures map to generic 503. No storage key or presigned URL is exposed.
 5. A successful download appends `DOCUMENT_DOWNLOAD` in the request transaction; an authorization denial appends `DOCUMENT_DOWNLOAD_DENIED` best-effort.
 
@@ -438,13 +438,13 @@ graph LR
         PG["PostgreSQL<br/>RLS planned"]
     end
 
-    subgraph "Wasabi"
+    subgraph "Supabase Storage"
         WS["S3 Private Bucket"]
     end
 
     FE -->|"HTTPS API"| BE
     BE -->|"psycopg 3"| PG
-    BE -->|"boto3 (Phase 4, live unverified)"| WS
+    BE -->|"httpx (private bucket)"| WS
 ```
 
 | Provider | Component | Configuration |
@@ -452,7 +452,7 @@ graph LR
 | Vercel | Frontend | Build `npm run build`, output `dist/`, env `VITE_API_BASE_URL` |
 | Render | Backend | Start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, env below |
 | Supabase | Database | Connection via `DATABASE_URL`; migrations applied manually with Alembic |
-| Wasabi | Storage | Private bucket, server-side access only via `boto3` |
+| Supabase Storage | Storage | Private bucket, server-side access only via `httpx` |
 
 No deployment or migration has been performed. Render does not run migrations automatically; `alembic upgrade head` is a deliberate manual step.
 
@@ -465,8 +465,8 @@ All values below are **placeholders**. Real credentials are configured in each p
 ### Backend (Render)
 
 ```env
-# Database (direct connection, port 5432, for migrations; transaction pooler 6543 also supported)
-DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@db.YOUR_PROJECT_REF.supabase.co:5432/postgres
+# Database (direct or session pooler on 5432 for migrations; transaction pooler 6543 for runtime)
+DATABASE_URL=postgresql://postgres.YOUR_PROJECT_REF:YOUR_PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres
 DB_POOL_SIZE=5
 DB_MAX_OVERFLOW=10
 
@@ -476,12 +476,10 @@ JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=15
 JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
 
-# Wasabi S3 (Phase 4, implemented; live connection unverified)
-WASABI_ENDPOINT_URL=https://s3.us-east-1.wasabisys.com
-WASABI_REGION=us-east-1
-WASABI_BUCKET_NAME=trustvault-documents
-WASABI_ACCESS_KEY_ID=your-wasabi-access-key-id
-WASABI_SECRET_ACCESS_KEY=your-wasabi-secret-access-key
+# Supabase Storage (private bucket, server-side credentials only)
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_STORAGE_BUCKET=trustvault-documents
+SUPABASE_SERVICE_ROLE_KEY=your-server-side-secret-key
 MAX_UPLOAD_SIZE_BYTES=10485760
 ALLOWED_UPLOAD_EXTENSIONS=pdf,txt,docx,png,jpg,jpeg
 
@@ -533,7 +531,7 @@ Planned policies:
 
 | Scenario | Response | Behavior |
 |----------|----------|----------|
-| Wasabi unreachable or misconfigured (Phases 4–6) | 503 Service Unavailable | Upload fails with no metadata row; download fails without content; generic client message |
+| Supabase Storage unreachable or misconfigured (Phases 4–6) | 503 Service Unavailable | Upload fails with no metadata row; download fails without content; generic client message |
 | Metadata commit fails after upload (Phase 4) | 500 Internal Server Error | Best-effort object deletion; generic client message |
 | Object cleanup fails after soft delete (Phase 5) | 204 No Content | Metadata remains soft-deleted; cleanup failure logged for reconciliation |
 | Object missing during download (Phase 5) | 404 Not Found | Generic unavailable message; no storage details |
@@ -553,7 +551,7 @@ Planned policies:
 
 ## 16. Health Check
 
-`GET /health` currently reports **process health only**: `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`. It does **not** query PostgreSQL or Wasabi, and a test asserts that it exposes no configuration markers. Storage operators can use `python -m scripts.check_storage`; audit operators can use `python -m scripts.audit_integrity`. Health integration remains deferred.
+`GET /health` currently reports **process health only**: `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`. It does **not** query PostgreSQL or Supabase Storage, and a test asserts that it exposes no configuration markers. Storage operators can use `python -m scripts.check_storage`; audit operators can use `python -m scripts.audit_integrity`. Health integration remains deferred.
 
 ---
 
@@ -562,24 +560,24 @@ Planned policies:
 - **Auth endpoints:** `register`, `login`, `refresh`, `logout`, and `me` are implemented under `/api/v1/auth`.
 - **Session design:** access tokens stay in frontend memory; refresh tokens are hashed in PostgreSQL and rotated through an HttpOnly cookie. Family reuse detection revokes the family.
 - **Immediate revocation:** protected requests check the user's status and active refresh family on every call, so logout/disablement takes effect without waiting for JWT expiry.
-- **Role model:** `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER` are stored in PostgreSQL. Public registration creates Viewers only; elevated roles come from the provisioning CLI.
+- **Role model:** `ADMINISTRATOR` and `USER` are stored in PostgreSQL. Public registration creates normal users; administrator accounts come from the provisioning CLI or an authorized administrator role change. Migration `0004` replaced the original three-role model and maps legacy non-admin roles to `USER`.
 - **CSRF and CORS:** auth POSTs enforce an exact Origin allow-list, CORS never combines credentials with a wildcard, and the refresh cookie is path-scoped. A per-session CSRF token is not implemented.
 - **Rate limiting:** an in-memory sliding window limits login/register attempts per process. A multi-instance deployment requires a shared store.
-- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 213 tests. It uses an ephemeral PostgreSQL instance.
+- **Tests:** 55 backend tests covered Phase 3 auth flows at the time; the suite now has 233 tests. It uses an ephemeral PostgreSQL instance.
 - **Not implemented at Phase 3 completion:** document authorization, audit writes, RLS, MFA, account lockout, idle timeouts, and production deployment verification.
 
 ---
 
 ## 18. Phase 4 Implementation Notes (Verified with Mocked Storage)
 
-- **Frontend:** migrated from TypeScript/TSX to JavaScript/JSX, removed TypeScript dependencies and configs, and added an upload form. Owner/Admin users can select a file, choose a category, add a description, and see progress/errors/success metadata. Viewers see a restriction notice.
-- **Upload endpoint:** `POST /api/v1/documents/upload`; requires `ADMINISTRATOR` or `DOCUMENT_OWNER`, enforces active sessions, and returns 201 with safe metadata.
+- **Frontend:** migrated from TypeScript/TSX to JavaScript/JSX, removed TypeScript dependencies and configs, and added an upload form. Every active user can select a file, choose a category, add a description, and see progress/errors/success metadata.
+- **Upload endpoint:** `POST /api/v1/documents/upload`; requires an active authenticated user, assigns ownership to that user, and returns 201 with safe metadata.
 - **Validation:** extension/MIME/signature allow-list, filename safety, empty-file rejection, 10 MiB default limit, DOCX package checks, and UTF-8 TXT checks. No antivirus scanning.
 - **Metadata:** backend-generated owner, storage key, MIME type, byte size, and SHA-256 checksum; `documents` table only, no new migration.
-- **Storage:** `boto3` S3 client with Wasabi endpoint and path-style addressing, lazy cached service, safe error classes, and no secret logging.
+- **Storage:** `httpx` Storage API client with private-bucket validation, lazy cached service, safe error classes, and no secret logging.
 - **Consistency:** object first, metadata second; database failure attempts object deletion. No distributed transaction.
 - **Tests at Phase 4 completion:** 107 backend tests passed, including upload authorization, validation, metadata, storage failure, persistence cleanup, config validation, and secret-safe logging. Frontend lint/build passed; storage tests use a fake adapter.
-- **Not implemented/verified at Phase 4 completion:** live Wasabi bucket policy/connectivity, download/listing, permission grants, audit writes, RLS, and deployment.
+- **Not implemented/verified at Phase 4 completion:** live Supabase Storage bucket policy/connectivity, download/listing, permission grants, audit writes, RLS, and deployment.
 
 ---
 
@@ -587,14 +585,14 @@ Planned policies:
 
 - **API surface:** list/search, detail, metadata update, streamed download, and soft delete are implemented under `/api/v1/documents`; upload remains unchanged.
 - **List query:** `q`, `category`, `owner_id`, `created_from`, `created_to`, `page`, `page_size`, `sort_by`, and `order`. Page size is 1–100; date filters are inclusive UTC days; sorting includes a stable document-ID tie-breaker.
-- **Scope at Phase 5 completion:** owners saw/managed only their own active documents; administrators saw all active metadata but remained excluded from other owners' download/update/delete; viewers had no document access until Phase 6 grants.
+- **Scope at Phase 5 completion:** owners saw/managed only their own active documents; administrators saw all active metadata but remained excluded from other owners' download/update/delete; users without a grant had no access until Phase 6 sharing.
 - **Search safety:** name search uses parameterized `ILIKE` with escaped `\`, `%`, and `_`; sort columns are a fixed allow-list. The `pg_trgm` index supports partial name search.
 - **Metadata update at Phase 5 completion:** only `name`, `category`, and `description` were accepted, and only the owner could update. Phase 6 extends updates to EDIT recipients. Extra/protected fields, blank names, empty patches, and null names return 422.
-- **Download at Phase 5 completion:** owner-only backend proxy from Wasabi; no presigned URL or storage key. Attachment filenames are RFC 5987-encoded with an ASCII fallback, control characters are neutralized, and responses set no-store/nosniff headers.
-- **Deletion:** soft deletion retains metadata and excludes the row from all normal reads. The Wasabi object is removed best-effort after commit; cleanup failure is logged but does not roll back deletion.
+- **Download at Phase 5 completion:** owner-only backend proxy from Supabase Storage; no presigned URL or storage key. Attachment filenames are RFC 5987-encoded with an ASCII fallback, control characters are neutralized, and responses set no-store/nosniff headers.
+- **Deletion:** soft deletion retains metadata and excludes the row from all normal reads. The Supabase Storage object is removed best-effort after commit; cleanup failure is logged but does not roll back deletion.
 - **Frontend at Phase 5 completion:** `/documents` provides search/filter/sort/pagination and an upload panel; `/documents/:documentId` provides metadata, owner-only download/edit/delete, and read-only administrator review.
 - **Tests:** 127 backend tests passed at Phase 5 completion, including management authorization, filters, pagination, IDOR behavior, protected fields, download headers/failures, soft deletion, and cleanup failure. Frontend lint/build passed.
-- **Not implemented/verified at Phase 5 completion:** live Wasabi download/delete, per-document grants, audit writes, RLS, malware scanning, and deployment.
+- **Not implemented/verified at Phase 5 completion:** live Supabase Storage download/delete, per-document grants, audit writes, RLS, malware scanning, and deployment.
 
 ---
 
@@ -608,7 +606,7 @@ Planned policies:
 - **Listing:** regular document lists include owned and actively shared documents; the shared view excludes revoked grants and soft-deleted documents. Administrators retain all active metadata but gain no content rights by role.
 - **Frontend:** access-level badges drive actions; owners get a sharing page with grant, update, revoke confirmation, and history. `/shared-with-me` lists direct shares. READ can download, EDIT can download and edit, and only OWNER can delete or manage access.
 - **Tests:** 146 backend tests pass at Phase 6 completion (19 Phase 6 tests), covering role boundaries, owner-only management, idempotency/conflicts, forged identity fields, history retention, immediate revocation, shared listing exclusions, access levels, and metadata-only administrator behavior. Frontend lint/build pass.
-- **Not implemented/verified at Phase 6 completion:** live Wasabi behavior, RLS, malware scanning, and deployment.
+- **Not implemented/verified at Phase 6 completion:** live Supabase Storage behavior, RLS, malware scanning, and deployment.
 
 ---
 
@@ -622,7 +620,7 @@ Planned policies:
 - **Request context:** `X-Request-ID` is validated or replaced with a 32-character UUID hex and echoed. Client IP uses the direct ASGI socket, not untrusted forwarded headers.
 - **Frontend:** `/admin/audit` provides action/outcome/actor/document/date filters, pagination, detail expansion, denied indicators, and a chain/checkpoint integrity panel with refresh.
 - **Tests:** 158 backend tests pass (12 Phase 7 tests), including event coverage, admin authorization/filtering, tamper/removal detection, checkpoint staleness/truncation/signature failure, mandatory-audit rollback, metadata sanitization, and request-ID safety. Frontend lint/build pass; the build retains the existing chunk-size warning.
-- **Not implemented/verified:** live Wasabi behavior, live Supabase/deployment, scheduled independent checkpoint publication, audit export, owner-scoped audit views, RLS, and malware scanning.
+- **Not implemented/verified:** deployment, scheduled independent checkpoint publication, audit export, owner-scoped audit views, RLS, and malware scanning.
 
 ---
 
@@ -631,24 +629,37 @@ Planned policies:
 - **Threat-mapped suite:** `backend/tests/test_security.py` contains 46 security cases named by threat-model section, plus focused request-limit tests in `backend/tests/test_request_limits.py`, covering every scenario in `THREATS.md`.
 - **Cross-user denial:** User B is denied GET, download, edit/PATCH, and DELETE for User A's document without a grant. After a READ grant, User B can read and download but cannot edit or delete. Revocation restores immediate 404 denial for all four operations, and the grant/revoke/denial actions are audited.
 - **Object-level authorization:** Existing-but-unrelated UUIDs and random missing UUIDs return the same generic 404 body, and denial responses omit document names, owner identity, storage keys, and checksums.
-- **Privilege boundaries:** Registration rejects role injection, a validly signed token with a forged administrator role claim cannot escalate a Viewer, and administrator identity does not grant content, edit, delete, or permission-management access. Denials append the appropriate audit events.
+- **Privilege boundaries:** Registration rejects role injection, a validly signed token with a forged administrator role claim cannot escalate a normal user, and administrator identity does not grant content, edit, delete, or permission-management access. Denials append the appropriate audit events.
 - **Upload and path attacks:** Executable, MIME/signature-mismatched, missing-content-type, empty, malformed multipart, and broken-document uploads are rejected before storage. DOCX member-count and uncompressed-size limits are unit-tested. Traversal and absolute filenames return 400, control and Unicode format-control characters (including bidi overrides) cannot reach server-generated storage keys, and client filenames never become storage paths.
 - **Audit tampering:** POST, PUT, PATCH, and DELETE against both administrator audit endpoints return 405; event-specific mutation paths return 404. Audit row counts and the latest event remain unchanged.
 - **Token and brute-force defenses:** Expired and signature-tampered access tokens return 401, logout invalidates a previously issued access token through the active-session check, and the login limiter returns 429 with `Retry-After` without echoing the email or password.
 - **Denial of service:** An unauthenticated oversized upload is rejected with 413 before request-body parsing or authentication, uploads without `Content-Length` return 411, and invalid/duplicate lengths return 400. DOCX expansion limits are tested.
-- **Account status and audit role:** Disabled users are denied document and administrator audit endpoints, and a validly signed administrator role claim cannot read audit data when the database role is Viewer.
-- **Coverage:** The full 213-test suite passes with 89% combined statement/branch coverage across 2,175 statements and 426 branches. Authorization and document services are at 77%-88%, the administrator audit API at 96%, and dependency, application, error, and audit-schema modules at 100%.
+- **Account status and audit role:** Disabled users are denied document and administrator audit endpoints, and a validly signed administrator role claim cannot read audit data when the database role is `USER`.
+- **Coverage:** The full 233-test suite passes with 90% statement coverage. Authorization and document services remain the most security-sensitive modules; dependency, application, error, and audit-schema modules are at or near full coverage.
 - **CI:** `.github/workflows/backend-tests.yml` runs the full suite and coverage on backend pushes and pull requests. The workflow has not yet run on GitHub.
-- **Honest limitations:** RLS is still not enabled, so there are no database RLS policy tests; application-level authorization remains the primary boundary and is verified directly. Malware scanning, live Wasabi behavior, Supabase migration, and deployment remain outstanding. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.
+- **Honest limitations:** RLS is still not enabled, so there are no database RLS policy tests; application-level authorization remains the primary boundary and is verified directly. Malware scanning and deployment remain outstanding; live private-bucket storage and the current Supabase migration were verified locally. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.
 
 ---
 
 ## 23. Phase 9 Implementation Notes (Verified Locally)
 
-- **Registration:** `/register` is public, validates name, email, password length/UTF-8 byte limits, and password confirmation, then signs the new Viewer in through the existing `AuthResponse` flow. Public registration cannot submit a role.
+- **Registration:** `/register` is public, validates name, email, password length/UTF-8 byte limits, and password confirmation, then signs the new normal user in through the existing `AuthResponse` flow. Public registration cannot submit a role.
 - **Navigation and accessibility:** desktop routes use a sidebar workspace shell; mobile uses a compact top bar with scrollable, labelled navigation. Links and sign-out retain accessible names, and administrator destinations are separated from workspace destinations.
 - **Dashboard:** `/dashboard` loads real permitted-document, shared-document, and owned-document counts plus recent documents from the authenticated list endpoints. It does not display sample accounts or fabricated activity.
 - **Document library:** name search, category, exact owner-ID, created-date filters, allow-listed sorting, and pagination are exposed through the backend query contract. Invalid owner UUIDs are never sent to the API, and document details expose the owner ID needed for exact filtering.
 - **Complete surfaces:** the dedicated `/upload` page provides validation/progress feedback; details provide metadata editing, download, and owner deletion; owners can grant, update, revoke, and review history; administrators can filter audit events and verify integrity. All of these actions use the real backend contracts.
 - **Error handling:** API errors use the backend envelope and include bounded validation field messages without exposing raw submitted values. Forms retain loading, error, empty, success, confirmation, forbidden, and not-found states.
-- **Verification:** `npm run lint` reports 0 warnings/errors, `npm test` passes 9 Vitest/React Testing Library tests, and `npm run build` succeeds while retaining the existing chunk-size warning. A browser-based multi-role walkthrough and live backend/Wasabi/deployment behavior remain unverified.
+- **Verification:** `npm run lint` reports 0 warnings/errors, `npm test` passes 10 Vitest/React Testing Library tests, and `npm run build` succeeds while retaining the existing chunk-size warning. A browser-based multi-account walkthrough and deployment behavior remain unverified.
+
+---
+
+## 24. Business-Model Correction (Verified Locally)
+
+- **Account roles:** `ADMINISTRATOR` and `USER` only. Legacy `DOCUMENT_OWNER` and `VIEWER` rows migrate to `USER`; administrators are preserved.
+- **Ownership:** every active authenticated user may upload and receives ownership of that document. Document permissions remain per-document and support `READ` and `EDIT`; `OWNER` is contextual, not an account role.
+- **Admin account service:** summary counts, account search/filter/detail, role changes, and disable/reactivate operations. Administrators cannot change their own role/status, and the last active administrator cannot be removed.
+- **Session effects:** disabling an account or changing its role revokes the target's active refresh-token families. Login updates `last_login_at`.
+- **Admin oversight:** document metadata and permission history are visible without bypassing document authorization or downloading private content.
+- **Audit:** account changes record `USER_STATUS_CHANGED`/`USER_ROLE_CHANGED`, with `target_user_id` and `resource_type` in sanitized details. The hash payload schema is unchanged. Audit queries expose target-user and resource-type filters.
+- **Frontend:** normal users can upload; `/admin` provides summaries, account search/pagination, role/status controls, last login, owned-document counts, permission-history links, and audit links. `/admin/audit` accepts target/resource filters and displays target/resource columns.
+- **Verification:** 233 backend tests with 90% statement coverage; 10 frontend tests; frontend lint/build pass. Manual admin login remains unverified because credentials were not changed.

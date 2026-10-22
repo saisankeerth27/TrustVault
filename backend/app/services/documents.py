@@ -19,7 +19,7 @@ from app.services.storage import (
     StorageConfigurationError,
     StorageObjectNotFoundError,
     StorageOperationError,
-    WasabiStorage,
+    SupabaseStorage,
 )
 from app.services.upload_validation import ValidatedUpload
 
@@ -57,7 +57,7 @@ def store_document(
     upload: ValidatedUpload,
     category: str | None,
     description: str | None,
-    storage: WasabiStorage,
+    storage: SupabaseStorage,
 ) -> Document:
     storage_key = build_storage_key(owner_id=owner.id, extension=upload.extension)
 
@@ -90,6 +90,7 @@ def store_document(
             details={
                 "file_size": upload.size,
                 "mime_type": upload.mime_type,
+                "resource_type": "DOCUMENT",
             },
         )
         session.commit()
@@ -230,7 +231,10 @@ def update_document_metadata(
             outcome=AuditOutcome.SUCCESS,
             actor=actor,
             document_id=document.id,
-            details={"changed_fields": sorted(changes)},
+            details={
+                "changed_fields": sorted(changes),
+                "resource_type": "DOCUMENT",
+            },
         )
         session.commit()
     except Exception as exc:
@@ -250,7 +254,7 @@ def soft_delete_document(
     *,
     document: Document,
     actor: User,
-    storage: WasabiStorage,
+    storage: SupabaseStorage,
 ) -> None:
     document.deleted_at = datetime.now(timezone.utc)
 
@@ -261,6 +265,7 @@ def soft_delete_document(
             outcome=AuditOutcome.SUCCESS,
             actor=actor,
             document_id=document.id,
+            details={"resource_type": "DOCUMENT"},
         )
         session.commit()
     except Exception as exc:

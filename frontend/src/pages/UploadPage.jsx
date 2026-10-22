@@ -1,19 +1,11 @@
 import { ArrowLeft } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useAuth } from '@/auth/useAuth'
 import { UploadDocumentPanel } from '@/components/documents/UploadDocumentPanel'
-import { ForbiddenState } from '@/components/ForbiddenState'
 import { PageHeader } from '@/components/PageHeader'
 import { buttonVariants } from '@/components/ui/button-variants'
-import { isDocumentManager } from '@/lib/documents'
 
 export function UploadPage() {
-  const { user } = useAuth()
   const navigate = useNavigate()
-
-  if (!isDocumentManager(user)) {
-    return <ForbiddenState requiredRole="Document owner or administrator" />
-  }
 
   return (
     <div className="space-y-8">

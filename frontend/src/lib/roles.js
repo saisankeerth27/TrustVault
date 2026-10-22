@@ -1,7 +1,6 @@
 const roleLabels = {
   ADMINISTRATOR: 'Administrator',
-  DOCUMENT_OWNER: 'Document owner',
-  VIEWER: 'Viewer',
+  USER: 'User',
 }
 
 export function formatRole(role) {

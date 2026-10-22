@@ -29,7 +29,7 @@ from app.core.config import get_settings
 from app.core.request_limits import UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES
 from app.db.session import get_db
 from app.models.document_permission import DocumentPermission
-from app.models.enums import AuditAction, AuditOutcome, DocumentAccessLevel, UserRole
+from app.models.enums import AuditAction, AuditOutcome, DocumentAccessLevel
 from app.models.user import User
 from app.schemas.document import (
     DocumentListResponse,
@@ -72,7 +72,7 @@ from app.services.storage import (
     StorageConfigurationError,
     StorageObjectNotFoundError,
     StorageOperationError,
-    WasabiStorage,
+    SupabaseStorage,
     get_storage_service,
 )
 from app.services.upload_validation import (
@@ -84,8 +84,6 @@ from app.services.upload_validation import (
 logger = logging.getLogger("trustvault.documents")
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
-
-_UPLOAD_ROLES = {UserRole.ADMINISTRATOR.value, UserRole.DOCUMENT_OWNER.value}
 
 _DOWNLOAD_CHUNK_SIZE = 64 * 1024
 _NOT_FOUND_MESSAGE = "Document not found."
@@ -178,25 +176,6 @@ def _stream_body(body: IO[bytes]) -> Iterator[bytes]:
         body.close()
 
 
-def require_document_manager(
-    current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_db),
-) -> User:
-    if current_user.role not in _UPLOAD_ROLES:
-        record_best_effort(
-            session,
-            action=AuditAction.DOCUMENT_UPLOAD_DENIED,
-            outcome=AuditOutcome.DENIED,
-            actor=current_user,
-            details={
-                "reason": "role_not_permitted",
-                "role": current_user.role,
-            },
-        )
-        raise _access_denied()
-    return current_user
-
-
 def _enforce_request_size(request: Request, max_size_bytes: int) -> None:
     content_length = request.headers.get("content-length")
     if content_length is None:
@@ -223,8 +202,8 @@ def _enforce_request_size(request: Request, max_size_bytes: int) -> None:
     status_code=status.HTTP_201_CREATED,
     summary="Upload a document",
     description=(
-        "Stores a validated document in private Wasabi storage and records its metadata. "
-        "Only active Administrators and Document owners may upload."
+        "Stores a validated document in private Supabase Storage and records its metadata. "
+        "Any active user may upload and becomes the document owner."
     ),
 )
 def upload_document(
@@ -232,9 +211,9 @@ def upload_document(
     file: Annotated[UploadFile, File()],
     category: Annotated[str | None, Form()] = None,
     description: Annotated[str | None, Form()] = None,
-    current_user: User = Depends(require_document_manager),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
-    storage: WasabiStorage = Depends(get_storage_service),
+    storage: SupabaseStorage = Depends(get_storage_service),
 ) -> DocumentResponse:
     settings = get_settings()
     _enforce_request_size(request, settings.max_upload_size_bytes)
@@ -453,7 +432,7 @@ def download_document(
     document_id: UUID,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
-    storage: WasabiStorage = Depends(get_storage_service),
+    storage: SupabaseStorage = Depends(get_storage_service),
 ) -> StreamingResponse:
     try:
         authorized = authorize_document(
@@ -498,7 +477,10 @@ def download_document(
             outcome=AuditOutcome.SUCCESS,
             actor=current_user,
             document_id=document.id,
-            details={"file_size": document.file_size},
+            details={
+                "file_size": document.file_size,
+                "resource_type": "DOCUMENT",
+            },
         )
         session.commit()
     except Exception as exc:
@@ -534,7 +516,7 @@ def delete_document(
     document_id: UUID,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
-    storage: WasabiStorage = Depends(get_storage_service),
+    storage: SupabaseStorage = Depends(get_storage_service),
 ) -> Response:
     try:
         authorized = authorize_document(

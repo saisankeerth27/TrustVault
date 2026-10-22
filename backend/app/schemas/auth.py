@@ -11,7 +11,7 @@ from app.models.enums import UserRole, UserStatus
 
 
 class RegisterRequest(BaseModel):
-    """Public registration always creates a Viewer; elevated roles are provisioned."""
+    """Public registration always creates a normal user account."""
 
     model_config = ConfigDict(extra="forbid")
 

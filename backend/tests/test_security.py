@@ -159,11 +159,11 @@ def test_threat_4_1_cross_user_document_operations_are_denied(
     suffix: str,
     json_body: dict | None,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Owner only.pdf")
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
 
     response = api_client.request(
@@ -186,7 +186,7 @@ def test_threat_4_1_4_4_mr10_grant_read_then_revoke_is_immediate_and_audited(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Shared workflow.pdf")
 
@@ -262,12 +262,12 @@ def test_threat_4_1_guessed_and_missing_ids_are_indistinguishable(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Secret existence.pdf")
     stored = _stored_document(db_session, document["id"])
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
 
     existing_denial = api_client.get(
@@ -290,12 +290,12 @@ def test_threat_4_2_download_denial_precedes_storage_access(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Private content.pdf")
     stored = _stored_document(db_session, document["id"])
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
     admin_email, _ = _create_role_user(db_session, UserRole.ADMINISTRATOR)
     admin_token = _token_for(api_client, admin_email)
@@ -336,10 +336,9 @@ def test_threat_4_3_role_injection_is_rejected_at_registration(
     assert db_session.scalar(select(User).where(User.email == email)) is None
 
 
-def test_threat_4_3_forged_role_claim_cannot_escalate_upload(
+def test_threat_4_3_forged_admin_claim_cannot_list_accounts(
     api_client: TestClient,
     db_session: Session,
-    fake_storage: FakeStorage,
 ) -> None:
     _, viewer_id, _ = _register_viewer(api_client)
     db_session.expire_all()
@@ -358,17 +357,19 @@ def test_threat_4_3_forged_role_claim_cannot_escalate_upload(
         session_id,
     )
 
-    response = _upload(api_client, forged_token, filename="Escalation.pdf")
+    response = api_client.get(
+        "/api/v1/admin/users",
+        headers=bearer(forged_token),
+    )
 
     assert response.status_code == 403
-    assert fake_storage.uploads == []
+    assert "items" not in response.json()
     denial = [
         event
         for event in _events(db_session)
-        if event.action == "DOCUMENT_UPLOAD_DENIED"
+        if event.action == "AUDIT_ACCESS_DENIED"
     ][-1]
     assert denial.actor_id == UUID(viewer_id)
-    assert denial.details["reason"] == "role_not_permitted"
 
 
 def test_threat_4_3_4_8_forged_admin_claim_cannot_read_audit(
@@ -412,7 +413,7 @@ def test_threat_4_3_administrator_role_does_not_grant_content_or_sharing(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Admin boundary.pdf")
 
@@ -454,7 +455,7 @@ def test_threat_4_5_malicious_uploads_are_rejected_without_storage(
     content: bytes,
     expected_status: int,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     before = int(db_session.scalar(select(func.count()).select_from(Document)) or 0)
 
@@ -478,7 +479,7 @@ def test_threat_4_5_malformed_multipart_is_rejected_without_storage(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     before = int(db_session.scalar(select(func.count()).select_from(Document)) or 0)
 
@@ -518,7 +519,7 @@ def test_threat_4_6_path_manipulation_filenames_are_rejected(
     fake_storage: FakeStorage,
     filename: str,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
 
     response = _upload(api_client, owner_token, filename=filename)
@@ -534,7 +535,7 @@ def test_threat_4_6_control_characters_cannot_reach_storage_keys(
     fake_storage: FakeStorage,
     filename: str,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
 
     response = _upload(api_client, owner_token, filename=filename)
@@ -557,7 +558,7 @@ def test_threat_4_6_storage_keys_never_use_client_filenames(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, owner = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
 
     document = _upload_ok(
@@ -579,7 +580,7 @@ def test_threat_4_7_recipient_cannot_manage_permissions(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Shared permissions.pdf")
     viewer_email, _, viewer_token = _register_viewer(api_client)
@@ -686,12 +687,12 @@ def test_threat_4_9_denials_do_not_disclose_document_metadata(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, owner = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Confidential layoffs.pdf")
     stored = _stored_document(db_session, document["id"])
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
 
     detail = api_client.get(
@@ -718,12 +719,12 @@ def test_threat_4_10_internal_failures_do_not_expose_credentials(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Secret failure.pdf")
 
     fake_storage.fail_download = StorageOperationError(
-        "SECRET-WASABI-KEY and SECRET-DATABASE-URL"
+        "SECRET-SUPABASE-KEY and SECRET-DATABASE-URL"
     )
     download = api_client.get(
         f"/api/v1/documents/{document['id']}/download",
@@ -739,7 +740,7 @@ def test_threat_4_10_internal_failures_do_not_expose_credentials(
 
     for response in (download, upload):
         assert "SECRET-" not in response.text
-        assert "WASABI" not in response.text
+        assert "SUPABASE" not in response.text.upper()
         assert get_settings().require_jwt_secret() not in response.text
 
 
@@ -748,14 +749,14 @@ def test_threat_4_11_application_authorization_is_authoritative_without_rls(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Database visible.pdf")
 
     db_session.expire_all()
     assert db_session.get(Document, UUID(document["id"])) is not None
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
     admin_email, _ = _create_role_user(db_session, UserRole.ADMINISTRATOR)
     admin_token = _token_for(api_client, admin_email)
@@ -792,7 +793,7 @@ def test_threat_4_12_expired_access_token_is_rejected(
     assert session_id is not None
     expired = create_access_token(
         UUID(viewer_id),
-        UserRole.VIEWER.value,
+        UserRole.USER.value,
         session_id,
         expires_delta=timedelta(seconds=-1),
     )
@@ -842,7 +843,7 @@ def test_threat_4_12_disabled_users_cannot_access_documents_or_audit(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, owner = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Disabled owner.pdf")
     admin_email, admin = _create_role_user(db_session, UserRole.ADMINISTRATOR)
@@ -902,7 +903,7 @@ def test_threat_4_14_oversized_upload_is_rejected_before_storage(
 ) -> None:
     monkeypatch.setenv("MAX_UPLOAD_SIZE_BYTES", "40")
     get_settings.cache_clear()
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     before = int(db_session.scalar(select(func.count()).select_from(Document)) or 0)
 

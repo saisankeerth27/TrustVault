@@ -92,8 +92,8 @@ export const ACCESS_LEVEL_META = {
   },
 }
 
-export function isDocumentManager(user) {
-  return user?.role === 'ADMINISTRATOR' || user?.role === 'DOCUMENT_OWNER'
+export function canUploadDocuments(user) {
+  return Boolean(user?.id)
 }
 
 export function accessLevelOf(documentRecord) {

@@ -13,7 +13,6 @@ import { useAuth } from '@/auth/useAuth'
 import { BrandMark } from '@/components/BrandMark'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { isDocumentManager } from '@/lib/documents'
 import { formatRole } from '@/lib/roles'
 
 const baseNavItems = [
@@ -66,9 +65,7 @@ export function AppLayout() {
   const navigate = useNavigate()
   const [isSigningOut, setIsSigningOut] = useState(false)
 
-  const workspaceItems = isDocumentManager(user)
-    ? [...baseNavItems, uploadNavItem]
-    : baseNavItems
+  const workspaceItems = [...baseNavItems, uploadNavItem]
   const navItems =
     user?.role === 'ADMINISTRATOR' ? [...workspaceItems, ...adminNavItems] : workspaceItems
 

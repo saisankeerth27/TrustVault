@@ -17,6 +17,8 @@ class AuditEventResponse(BaseModel):
     actor_name: str | None
     document_id: UUID | None
     document_name: str | None
+    target_user_id: UUID | None = None
+    resource_type: str | None = None
     action: str
     outcome: AuditOutcome
     request_id: str | None

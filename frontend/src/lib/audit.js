@@ -1,5 +1,7 @@
 export const AUDIT_ACTION_OPTIONS = [
   { value: 'USER_REGISTERED', label: 'User registered' },
+  { value: 'USER_STATUS_CHANGED', label: 'User status changed' },
+  { value: 'USER_ROLE_CHANGED', label: 'User role changed' },
   { value: 'LOGIN_SUCCESS', label: 'Login succeeded' },
   { value: 'LOGIN_FAILURE', label: 'Login failed' },
   { value: 'LOGOUT', label: 'Logout' },

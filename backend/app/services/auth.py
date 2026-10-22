@@ -26,7 +26,11 @@ class AccountExistsError(Exception):
 
 
 class InvalidCredentialsError(Exception):
-    """Raised for unknown accounts, wrong passwords, and disabled accounts."""
+    """Raised for unknown accounts and wrong passwords."""
+
+    def __init__(self, user_id: UUID | None = None) -> None:
+        super().__init__("Invalid credentials.")
+        self.user_id = user_id
 
 
 class DisabledAccountError(InvalidCredentialsError):
@@ -85,10 +89,10 @@ def authenticate(
     )
 
     if user is None or not password_matches:
-        raise InvalidCredentialsError
+        raise InvalidCredentialsError(user.id if user is not None else None)
 
     if user.status != UserStatus.ACTIVE.value:
-        raise DisabledAccountError
+        raise DisabledAccountError(user.id)
 
     return user
 
@@ -186,6 +190,25 @@ def session_is_active(
         .limit(1)
     )
     return active_token_id is not None
+
+
+def revoke_user_sessions(
+    session: Session,
+    *,
+    user_id: UUID,
+    revoked_at: datetime | None = None,
+) -> int:
+    """Revoke every active refresh token for an account."""
+
+    result = session.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=revoked_at or datetime.now(timezone.utc))
+    )
+    return int(result.rowcount or 0)
 
 
 def _revoke_family(session: Session, family_id: UUID, revoked_at: datetime) -> None:

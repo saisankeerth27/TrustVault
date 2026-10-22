@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2–7 and used by the authentication, upload, document-management, permission, and audit pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py`, `0002_add_refresh_tokens.py`, and `0003_add_audit_chain_index.py`.
+This document describes the PostgreSQL schema implemented across Phases 2–7 plus the business-model correction and used by the authentication, upload, document-management, permission, administrator, and audit pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py`, `0002_add_refresh_tokens.py`, `0003_add_audit_chain_index.py`, and `0004_user_roles_and_login_tracking.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, and the append-only hash-chained audit writer exist. Migration `0003` adds the audit chain sequence. Migrations have **not** been applied to the Supabase project.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, administrator account management, and the append-only hash-chained audit writer exist. Migrations through `0004` have **not** been applied to the Supabase project.
 
 ## Entity Relationships
 
@@ -23,6 +23,7 @@ erDiagram
         varchar password_hash
         varchar role
         varchar status
+        timestamptz last_login_at
         timestamptz created_at
         timestamptz updated_at
     }
@@ -86,14 +87,19 @@ erDiagram
 | `name` | VARCHAR(255) | Not null, `length(btrim(name)) > 0` |
 | `email` | VARCHAR(320) | Not null, unique (`uq_users_email`), `email = lower(btrim(email))` |
 | `password_hash` | VARCHAR(255) | Not null |
-| `role` | VARCHAR(32) | Not null, `IN ('ADMINISTRATOR', 'DOCUMENT_OWNER', 'VIEWER')` |
+| `role` | VARCHAR(32) | Not null, `IN ('ADMINISTRATOR', 'USER')` |
 | `status` | VARCHAR(16) | Not null, default `'ACTIVE'`, `IN ('ACTIVE', 'DISABLED')` |
+| `last_login_at` | TIMESTAMPTZ | Nullable; updated only after successful login |
 | `created_at` | TIMESTAMPTZ | Not null, default `now()` |
 | `updated_at` | TIMESTAMPTZ | Not null, default `now()`, updated by the ORM |
 
 **Why a constrained string instead of a native enum?** Adding a role to a PostgreSQL enum requires `ALTER TYPE` and careful migration ordering; a `CHECK` constraint is simpler to evolve. The value is still validated by PostgreSQL, and Python `StrEnum` classes keep application code typed.
 
+**Role migration and indexes.** Migration `0004` drops the legacy role constraint, maps `DOCUMENT_OWNER` and `VIEWER` to `USER`, preserves `ADMINISTRATOR`, and installs `ck_users_role` with only the two current roles. It adds `ix_users_role`, `ix_users_status`, and `ix_users_created_at` for administrator filtering/sorting. Downgrade maps every `USER` to `DOCUMENT_OWNER`, restores the legacy constraint, and drops `last_login_at` and the new indexes.
+
 **Why require `password_hash`?** The column is `NOT NULL`, and Phase 3 always stores a bcrypt hash. An account can never exist without a credential, even after a future bug or manual insert.
+
+**Last login.** `last_login_at` is nullable for existing accounts and is updated only after successful credential validation. Failed logins do not advance it.
 
 **Email normalization.** The database requires the stored value to already be lowercase and trimmed. Normalization is performed before insert by Phase 3 auth services; the constraint prevents mixed-case duplicates from bypassing the unique index.
 
@@ -130,7 +136,7 @@ erDiagram
 | `created_at` / `updated_at` | TIMESTAMPTZ | Not null, defaults `now()` |
 | `deleted_at` | TIMESTAMPTZ | Nullable; soft-delete marker |
 
-**Deletion strategy.** `owner_id` uses `ON DELETE RESTRICT`, so an owner cannot be deleted while documents reference them; ownership must be transferred or documents removed first. Phase 5 uses soft deletion (`deleted_at`) so metadata and history survive and excludes soft-deleted rows from list/detail/update/download/delete. It then attempts best-effort Wasabi object cleanup after the database commit. Hard deletion remains out of scope; permission rows cascade only if a document is later hard-deleted.
+**Deletion strategy.** `owner_id` uses `ON DELETE RESTRICT`, so an owner cannot be deleted while documents reference them; ownership must be transferred or documents removed first. Phase 5 uses soft deletion (`deleted_at`) so metadata and history survive and excludes soft-deleted rows from list/detail/update/download/delete. It then attempts best-effort Supabase Storage object cleanup after the database commit. Hard deletion remains out of scope; permission rows cascade only if a document is later hard-deleted.
 
 **Storage keys are internal.** The `storage_key` must begin with `documents/` and must not contain `://`, so a backend bug cannot accidentally persist a public URL in the column that identifies a private object. Phase 4 writes generated keys of the form `documents/{owner_uuid}/{random_uuid}.{ext}` and never uses the user filename as the key.
 
@@ -198,7 +204,7 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 
 **Chain sequence and hashes.** Migration `0003` adds nullable `chain_index`, backfills existing rows deterministically by `(occurred_at, id)`, then enforces `NOT NULL`, `>= 1`, and uniqueness. The writer takes a PostgreSQL advisory transaction lock and appends the next contiguous index with `previous_hash` and a canonical SHA-256 `event_hash`. A hash chain stored alongside the data it protects detects unauthorized changes but cannot prevent a privileged database administrator from rewriting the chain; the signed checkpoint adds detection relative to the last trusted checkpoint. Events appended after the latest checkpoint and then deleted are not detectable by that checkpoint.
 
-**Details metadata.** Event details include action-specific fields plus the validated request ID, direct socket client IP, and length-limited user-agent when available, and an actor-name snapshot. Passwords, tokens, cookies, authorization headers, session IDs, content, and payloads are rejected by the sanitizer before insert. Details are bounded by depth, item count, and total size.
+**Details metadata.** Event details include action-specific fields plus the validated request ID, direct socket client IP, and length-limited user-agent when available, and an actor-name snapshot. Authentication and administrative events include `target_user_id`, and document/permission/account events include `resource_type`. The audit API promotes these details to response fields and supports filtering by target user and resource type. Passwords, tokens, cookies, authorization headers, session IDs, content, and payloads are rejected by the sanitizer before insert. Details are bounded by depth, item count, and total size.
 
 **Immutability is not database-enforced.** A trigger or revoke-based immutability rule would conflict with the `ON DELETE SET NULL` updates that preserve history. The application exposes no audit UPDATE/DELETE endpoint and writes through a single append path, but the database role is not restricted from direct table changes.
 
@@ -221,7 +227,8 @@ Until then, TrustVault must not be described as having database-enforced access 
 - Initial migration: `backend/alembic/versions/0001_initial_schema.py` (revision `0001`) creates `pg_trgm`, the four core tables, constraints, and indexes.
 - Phase 3 migration: `backend/alembic/versions/0002_add_refresh_tokens.py` (revision `0002`) adds `refresh_tokens` and its indexes.
 - Phase 7 migration: `backend/alembic/versions/0003_add_audit_chain_index.py` (revision `0003`) adds `chain_index`, backfills existing audit rows, then adds the positive check and unique index.
-- `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`; `0003.downgrade()` drops the chain index, check, and column.
+- Business-model migration: `backend/alembic/versions/0004_user_roles_and_login_tracking.py` (revision `0004`) adds nullable `last_login_at`, migrates legacy roles, rebuilds `ck_users_role`, and adds role/status/created-at indexes.
+- `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`; `0003.downgrade()` drops the chain index, check, and column; `0004.downgrade()` maps users to `DOCUMENT_OWNER`, restores the legacy role constraint, drops the new indexes, and removes `last_login_at`.
 
 Common commands (run from `backend/` with `DATABASE_URL` set):
 
@@ -254,7 +261,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management/audit tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 213 tests and never reads `DATABASE_URL`, contacts Supabase, or contacts Wasabi; storage is faked.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management/audit tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 233 tests and never reads `DATABASE_URL` or contacts Supabase; storage is faked.
 
 Run the suite:
 

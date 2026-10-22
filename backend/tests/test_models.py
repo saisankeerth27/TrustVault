@@ -28,6 +28,7 @@ def test_users_columns_and_uniqueness() -> None:
         "password_hash",
         "role",
         "status",
+        "last_login_at",
         "created_at",
         "updated_at",
     }
@@ -35,6 +36,14 @@ def test_users_columns_and_uniqueness() -> None:
         constraint.name == "uq_users_email"
         for constraint in table.constraints
     )
+    role_constraint = next(
+        constraint
+        for constraint in table.constraints
+        if constraint.name == "ck_users_role"
+    )
+    assert "ADMINISTRATOR" in str(role_constraint.sqltext)
+    assert "USER" in str(role_constraint.sqltext)
+    assert "VIEWER" not in str(role_constraint.sqltext)
 
 
 def test_documents_columns_and_constraints() -> None:

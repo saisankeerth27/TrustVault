@@ -122,8 +122,8 @@ export function LoginPage() {
         </div>
 
         <p className="relative text-xs text-white/60">
-          Viewer accounts can be created through public registration. Owner and Administrator
-          accounts are provisioned by an administrator.
+          Normal user accounts can be created through public registration. Administrator
+          accounts are provisioned by an existing administrator.
         </p>
       </section>
 
@@ -139,8 +139,8 @@ export function LoginPage() {
             </p>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Sign in</h1>
             <p className="text-sm leading-6 text-muted-foreground">
-              Sign in with your TrustVault account. Contact an administrator if you need an
-              elevated role.
+              Sign in with your TrustVault account. Contact an administrator if you need
+              administrator access.
             </p>
           </div>
 
@@ -219,7 +219,7 @@ export function LoginPage() {
               to="/register"
               className="font-medium text-primary underline-offset-4 hover:underline"
             >
-              Create a Viewer account
+              Create a user account
             </Link>
           </p>
 

@@ -47,10 +47,10 @@ describe('AppLayout', () => {
     expect(screen.getAllByRole('link', { name: 'Shared with me' }).length).toBeGreaterThan(0)
   })
 
-  it('hides upload and administrator navigation from viewers', () => {
-    renderLayout('VIEWER')
+  it('shows upload but hides administrator navigation from normal users', () => {
+    renderLayout('USER')
 
-    expect(screen.queryByRole('link', { name: 'Upload document' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Upload document' }).length).toBeGreaterThan(0)
     expect(screen.queryByRole('link', { name: 'Audit trail' })).not.toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: 'Documents' }).length).toBeGreaterThan(0)
   })

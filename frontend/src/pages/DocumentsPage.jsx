@@ -21,7 +21,7 @@ import {
   SORT_OPTIONS,
   formatBytes,
   formatDate,
-  isDocumentManager,
+  canUploadDocuments,
 } from '@/lib/documents'
 import { cn } from '@/lib/utils'
 import { getApiErrorMessage } from '@/services/api'
@@ -49,7 +49,7 @@ function isAbortError(error) {
 export function DocumentsPage() {
   const { user } = useAuth()
   const location = useLocation()
-  const canUpload = isDocumentManager(user)
+  const canUpload = canUploadDocuments(user)
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [category, setCategory] = useState('')

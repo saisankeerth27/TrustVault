@@ -114,7 +114,9 @@ def grant_permission(
             document_id=document.id,
             details={
                 "recipient_id": str(recipient.id),
+                "target_user_id": str(recipient.id),
                 "permission": permission.value,
+                "resource_type": "DOCUMENT_PERMISSION",
             },
         )
         session.commit()
@@ -210,8 +212,10 @@ def update_permission(
             document_id=document.id,
             details={
                 "recipient_id": str(existing.user_id),
+                "target_user_id": str(existing.user_id),
                 "previous_permission": existing.permission,
                 "permission": permission.value,
+                "resource_type": "DOCUMENT_PERMISSION",
             },
         )
         session.commit()
@@ -262,7 +266,9 @@ def revoke_permission(
             document_id=document.id,
             details={
                 "recipient_id": str(record.user_id),
+                "target_user_id": str(record.user_id),
                 "permission": record.permission,
+                "resource_type": "DOCUMENT_PERMISSION",
             },
         )
         session.commit()

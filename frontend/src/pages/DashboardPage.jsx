@@ -15,7 +15,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { formatBytes, formatDate, isDocumentManager } from '@/lib/documents'
+import { canUploadDocuments, formatBytes, formatDate } from '@/lib/documents'
 import { getApiErrorMessage } from '@/services/api'
 import { listDocuments, listSharedDocuments } from '@/services/documents'
 
@@ -194,7 +194,7 @@ export function DashboardPage() {
     return () => controller.abort()
   }, [refreshKey, user?.id])
 
-  const canUpload = isDocumentManager(user)
+  const canUpload = canUploadDocuments(user)
   const visibleTotal = isLoading ? null : documents.total
   const sharedTotal = isLoading ? null : shared.total
   const ownedTotal = isLoading ? null : (owned?.total ?? 0)

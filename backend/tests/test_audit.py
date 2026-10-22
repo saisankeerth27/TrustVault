@@ -202,7 +202,7 @@ def test_document_and_permission_success_events_are_chained(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, owner = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
 
     uploaded = _upload(api_client, owner_token)
@@ -289,7 +289,7 @@ def test_denied_actions_are_audited_without_exposing_document_content(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, owner = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     uploaded = _upload(api_client, owner_token)
     assert uploaded.status_code == 201
@@ -299,9 +299,6 @@ def test_denied_actions_are_audited_without_exposing_document_content(
     viewer_registration = register(api_client, email=viewer_email)
     viewer_token = viewer_registration.json()["access_token"]
     viewer_id = UUID(viewer_registration.json()["user"]["id"])
-
-    denied_upload = _upload(api_client, viewer_token)
-    assert denied_upload.status_code == 403
 
     assert (
         api_client.get(
@@ -351,7 +348,6 @@ def test_denied_actions_are_audited_without_exposing_document_content(
         event for event in _events(db_session) if event.outcome == "DENIED"
     ]
     assert {event.action for event in denied_events} == {
-        "DOCUMENT_UPLOAD_DENIED",
         "DOCUMENT_ACCESS_DENIED",
         "DOCUMENT_EDIT_DENIED",
         "DOCUMENT_DOWNLOAD_DENIED",
@@ -365,7 +361,7 @@ def test_denied_actions_are_audited_without_exposing_document_content(
     document_denials = [
         event
         for event in denied_events
-        if event.action not in {"DOCUMENT_UPLOAD_DENIED", "AUDIT_ACCESS_DENIED"}
+        if event.action != "AUDIT_ACCESS_DENIED"
     ]
     assert all(event.document_id == UUID(document_id) for event in document_denials)
     assert all(
@@ -381,7 +377,7 @@ def test_admin_audit_listing_filters_pagination_and_authorization(
 ) -> None:
     admin_email, admin = _create_role_user(db_session, UserRole.ADMINISTRATOR)
     admin_token = _token_for(api_client, admin_email)
-    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, owner = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload(api_client, owner_token).json()
 
@@ -649,7 +645,7 @@ def test_audit_write_failure_prevents_upload_success(
     fake_storage: FakeStorage,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     before = int(
         db_session.scalar(select(func.count()).select_from(Document)) or 0
@@ -711,7 +707,7 @@ def test_audit_write_failure_prevents_login_and_permission_success(
     assert after_login_count == token_count
 
     monkeypatch.undo()
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload(api_client, owner_token).json()
     recipient_email = unique_email("permission-audit-failure")

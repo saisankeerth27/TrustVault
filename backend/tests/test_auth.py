@@ -34,7 +34,7 @@ def _user_by_email(session: Session, email: str) -> User:
     return user
 
 
-def test_registration_creates_viewer_and_secure_session(
+def test_registration_creates_user_and_secure_session(
     api_client: TestClient, db_session: Session
 ) -> None:
     email = unique_email("register")
@@ -45,7 +45,7 @@ def test_registration_creates_viewer_and_secure_session(
     assert payload["token_type"] == "bearer"
     assert payload["expires_in"] == 900
     assert payload["user"]["email"] == email.lower()
-    assert payload["user"]["role"] == "VIEWER"
+    assert payload["user"]["role"] == "USER"
     assert payload["user"]["status"] == "ACTIVE"
     assert set(payload["user"]) == USER_FIELDS
     assert "password" not in payload
@@ -87,7 +87,7 @@ def test_registration_normalizes_email_and_rejects_role_injection(
 
     assert response.status_code == 201
     assert response.json()["user"]["email"] == email.lower()
-    assert _user_by_email(db_session, email).role == "VIEWER"
+    assert _user_by_email(db_session, email).role == "USER"
 
     injected = api_client.post(
         "/api/v1/auth/register",

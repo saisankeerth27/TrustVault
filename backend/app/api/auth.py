@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -130,12 +131,19 @@ def _record_login_failure(
     session: Session,
     *,
     reason: str,
+    target_user_id: UUID | None = None,
 ) -> None:
+    details: dict[str, object] = {
+        "reason": reason,
+        "resource_type": "USER",
+    }
+    if target_user_id is not None:
+        details["target_user_id"] = str(target_user_id)
     record_best_effort(
         session,
         action=AuditAction.LOGIN_FAILURE,
         outcome=AuditOutcome.FAILURE,
-        details={"reason": reason},
+        details=details,
     )
 
 
@@ -165,7 +173,7 @@ def register(
             name=payload.name,
             email=str(payload.email),
             password=payload.password.get_secret_value(),
-            role=UserRole.VIEWER,
+            role=UserRole.USER,
         )
     except AccountExistsError as exc:
         raise HTTPException(
@@ -178,7 +186,11 @@ def register(
         session,
         action=AuditAction.USER_REGISTERED,
         actor=user,
-        details={"role": user.role},
+        details={
+            "role": user.role,
+            "resource_type": "USER",
+            "target_user_id": str(user.id),
+        },
     )
 
     _set_refresh_cookie(response, refresh_plaintext)
@@ -211,14 +223,22 @@ def login(
             password=payload.password.get_secret_value(),
         )
     except DisabledAccountError as exc:
-        _record_login_failure(session, reason="disabled_account")
+        _record_login_failure(
+            session,
+            reason="disabled_account",
+            target_user_id=exc.user_id,
+        )
         logger.warning("Login rejected for disabled account.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_INVALID_CREDENTIALS,
         ) from exc
     except InvalidCredentialsError as exc:
-        _record_login_failure(session, reason="invalid_credentials")
+        _record_login_failure(
+            session,
+            reason="invalid_credentials",
+            target_user_id=exc.user_id,
+        )
         logger.info("Login failed with invalid credentials.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -226,11 +246,16 @@ def login(
         ) from exc
 
     refresh_plaintext, refresh_token = create_session_token(session, user)
+    user.last_login_at = datetime.now(timezone.utc)
     _commit_with_success_audit(
         session,
         action=AuditAction.LOGIN_SUCCESS,
         actor=user,
-        details={"role": user.role},
+        details={
+            "role": user.role,
+            "resource_type": "USER",
+            "target_user_id": str(user.id),
+        },
     )
 
     _set_refresh_cookie(response, refresh_plaintext)

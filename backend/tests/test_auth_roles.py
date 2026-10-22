@@ -31,7 +31,7 @@ def test_role_dependency_returns_403_for_insufficient_privileges(
         name="Owner User",
         email=owner_email,
         password=DEFAULT_PASSWORD,
-        role=UserRole.DOCUMENT_OWNER,
+        role=UserRole.USER,
     )
     create_account(
         db_session,
@@ -81,7 +81,7 @@ def test_role_dependency_returns_403_for_insufficient_privileges(
 
     me = api_client.get("/api/v1/auth/me", headers=bearer(viewer_token))
     assert me.status_code == 200
-    assert me.json()["role"] == "VIEWER"
+    assert me.json()["role"] == "USER"
 
 
 def test_me_uses_authenticated_identity_not_a_supplied_identifier(
@@ -103,8 +103,8 @@ def test_me_uses_authenticated_identity_not_a_supplied_identifier(
 
 def test_role_representation_matches_database_values() -> None:
     assert UserRole.ADMINISTRATOR.value == "ADMINISTRATOR"
-    assert UserRole.DOCUMENT_OWNER.value == "DOCUMENT_OWNER"
-    assert UserRole.VIEWER.value == "VIEWER"
+    assert UserRole.USER.value == "USER"
+    assert {role.value for role in UserRole} == {"ADMINISTRATOR", "USER"}
 
 
 def test_unknown_roles_fail_closed() -> None:

@@ -153,7 +153,7 @@ def test_owner_grants_read_and_edit_and_lists_current_and_historical_grants(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, owner = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, owner = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token)
 
@@ -163,7 +163,7 @@ def test_owner_grants_read_and_edit_and_lists_current_and_historical_grants(
     db_session.add(
         make_user(
             email=disabled_email,
-            role=UserRole.VIEWER.value,
+            role=UserRole.USER.value,
             status=UserStatus.DISABLED.value,
         )
     )
@@ -257,7 +257,7 @@ def test_owner_grants_read_and_edit_and_lists_current_and_historical_grants(
     assert {item["permission"] for item in listing.json()["items"]} == {"READ", "EDIT"}
     assert all(item["status"] == "ACTIVE" for item in listing.json()["items"])
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
     admin_email, _ = _create_role_user(db_session, UserRole.ADMINISTRATOR)
     admin_token = _token_for(api_client, admin_email)
@@ -294,7 +294,7 @@ def test_read_grant_allows_metadata_and_download_but_not_mutation_or_sharing(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     shared_document = _upload_ok(api_client, owner_token, filename="Readable.pdf")
     unrelated_document = _upload_ok(api_client, owner_token, filename="Unrelated.pdf")
@@ -371,7 +371,7 @@ def test_edit_grant_allows_metadata_update_but_not_delete_or_sharing(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Editable.pdf")
 
@@ -425,7 +425,7 @@ def test_permission_update_preserves_history_and_checks_document_scope(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     first_document = _upload_ok(api_client, owner_token, filename="First.pdf")
     second_document = _upload_ok(api_client, owner_token, filename="Second.pdf")
@@ -496,7 +496,7 @@ def test_permission_update_preserves_history_and_checks_document_scope(
         json={"permission": "OWNER"},
     ).status_code == 422
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
     assert api_client.patch(
         f"/api/v1/documents/{first_document['id']}/permissions/{new_id}",
@@ -510,7 +510,7 @@ def test_revocation_is_immediate_and_regrant_preserves_grant_history(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Revocable.pdf")
     other_document = _upload_ok(api_client, owner_token, filename="Different.pdf")
@@ -563,7 +563,7 @@ def test_revocation_is_immediate_and_regrant_preserves_grant_history(
         headers=bearer(owner_token),
     ).status_code == 404
 
-    other_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    other_email, _ = _create_role_user(db_session, UserRole.USER)
     other_token = _token_for(api_client, other_email)
     assert api_client.delete(
         f"/api/v1/documents/{document['id']}/permissions/{first_id}",
@@ -597,7 +597,7 @@ def test_revoked_edit_grant_loses_future_edit_access(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Edit revoke.pdf")
 
@@ -632,7 +632,7 @@ def test_administrator_role_does_not_automatically_grant_content_access(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     document = _upload_ok(api_client, owner_token, filename="Admin oversight.pdf")
 
@@ -727,13 +727,13 @@ def test_shared_with_me_excludes_revoked_and_deleted_documents(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    first_owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    first_owner_email, _ = _create_role_user(db_session, UserRole.USER)
     first_owner_token = _token_for(api_client, first_owner_email)
     readable = _upload_ok(api_client, first_owner_token, filename="Readable shared.pdf")
     deleted = _upload_ok(api_client, first_owner_token, filename="Deleted shared.pdf")
     hidden = _upload_ok(api_client, first_owner_token, filename="Not shared.pdf")
 
-    second_owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    second_owner_email, _ = _create_role_user(db_session, UserRole.USER)
     second_owner_token = _token_for(api_client, second_owner_email)
     revoked = _upload_ok(api_client, second_owner_token, filename="Revoked shared.pdf")
 
@@ -827,7 +827,7 @@ def test_recipient_cannot_access_unrelated_documents_by_id(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_role_user(db_session, UserRole.DOCUMENT_OWNER)
+    owner_email, _ = _create_role_user(db_session, UserRole.USER)
     owner_token = _token_for(api_client, owner_email)
     granted = _upload_ok(api_client, owner_token, filename="Granted.pdf")
     unrelated = _upload_ok(api_client, owner_token, filename="Same owner unrelated.pdf")

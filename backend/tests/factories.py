@@ -24,7 +24,7 @@ def user_kwargs(**overrides: object) -> dict[str, object]:
         "name": f"User {suffix[:8]}",
         "email": f"user-{suffix}@example.com",
         "password_hash": "not-a-real-hash",
-        "role": UserRole.DOCUMENT_OWNER.value,
+        "role": UserRole.USER.value,
         "status": UserStatus.ACTIVE.value,
     }
     values.update(overrides)

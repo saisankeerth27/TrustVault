@@ -16,6 +16,7 @@ This document defines the 12-phase incremental delivery plan (Phase 0 through Ph
 | 7 | Audit Trail and Administrator Activity | MR-6, MR-9 |
 | 8 | Security Tests and Threat-Model Verification | MR-5, MR-10 |
 | 9 | Complete Frontend | MR-2, MR-7, MR-9 |
+| 9.1 | Business-Model Correction | MR-1, MR-2, MR-6, MR-9 |
 | 10 | Deployment Hardening and End-to-End Verification | All (verification) |
 | 11 | Final Submission and Demo | All (evidence) |
 
@@ -146,10 +147,10 @@ Implement registration, login, JWT issuance, rotating refresh sessions, logout, 
 - Short-lived HS256 access JWTs with issuer/audience validation and opaque rotating refresh tokens stored as SHA-256 hashes.
 - `refresh_tokens` model and migration `0002_add_refresh_tokens` with family-based reuse detection and revocation.
 - Authentication dependencies that verify JWT claims, active user status, and an active refresh-token family on every protected request.
-- Role dependencies for `ADMINISTRATOR`, `DOCUMENT_OWNER`, and `VIEWER`; fail-closed handling for unknown roles.
+- Role dependencies for `ADMINISTRATOR` and `USER` (the original three-role model was later replaced by migration `0004`); fail-closed handling for unknown roles.
 - Origin allow-list checks on auth POSTs, HttpOnly path-scoped refresh cookies, and configurable production cookie policy.
 - In-memory login/registration rate limiting with `Retry-After`.
-- Account provisioning CLI that never prints passwords or hashes; public registration creates Viewers only.
+- Account provisioning CLI that never prints passwords or hashes; public registration creates normal users only.
 - Frontend in-memory access token, credentialed Axios client with shared refresh retry, auth provider, protected routes, role-gated admin route, forbidden state, login/logout UX, and current-user display.
 - Updated `.env.example`, `render.yaml`, README, architecture, database, requirements, implementation plan, threat model, and PROMPTS log.
 
@@ -157,7 +158,7 @@ Implement registration, login, JWT issuance, rotating refresh sessions, logout, 
 - Phase 2 approved.
 
 **Acceptance Criteria**
-- Registration stores only hashed passwords and always creates a Viewer.
+- Registration stores only hashed passwords and always creates a normal `USER`.
 - Login returns a valid access token and sets a rotating HttpOnly refresh cookie.
 - Expired, tampered, wrong-issuer/audience, wrong-type, revoked-session, and disabled-account tokens are rejected with 401.
 - Refresh rotation invalidates the previous token; reuse revokes the entire family.
@@ -182,19 +183,19 @@ feat(auth): implement authentication and roles
 
 ## Phase 4: Private Storage and Validated Uploads
 
-**Status:** Complete - awaiting review. Verified locally with a mocked Wasabi adapter; live bucket connectivity/policy was **not** verified because no credentials were supplied.
+**Status:** Complete - awaiting review. Verified locally with a mocked Supabase Storage adapter; live bucket connectivity/policy was **not** verified because no credentials were supplied.
 
 **Objectives**
-Integrate private Wasabi S3 storage and implement a validated secure upload path. Downloads are deferred to Phase 5 to keep Phase 4 reviewable.
+Integrate private Supabase Storage and implement a validated secure upload path. Downloads are deferred to Phase 5 to keep Phase 4 reviewable.
 
 **Deliverables**
-- Wasabi S3 client wrapper using `boto3`, lazy/cached service creation, and safe errors.
-- `POST /api/v1/documents/upload` with Owner/Admin role enforcement.
+- Supabase Storage client wrapper using `httpx`, lazy/cached service creation, and safe errors.
+- `POST /api/v1/documents/upload` with active-user authentication and uploader-derived ownership.
 - Validation: size (10 MiB default), extension/MIME allow-list, magic-byte/signature checks, filename safety, empty-file rejection, DOCX package checks, and TXT encoding checks.
 - Backend-generated `documents/{owner_uuid}/{random_uuid}.{ext}` keys and backend-computed SHA-256.
 - Metadata creation, safe 201 response without storage keys, and best-effort object cleanup when metadata commit fails.
 - Server-side storage settings, upload limits, connectivity CLI, and deployment templates.
-- JavaScript/JSX frontend migration and an upload form for Owner/Admin.
+- JavaScript/JSX frontend migration and an upload form for every active user.
 
 **Dependencies**
 - Phase 3 approved.
@@ -204,7 +205,7 @@ Integrate private Wasabi S3 storage and implement a validated secure upload path
 - Invalid type/size/filename/content uploads are rejected before storage.
 - No direct/presigned storage URL or storage key is exposed to the client.
 - Storage failures return 503 with no metadata row; database failures return 500 and attempt object cleanup.
-- Live Wasabi behavior remains explicitly unverified.
+- A later live private-bucket smoke test passed; automated tests still use a fake adapter.
 
 **Tests**
 - Unit tests for every validation rule and storage configuration.
@@ -221,7 +222,7 @@ feat(storage): implement secure document uploads
 
 ## Phase 5: Document Management and Search
 
-**Status:** Complete — approved. Verified locally with a mocked Wasabi adapter; live download and object-deletion behavior was **not** verified because no credentials were supplied.
+**Status:** Complete — approved. Verified locally with a mocked Supabase Storage adapter; live download and object-deletion behavior was **not** verified because no credentials were supplied.
 
 **Objectives**
 Implement document listing, metadata editing, categorization, search, proxied download, and soft deletion with ownership/role scoping.
@@ -231,7 +232,7 @@ Implement document listing, metadata editing, categorization, search, proxied do
 - `GET /api/v1/documents/{id}` safe metadata details.
 - `PATCH /api/v1/documents/{id}` for owner-only `name`, `category`, and `description` updates; protected fields rejected.
 - `GET /api/v1/documents/{id}/download` as an owner-only backend proxy with safe attachment/no-store headers and no presigned URL.
-- `DELETE /api/v1/documents/{id}` owner-only soft deletion with best-effort Wasabi object cleanup after commit.
+- `DELETE /api/v1/documents/{id}` owner-only soft deletion with best-effort Supabase Storage object cleanup after commit.
 - JavaScript/JSX library, filters, pagination, upload panel, and document details/edit/delete UI.
 - Administrator metadata review across active documents without content or owner-only actions.
 
@@ -241,7 +242,7 @@ Implement document listing, metadata editing, categorization, search, proxied do
 **Acceptance Criteria**
 - Owners can list, inspect, update, download, and delete their active documents.
 - Administrators can list/inspect metadata for all active documents but cannot manage another owner's document.
-- Viewers see no documents until Phase 6 grants exist.
+- Users without ownership or a Phase 6 grant see no other users' documents.
 - Search/filter/sort/pagination behave correctly and wildcard characters are treated literally.
 - Unauthorized or missing documents return a generic 404; protected metadata cannot be changed.
 - Downloads are authenticated and never expose storage keys or direct storage URLs.
@@ -260,7 +261,7 @@ feat(documents): implement document management and search
 
 ## Phase 6: Document Permissions and Revocation
 
-**Status:** Complete — verified locally with 146 backend tests and frontend lint/build at Phase 6 completion; live Wasabi behavior remains unverified.
+**Status:** Complete — verified locally with 146 backend tests and frontend lint/build at Phase 6 completion; a later live private-bucket smoke test passed.
 
 **Objectives**
 Implement named-user, per-document READ/EDIT grants with owner-only management and immediate revocation enforced on every document endpoint.
@@ -301,7 +302,7 @@ feat(permissions): implement document access grants and revocation
 
 ## Phase 7: Audit Trail and Administrator Activity
 
-**Status:** Complete. Verified locally with 158 backend tests and frontend lint/build; live Wasabi and Supabase/deployment behavior remain unverified.
+**Status:** Complete. Verified locally with 158 backend tests and frontend lint/build; a later live private-bucket smoke test passed; deployment remains unverified.
 
 **Objectives**
 Implement an append-only, tamper-evident audit trail with hash-chain and signed-checkpoint verification and a global-administrator audit activity view.
@@ -345,7 +346,7 @@ feat(audit): implement protected audit trail
 
 ## Phase 8: Security Tests and Threat-Model Verification
 
-**Status:** Complete — approved. Re-audited on 2026-10-21 and verified locally with 213 backend tests (46 security cases plus request-limit tests) and 89% coverage; the CI workflow is added but remote execution is pending. The re-audit added pre-authentication upload-size rejection, Unicode format-control filename rejection, checkpoint-monotonicity protection, and missing regressions. Live Wasabi, Supabase migration, RLS, and deployment remain unverified.
+**Status:** Complete — approved. Re-audited on 2026-10-21 and verified locally; the suite now has 233 backend tests (46 security cases plus business-model and request-limit tests) and 90% statement coverage. The CI workflow is added but remote execution is pending. The re-audit added pre-authentication upload-size rejection, Unicode format-control filename rejection, checkpoint-monotonicity protection, and missing regressions. A later live private-bucket smoke test passed and the current database is at migration `0003`; migration `0004`, RLS, and deployment remain unapplied/unverified.
 
 **Objectives**
 Build a dedicated security test suite proving each threat-model control and cross-user access denial.
@@ -372,7 +373,7 @@ Build a dedicated security test suite proving each threat-model control and cros
 
 **Tests**
 - Full security suite configured in GitHub Actions CI; local full-suite execution passed.
-- Coverage report demonstrating authorization paths exercised (89% combined statement/branch coverage).
+- Coverage report demonstrating authorization paths exercised (currently 90% statement coverage).
 
 **Suggested Commit Message**
 ```
@@ -410,11 +411,45 @@ Deliver the full React frontend covering all user-facing capabilities with acces
 - Manual UI walkthrough of each role.
 - Component tests where applicable.
 
-**Status:** Complete - awaiting review. `npm run lint` reports 0 warnings/errors, `npm test` passes 9 Vitest/React Testing Library tests, and `npm run build` succeeds with the existing chunk-size warning. Registration, live dashboard counts, dedicated upload, library filters, document details/editing, owner-only sharing, administrator audit, desktop sidebar/mobile navigation, and loading/error/empty states were implemented and reviewed. A browser-based multi-role walkthrough remains outstanding; live backend, Wasabi, Supabase, and deployment behavior remain unverified.
+**Status:** Complete - awaiting review. `npm run lint` reports 0 warnings/errors, `npm test` passes 10 Vitest/React Testing Library tests, and `npm run build` succeeds with the existing chunk-size warning. Registration, live dashboard counts, dedicated upload, library filters, document details/editing, owner-only sharing, administrator account/audit oversight, desktop sidebar/mobile navigation, and loading/error/empty states were implemented and reviewed. A browser-based multi-account walkthrough remains outstanding; live backend health and private-bucket storage were verified; deployment remains unverified.
 
 **Suggested Commit Message**
 ```
 feat: implement complete React frontend
+```
+
+---
+
+## Phase 9.1: Business-Model Correction
+
+**Status:** Complete — pending review. Verified locally; no commit or push was created during the correction work.
+
+**Objectives**
+Replace the legacy three-role model with the intended two-role account model, make upload available to every user, add administrator account management, and update audit/UI/documentation without changing the audit hash schema.
+
+**Deliverables**
+- Migration `0004_user_roles_and_login_tracking` with legacy-role data migration, `last_login_at`, and role/status/created-at indexes.
+- `ADMINISTRATOR`/`USER` account roles and `USER_STATUS_CHANGED`/`USER_ROLE_CHANGED` audit actions.
+- Upload for every active user, with ownership derived from the session.
+- Admin summary/users/detail/status/role/document-permission endpoints with self-change and last-admin protections.
+- Session revocation on disablement and role change; successful-login timestamp tracking.
+- Audit target-user/resource context and filters without changing the hash payload schema.
+- Frontend role/upload corrections, real admin account management, audit target/resource filters, and updated tests/docs.
+
+**Acceptance Criteria**
+- Normal users can upload and own documents; other users require per-document READ/EDIT access.
+- Administrators can manage accounts and inspect metadata/audit data without bypassing document content permissions.
+- Unsafe self role/status changes and removal of the last active administrator are rejected.
+- Disablement and role changes immediately revoke target refresh sessions.
+- Audit integrity remains valid and existing hash schema is unchanged.
+
+**Tests**
+- 233 backend tests pass with 90% statement coverage, including migration data mapping and business-model acceptance coverage.
+- 10 frontend tests pass; lint and production build pass.
+
+**Suggested Commit Message**
+```
+fix(auth): correct administrator oversight and document ownership model
 ```
 
 ---

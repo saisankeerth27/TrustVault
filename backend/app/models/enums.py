@@ -5,8 +5,7 @@ from enum import StrEnum
 
 class UserRole(StrEnum):
     ADMINISTRATOR = "ADMINISTRATOR"
-    DOCUMENT_OWNER = "DOCUMENT_OWNER"
-    VIEWER = "VIEWER"
+    USER = "USER"
 
 
 class UserStatus(StrEnum):
@@ -38,6 +37,8 @@ class AuditAction(StrEnum):
     """Known audit actions. The database column stays extensible for later phases."""
 
     USER_REGISTERED = "USER_REGISTERED"
+    USER_STATUS_CHANGED = "USER_STATUS_CHANGED"
+    USER_ROLE_CHANGED = "USER_ROLE_CHANGED"
     LOGIN_SUCCESS = "LOGIN_SUCCESS"
     LOGIN_FAILURE = "LOGIN_FAILURE"
     LOGOUT = "LOGOUT"

@@ -32,7 +32,6 @@ def test_health_does_not_expose_configuration() -> None:
         "password",
         "secret",
         "jwt",
-        "wasabi",
         "supabase",
         "service_role",
         "cors_allowed_origins",

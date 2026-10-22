@@ -1,4 +1,4 @@
-"""Safely check Wasabi connectivity and bucket access without printing secrets."""
+"""Safely check Supabase Storage connectivity and bucket access without printing secrets."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ from app.core.config import get_settings
 from app.services.storage import (
     StorageConfigurationError,
     StorageOperationError,
-    WasabiStorage,
+    SupabaseStorage,
 )
 
 
 def main() -> int:
     settings = get_settings()
-    storage = WasabiStorage(settings)
+    storage = SupabaseStorage(settings)
 
     try:
         storage.check_connection()
@@ -26,9 +26,8 @@ def main() -> int:
         return 1
 
     print(
-        "OK: connected to bucket "
-        f"'{settings.wasabi_bucket_name}' at {settings.wasabi_endpoint_url} "
-        f"(region {settings.wasabi_region})."
+        "OK: connected to private bucket "
+        f"'{settings.supabase_storage_bucket}' at {settings.supabase_url}."
     )
     return 0
 

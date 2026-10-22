@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    Index,
     String,
     UniqueConstraint,
     func,
@@ -28,11 +29,14 @@ class User(Base):
         CheckConstraint("length(btrim(name)) > 0", name="ck_users_name_not_blank"),
         CheckConstraint("email = lower(btrim(email))", name="ck_users_email_normalized"),
         CheckConstraint(
-            "role IN ('ADMINISTRATOR', 'DOCUMENT_OWNER', 'VIEWER')",
+            "role IN ('ADMINISTRATOR', 'USER')",
             name="ck_users_role",
         ),
         CheckConstraint("status IN ('ACTIVE', 'DISABLED')", name="ck_users_status"),
         UniqueConstraint("email", name="uq_users_email"),
+        Index("ix_users_role", "role"),
+        Index("ix_users_status", "status"),
+        Index("ix_users_created_at", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -48,6 +52,10 @@ class User(Base):
         String(16),
         nullable=False,
         server_default=text("'ACTIVE'"),
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

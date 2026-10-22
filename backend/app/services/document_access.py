@@ -203,6 +203,7 @@ def _record_access_denial(
         "attempted_document_id": str(document_id),
         "capability": capability.value,
         "reason": reason,
+        "resource_type": "DOCUMENT",
     }
     if access_level is not None:
         details["access_level"] = access_level.value

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Activity,
   ArrowLeft,
@@ -33,7 +34,9 @@ const EMPTY_FILTERS = {
   action: '',
   outcome: '',
   actorId: '',
+  targetUserId: '',
   documentId: '',
+  resourceType: '',
   dateFrom: '',
   dateTo: '',
 }
@@ -228,8 +231,22 @@ function IntegrityPanel({
 }
 
 export function AuditPage() {
-  const [draftFilters, setDraftFilters] = useState({ ...EMPTY_FILTERS })
-  const [appliedFilters, setAppliedFilters] = useState({ ...EMPTY_FILTERS })
+  const [searchParams] = useSearchParams()
+  const initialActorId = searchParams.get('actor_id') ?? ''
+  const initialTargetUserId = searchParams.get('target_user_id') ?? ''
+  const initialDocumentId = searchParams.get('document_id') ?? ''
+  const [draftFilters, setDraftFilters] = useState(() => ({
+    ...EMPTY_FILTERS,
+    actorId: UUID_PATTERN.test(initialActorId) ? initialActorId : '',
+    targetUserId: UUID_PATTERN.test(initialTargetUserId) ? initialTargetUserId : '',
+    documentId: UUID_PATTERN.test(initialDocumentId) ? initialDocumentId : '',
+  }))
+  const [appliedFilters, setAppliedFilters] = useState(() => ({
+    ...EMPTY_FILTERS,
+    actorId: UUID_PATTERN.test(initialActorId) ? initialActorId : '',
+    targetUserId: UUID_PATTERN.test(initialTargetUserId) ? initialTargetUserId : '',
+    documentId: UUID_PATTERN.test(initialDocumentId) ? initialDocumentId : '',
+  }))
   const [filterError, setFilterError] = useState(null)
   const [page, setPage] = useState(1)
   const [result, setResult] = useState(EMPTY_RESULT)
@@ -260,8 +277,14 @@ export function AuditPage() {
     if (appliedFilters.actorId) {
       params.actor_id = appliedFilters.actorId
     }
+    if (appliedFilters.targetUserId) {
+      params.target_user_id = appliedFilters.targetUserId
+    }
     if (appliedFilters.documentId) {
       params.document_id = appliedFilters.documentId
+    }
+    if (appliedFilters.resourceType) {
+      params.resource_type = appliedFilters.resourceType
     }
     if (appliedFilters.dateFrom) {
       params.occurred_from = appliedFilters.dateFrom
@@ -341,10 +364,15 @@ export function AuditPage() {
   function applyFilters(event) {
     event.preventDefault()
     const actorId = draftFilters.actorId.trim()
+    const targetUserId = draftFilters.targetUserId.trim()
     const documentId = draftFilters.documentId.trim()
 
     if (actorId && !UUID_PATTERN.test(actorId)) {
       setFilterError('Actor ID must be a valid UUID.')
+      return
+    }
+    if (targetUserId && !UUID_PATTERN.test(targetUserId)) {
+      setFilterError('Target user ID must be a valid UUID.')
       return
     }
     if (documentId && !UUID_PATTERN.test(documentId)) {
@@ -367,7 +395,9 @@ export function AuditPage() {
       action: draftFilters.action,
       outcome: draftFilters.outcome,
       actorId,
+      targetUserId,
       documentId,
+      resourceType: draftFilters.resourceType.trim(),
       dateFrom: draftFilters.dateFrom,
       dateTo: draftFilters.dateTo,
     })
@@ -418,8 +448,8 @@ export function AuditPage() {
         <CardHeader>
           <CardTitle>Filter events</CardTitle>
           <CardDescription>
-            Combine action, outcome, identity, document, and UTC date filters. Event history is
-            ordered by the append-only chain sequence.
+            Combine action, outcome, actor, target user, resource, document, and UTC date filters.
+            Event history is ordered by the append-only chain sequence.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -505,6 +535,21 @@ export function AuditPage() {
               </div>
 
               <div className="space-y-2">
+                <label htmlFor="audit-target-user-id" className="text-sm font-medium">
+                  Target user ID
+                </label>
+                <input
+                  id="audit-target-user-id"
+                  type="text"
+                  value={draftFilters.targetUserId}
+                  onChange={(event) => updateDraft('targetUserId', event.target.value)}
+                  placeholder="Optional affected user UUID"
+                  spellCheck={false}
+                  className={cn(fieldClassName, 'font-mono text-xs')}
+                />
+              </div>
+
+              <div className="space-y-2">
                 <label htmlFor="audit-document-id" className="text-sm font-medium">
                   Document ID
                 </label>
@@ -517,6 +562,23 @@ export function AuditPage() {
                   spellCheck={false}
                   className={cn(fieldClassName, 'font-mono text-xs')}
                 />
+              </div>
+
+              <div className="space-y-2">
+                <label htmlFor="audit-resource-type" className="text-sm font-medium">
+                  Resource type
+                </label>
+                <select
+                  id="audit-resource-type"
+                  value={draftFilters.resourceType}
+                  onChange={(event) => updateDraft('resourceType', event.target.value)}
+                  className={fieldClassName}
+                >
+                  <option value="">All resources</option>
+                  <option value="USER">User account</option>
+                  <option value="DOCUMENT">Document</option>
+                  <option value="DOCUMENT_PERMISSION">Document permission</option>
+                </select>
               </div>
             </div>
 
@@ -601,7 +663,7 @@ export function AuditPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] text-sm">
+              <table className="w-full min-w-[1240px] text-sm">
                 <thead className="border-b bg-muted/40 text-left text-xs tracking-wide text-muted-foreground uppercase">
                   <tr>
                     <th scope="col" className="px-6 py-3 font-medium">
@@ -615,6 +677,9 @@ export function AuditPage() {
                     </th>
                     <th scope="col" className="px-4 py-3 font-medium">
                       Actor
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Target / resource
                     </th>
                     <th scope="col" className="px-4 py-3 font-medium">
                       Document
@@ -667,8 +732,21 @@ export function AuditPage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-4">
+                        <span className="block text-xs font-medium">
+                          {event.resource_type || 'Unclassified'}
+                        </span>
+                        {event.target_user_id ? (
+                          <span
+                            title={event.target_user_id}
+                            className="mt-0.5 block max-w-36 truncate font-mono text-[11px] text-muted-foreground"
+                          >
+                            {event.target_user_id}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-4">
                         <span className="block max-w-44 truncate">
-                          {event.document_name || '—'}
+                          {event.document_name || '-'}
                         </span>
                         {event.document_id ? (
                           <span

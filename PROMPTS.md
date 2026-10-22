@@ -434,3 +434,40 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 - **Commit hash:** `d4243ac132c7b68efb468b2714f4596df4bd273f`
 - **GitHub link:** not applicable; the Phase 8 re-audit commit was created locally without a push.
 - **Human review and decision:** Approved for the local Phase 8 commit; Phase 9 was then completed in the working tree.
+
+---
+
+## 2026-10-22 — Business-Model Correction: Roles, Ownership, and Administrator Oversight
+
+- **Date and phase:** 2026-10-22 — Phase 9.1 (business-model correction)
+- **Objective:** Correct the account-role model so ordinary users can own and upload documents, administrators retain system-wide account/metadata/audit oversight without automatic private-content access, and the change is implemented and verified end to end without altering the audit hash schema.
+- **Prompt / instruction summary:** The human required two roles (`ADMINISTRATOR`, `USER`), normal-user uploads with document-specific ownership, per-document READ/EDIT grants, administrator account management and metadata/audit oversight, immediate session revocation for disablement and role changes, audit coverage, frontend alignment, tests/docs updates, and one final commit/push only after verification. Existing administrator credentials were to remain unchanged.
+- **Files or code produced:**
+  - Migration `backend/alembic/versions/0004_user_roles_and_login_tracking.py` for role data migration, `last_login_at`, role constraint, and role/status/created-at indexes.
+  - Updated role/audit enums and `User` model in `backend/app/models/`.
+  - Updated auth service/API/schemas for normal-user registration, last-login tracking, session revocation, and target/resource audit context.
+  - Upload authorization changed in `backend/app/api/documents.py`; any active authenticated user can upload and becomes owner.
+  - New `backend/app/services/admin_accounts.py`, `backend/app/schemas/admin.py`, and `backend/app/api/admin.py` for summaries, account search/detail, status/role changes, self-change protection, last-admin protection, session revocation, and document-permission oversight.
+  - Audit schema/API extended with `target_user_id`, `resource_type`, and filters while preserving the hash payload.
+  - New `backend/tests/test_business_model.py`; updated backend tests and migration/model assertions.
+  - Frontend role/upload corrections, new `frontend/src/services/admin.js`, real `AdminPage.jsx`, `AuditPage.jsx` target/resource filters/columns, updated existing tests, and new `AdminPage.test.jsx`.
+  - Updated `backend/app/main.py`, README, requirements, architecture, database, implementation plan, threat model, and this log.
+- **Tests and verification performed:**
+  - Backend full suite: **233 passed**, 90% statement coverage (one Starlette/httpx deprecation warning).
+  - Migration `0004` explicit legacy-role upgrade/downgrade test passed, including `last_login_at`, role mapping, and indexes.
+  - Frontend: `npm test` **10 passed across 5 files**; `npm run lint` 0 warnings/errors; `npm run build` succeeded with the existing chunk-size warning.
+  - OpenAPI/application description updated; no live deployment or Supabase migration was performed.
+- **Issues discovered:**
+  - The business-model test initially had one upload `503` because its fixture lacked the fake storage adapter; fixed by adding the fixture.
+  - `test_models.py` still expected the old `users` column set; fixed and extended to assert the new role constraint.
+  - The Admin page initially triggered an oxlint `set-state-in-effect` warning; loading state is now set from user actions instead.
+  - The existing frontend tests still referenced `DOCUMENT_OWNER`/`VIEWER` and viewer upload denial; updated to `USER` and normal-user upload expectations.
+  - Manual administrator login was not performed because existing credentials were intentionally left unchanged.
+- **Corrections made:**
+  - Added the missing storage fixture and reran targeted/full suites.
+  - Updated model/migration tests and migration data coverage.
+  - Corrected frontend loading-state behavior and role references.
+  - Added targeted admin UI tests and refreshed documentation/test counts.
+- **Commit hash:** Pending final review and single commit.
+- **GitHub link:** Pending.
+- **Human review and decision:** Pending. The correction remains uncommitted at the time of this entry.
