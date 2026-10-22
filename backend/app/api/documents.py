@@ -32,9 +32,13 @@ from app.models.document_permission import DocumentPermission
 from app.models.enums import AuditAction, AuditOutcome, DocumentAccessLevel
 from app.models.user import User
 from app.schemas.document import (
+    DocumentContentUpdate,
     DocumentListResponse,
     DocumentResponse,
     DocumentUpdate,
+    DocumentVersionListResponse,
+    DocumentVersionReplacementResponse,
+    DocumentVersionResponse,
     PermissionGrantRequest,
     PermissionListResponse,
     PermissionResponse,
@@ -46,6 +50,15 @@ from app.services.document_access import (
     DocumentCapability,
     DocumentNotFoundError,
     authorize_document,
+)
+from app.services.document_versions import (
+    DocumentVersionConflictError,
+    DocumentVersionNotFoundError,
+    DocumentVersionOperationError,
+    get_current_version,
+    get_document_version,
+    list_document_versions,
+    replace_document_version,
 )
 from app.services.documents import (
     DocumentDeletionError,
@@ -162,10 +175,13 @@ def _safe_fallback_filename(filename: str) -> str:
     return (safe or "download")[:120]
 
 
-def _content_disposition(filename: str) -> str:
+def _content_disposition(filename: str, *, inline: bool = False) -> str:
     fallback = _safe_fallback_filename(filename)
     encoded = quote(filename, safe="")
-    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
+    disposition = "inline" if inline else "attachment"
+    return (
+        f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
+    )
 
 
 def _stream_body(body: IO[bytes]) -> Iterator[bytes]:
@@ -425,6 +441,445 @@ def update_document(
         current_user.id,
     )
     return DocumentResponse.model_validate(updated)
+
+
+@router.get(
+    "/{document_id}/versions",
+    response_model=DocumentVersionListResponse,
+)
+def list_versions(
+    document_id: UUID,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> DocumentVersionListResponse:
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.READ,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document version access denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document version access denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+
+    versions = list_document_versions(session, document=authorized.document)
+    current = next((version for version in versions if version.is_current), None)
+    response.headers["Cache-Control"] = "no-store"
+    return DocumentVersionListResponse(
+        items=[
+            DocumentVersionResponse.model_validate(version)
+            for version in versions
+        ],
+        total=len(versions),
+        current_version_number=(
+            current.version_number if current is not None else None
+        ),
+    )
+
+
+@router.put(
+    "/{document_id}/versions",
+    response_model=DocumentVersionReplacementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_document_version(
+    request: Request,
+    document_id: UUID,
+    file: Annotated[UploadFile, File()],
+    expected_version_number: Annotated[int, Form(ge=1)],
+    change_summary: Annotated[str | None, Form()] = None,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage_service),
+) -> DocumentVersionReplacementResponse:
+    settings = get_settings()
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.EDIT,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document version creation denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document version creation denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+
+    _enforce_request_size(request, settings.max_upload_size_bytes)
+    try:
+        data = file.file.read(settings.max_upload_size_bytes + 1)
+        upload = validate_upload(
+            filename=file.filename,
+            declared_content_type=file.content_type,
+            data=data,
+            allowed_extensions=settings.allowed_upload_extension_set,
+            max_size_bytes=settings.max_upload_size_bytes,
+        )
+        normalized_summary = normalize_optional_text(
+            change_summary,
+            field="Change summary",
+            max_length=500,
+        )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded file could not be read.",
+        ) from exc
+    except UploadValidationError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.message,
+        ) from exc
+
+    try:
+        updated, version = replace_document_version(
+            session,
+            document=authorized.document,
+            upload=upload,
+            expected_version_number=expected_version_number,
+            change_summary=normalized_summary,
+            actor=current_user,
+            storage=storage,
+            source="UPLOAD",
+        )
+    except DocumentVersionConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The document changed since it was loaded. Refresh the version "
+                "history and try again."
+            ),
+        ) from exc
+    except DocumentVersionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document version history is unavailable.",
+        ) from exc
+    except StorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is not configured.",
+        ) from exc
+    except StorageOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is temporarily unavailable.",
+        ) from exc
+    except DocumentVersionOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The new document version could not be saved.",
+        ) from exc
+
+    updated.access_level = authorized.access_level.value
+    logger.info("Document version created by user %s.", current_user.id)
+    return DocumentVersionReplacementResponse(
+        document=DocumentResponse.model_validate(updated),
+        version=DocumentVersionResponse.model_validate(version),
+    )
+
+
+@router.put(
+    "/{document_id}/content",
+    response_model=DocumentVersionReplacementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def update_document_text_content(
+    document_id: UUID,
+    payload: DocumentContentUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage_service),
+) -> DocumentVersionReplacementResponse:
+    settings = get_settings()
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.EDIT,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document content update denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document content update denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+
+    current = get_current_version(session, document_id=authorized.document.id)
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document version history is unavailable.",
+        )
+    if current.mime_type != "text/plain":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only plain-text documents can be edited in the browser.",
+        )
+
+    try:
+        upload = validate_upload(
+            filename=current.original_filename,
+            declared_content_type="text/plain",
+            data=payload.content.encode("utf-8"),
+            allowed_extensions={"txt"},
+            max_size_bytes=settings.max_upload_size_bytes,
+        )
+    except UploadValidationError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.message,
+        ) from exc
+
+    try:
+        updated, version = replace_document_version(
+            session,
+            document=authorized.document,
+            upload=upload,
+            expected_version_number=payload.expected_version_number,
+            change_summary=payload.change_summary or "Edited in browser",
+            actor=current_user,
+            storage=storage,
+            source="INLINE_EDITOR",
+        )
+    except DocumentVersionConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The document changed since it was loaded. Refresh the version "
+                "history and try again."
+            ),
+        ) from exc
+    except DocumentVersionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document version history is unavailable.",
+        ) from exc
+    except StorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is not configured.",
+        ) from exc
+    except StorageOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is temporarily unavailable.",
+        ) from exc
+    except DocumentVersionOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The new document version could not be saved.",
+        ) from exc
+
+    updated.access_level = authorized.access_level.value
+    logger.info("Document text content updated by user %s.", current_user.id)
+    return DocumentVersionReplacementResponse(
+        document=DocumentResponse.model_validate(updated),
+        version=DocumentVersionResponse.model_validate(version),
+    )
+
+
+@router.get("/{document_id}/versions/{version_number}/download")
+def download_document_version(
+    document_id: UUID,
+    version_number: int,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage_service),
+) -> StreamingResponse:
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.READ,
+        )
+        version = get_document_version(
+            session,
+            document=authorized.document,
+            version_number=version_number,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document version download denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document version download denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+    except DocumentVersionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document version not found.",
+        ) from exc
+
+    try:
+        body = storage.open_download(key=version.storage_key)
+    except StorageObjectNotFoundError as exc:
+        logger.warning("Document version object was not found during download.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document content is unavailable.",
+        ) from exc
+    except StorageConfigurationError as exc:
+        logger.error("Document storage is not configured for version download.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is not configured.",
+        ) from exc
+    except StorageOperationError as exc:
+        logger.error("Document storage failed during version download.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is temporarily unavailable.",
+        ) from exc
+
+    try:
+        record_event(
+            session,
+            action=AuditAction.DOCUMENT_VERSION_DOWNLOAD,
+            outcome=AuditOutcome.SUCCESS,
+            actor=current_user,
+            document_id=authorized.document.id,
+            details={
+                "file_size": version.file_size,
+                "resource_type": "DOCUMENT",
+                "version_number": version.version_number,
+            },
+        )
+        session.commit()
+    except Exception as exc:
+        try:
+            session.rollback()
+        except Exception:
+            logger.error(
+                "Database rollback failed after a version download audit error."
+            )
+        body.close()
+        logger.error("Document version download audit event could not be recorded.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The download could not be completed.",
+        ) from exc
+
+    logger.info("Document version download started for user %s.", current_user.id)
+    return StreamingResponse(
+        _stream_body(body),
+        media_type=version.mime_type,
+        headers={
+            "Content-Disposition": _content_disposition(version.original_filename),
+            "Content-Length": str(version.file_size),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/{document_id}/preview")
+def preview_document(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage_service),
+) -> StreamingResponse:
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.READ,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning("Document preview denied for user %s.", current_user.id)
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning("Document preview denied for user %s.", current_user.id)
+        raise _access_denied() from exc
+
+    current = get_current_version(session, document_id=authorized.document.id)
+    storage_key = (
+        current.storage_key if current is not None else authorized.document.storage_key
+    )
+    mime_type = (
+        current.mime_type if current is not None else authorized.document.mime_type
+    )
+    file_size = (
+        current.file_size if current is not None else authorized.document.file_size
+    )
+    filename = (
+        current.original_filename
+        if current is not None
+        else authorized.document.name
+    )
+
+    try:
+        body = storage.open_download(key=storage_key)
+    except StorageObjectNotFoundError as exc:
+        logger.warning("Document object was not found during preview.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document content is unavailable.",
+        ) from exc
+    except StorageConfigurationError as exc:
+        logger.error("Document storage is not configured for preview.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is not configured.",
+        ) from exc
+    except StorageOperationError as exc:
+        logger.error("Document storage failed during preview.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is temporarily unavailable.",
+        ) from exc
+
+    details: dict[str, object] = {
+        "file_size": file_size,
+        "mime_type": mime_type,
+        "resource_type": "DOCUMENT",
+    }
+    if current is not None:
+        details["version_number"] = current.version_number
+
+    try:
+        record_event(
+            session,
+            action=AuditAction.DOCUMENT_PREVIEW,
+            outcome=AuditOutcome.SUCCESS,
+            actor=current_user,
+            document_id=authorized.document.id,
+            details=details,
+        )
+        session.commit()
+    except Exception as exc:
+        try:
+            session.rollback()
+        except Exception:
+            logger.error("Database rollback failed after a preview audit error.")
+        body.close()
+        logger.error("Document preview audit event could not be recorded.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The preview could not be completed.",
+        ) from exc
+
+    logger.info("Document preview started for user %s.", current_user.id)
+    return StreamingResponse(
+        _stream_body(body),
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": _content_disposition(filename, inline=True),
+            "Content-Length": str(file_size),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/{document_id}/download")

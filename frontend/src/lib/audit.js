@@ -8,6 +8,9 @@ export const AUDIT_ACTION_OPTIONS = [
   { value: 'DOCUMENT_UPLOAD', label: 'Document uploaded' },
   { value: 'DOCUMENT_METADATA_UPDATE', label: 'Document metadata updated' },
   { value: 'DOCUMENT_DOWNLOAD', label: 'Document downloaded' },
+  { value: 'DOCUMENT_VERSION_CREATED', label: 'Document version created' },
+  { value: 'DOCUMENT_VERSION_DOWNLOAD', label: 'Document version downloaded' },
+  { value: 'DOCUMENT_PREVIEW', label: 'Document previewed' },
   { value: 'DOCUMENT_DELETE', label: 'Document deleted' },
   { value: 'PERMISSION_GRANT', label: 'Permission granted' },
   { value: 'PERMISSION_UPDATE', label: 'Permission updated' },
@@ -99,4 +102,76 @@ export function integrityMeta(value) {
 
 export function checkpointMeta(value) {
   return CHECKPOINT_META[value] ?? { label: value || 'Unknown', tone: 'text-muted-foreground' }
+}
+
+const AUDIT_FIELD_LABELS = {
+  access_level: 'Access level',
+  actor_name: 'Actor',
+  change_summary: 'Change summary',
+  changed_fields: 'Changed fields',
+  client_ip: 'Client IP',
+  file_size: 'File size',
+  mime_type: 'MIME type',
+  previous_permission: 'Previous permission',
+  previous_version_number: 'Previous version',
+  reason: 'Reason',
+  recipient_id: 'Recipient ID',
+  resource_type: 'Resource type',
+  role: 'Role',
+  source: 'Source',
+  status: 'Status',
+  target_user_id: 'Target user',
+  user_agent: 'User agent',
+  version_number: 'Version',
+}
+
+function auditScalarText(value) {
+  if (value === null || value === undefined) {
+    return 'Not recorded'
+  }
+  return String(value).replaceAll('_', ' ').toLowerCase()
+}
+
+export function auditFieldLabel(key) {
+  return (
+    AUDIT_FIELD_LABELS[key] ||
+    String(key)
+      .replaceAll('_', ' ')
+      .replace(/\b\w/g, (character) => character.toUpperCase())
+  )
+}
+
+export function auditEventSummary(details) {
+  if (!details || typeof details !== 'object') {
+    return []
+  }
+
+  const parts = []
+  const versionNumber = details.version_number
+  const previousVersion = details.previous_version_number
+
+  if (Number.isInteger(versionNumber)) {
+    parts.push(
+      Number.isInteger(previousVersion)
+        ? `Version ${versionNumber} replaced version ${previousVersion}`
+        : `Version ${versionNumber}`,
+    )
+  }
+  if (Array.isArray(details.changed_fields) && details.changed_fields.length > 0) {
+    parts.push(`Changed ${details.changed_fields.join(', ')}`)
+  }
+  if (details.permission) {
+    parts.push(`Permission: ${auditScalarText(details.permission)}`)
+  }
+  if (details.reason) {
+    parts.push(`Reason: ${auditScalarText(details.reason)}`)
+  }
+  if (details.source) {
+    parts.push(`Source: ${auditScalarText(details.source)}`)
+  }
+  if (details.change_summary) {
+    parts.push(details.change_summary)
+  }
+
+  return parts
 }

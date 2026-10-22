@@ -14,6 +14,7 @@ CORE_TABLES = {
     "users",
     "documents",
     "document_permissions",
+    "document_versions",
     "audit_events",
     "refresh_tokens",
 }
@@ -90,6 +91,79 @@ def test_0004_migrates_legacy_roles_explicitly(migration_database_url: str) -> N
     assert downgraded["legacy-owner@example.com"] == "DOCUMENT_OWNER"
     assert downgraded["legacy-viewer@example.com"] == "DOCUMENT_OWNER"
     assert downgraded["legacy-admin@example.com"] == "ADMINISTRATOR"
+
+    command.upgrade(config, "head")
+
+
+def test_0005_backfills_existing_documents_and_downgrades_cleanly(
+    migration_database_url: str,
+) -> None:
+    config = alembic_config(migration_database_url)
+    command.downgrade(config, "0004")
+
+    engine = create_engine(migration_database_url, poolclass=NullPool)
+    try:
+        with engine.begin() as connection:
+            user_id = connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(name, email, password_hash, role, status) "
+                    "VALUES ('Legacy Owner', 'legacy-version@example.com', "
+                    "'not-a-real-hash', 'USER', 'ACTIVE') RETURNING id"
+                )
+            ).scalar_one()
+            document_id = connection.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(owner_id, name, category, description, storage_key, "
+                    "mime_type, file_size, checksum) "
+                    "VALUES (:owner_id, 'Legacy report.pdf', 'Contracts', "
+                    "'Existing document', 'documents/legacy/report.pdf', "
+                    "'application/pdf', 2048, :checksum) RETURNING id"
+                ),
+                {"owner_id": user_id, "checksum": "d" * 64},
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "0005")
+
+    engine = create_engine(migration_database_url, poolclass=NullPool)
+    try:
+        with engine.connect() as connection:
+            versions = connection.execute(
+                text(
+                    "SELECT document_id, version_number, storage_key, "
+                    "original_filename, mime_type, file_size, checksum, "
+                    "uploaded_by, change_summary, is_current "
+                    "FROM document_versions"
+                )
+            ).mappings().all()
+    finally:
+        engine.dispose()
+
+    assert len(versions) == 1
+    version = versions[0]
+    assert version["document_id"] == document_id
+    assert version["version_number"] == 1
+    assert version["storage_key"] == "documents/legacy/report.pdf"
+    assert version["original_filename"] == "Legacy report.pdf"
+    assert version["mime_type"] == "application/pdf"
+    assert version["file_size"] == 2048
+    assert version["checksum"] == "d" * 64
+    assert version["uploaded_by"] == user_id
+    assert version["change_summary"] == "Initial upload"
+    assert version["is_current"] is True
+
+    command.downgrade(config, "0004")
+
+    engine = create_engine(migration_database_url, poolclass=NullPool)
+    try:
+        inspector = inspect(engine)
+        assert "document_versions" not in inspector.get_table_names()
+        assert "documents" in inspector.get_table_names()
+    finally:
+        engine.dispose()
 
     command.upgrade(config, "head")
 

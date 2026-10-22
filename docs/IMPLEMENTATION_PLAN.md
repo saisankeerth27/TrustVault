@@ -17,6 +17,7 @@ This document defines the 12-phase incremental delivery plan (Phase 0 through Ph
 | 8 | Security Tests and Threat-Model Verification | MR-5, MR-10 |
 | 9 | Complete Frontend | MR-2, MR-7, MR-9 |
 | 9.1 | Business-Model Correction | MR-1, MR-2, MR-6, MR-9 |
+| 9.2 | Document Content, Previews, and Version History | MR-2, MR-5, MR-6, MR-7, MR-10 |
 | 10 | Deployment Hardening and End-to-End Verification | All (verification) |
 | 11 | Final Submission and Demo | All (evidence) |
 
@@ -346,7 +347,7 @@ feat(audit): implement protected audit trail
 
 ## Phase 8: Security Tests and Threat-Model Verification
 
-**Status:** Complete — approved. Re-audited on 2026-10-21 and verified locally; the suite now has 233 backend tests (46 security cases plus business-model and request-limit tests) and 90% statement coverage. The CI workflow is added but remote execution is pending. The re-audit added pre-authentication upload-size rejection, Unicode format-control filename rejection, checkpoint-monotonicity protection, and missing regressions. A later live private-bucket smoke test passed and the current database is at migration `0003`; migration `0004`, RLS, and deployment remain unapplied/unverified.
+**Status:** Complete — approved. Re-audited on 2026-10-21 and verified locally; the suite now has 233 backend tests (46 security cases plus business-model and request-limit tests) and 90% statement coverage. The CI workflow is added but remote execution is pending. The re-audit added pre-authentication upload-size rejection, Unicode format-control filename rejection, checkpoint-monotonicity protection, and missing regressions. A later live private-bucket smoke test passed and the Supabase database is at migration `0004` (head) with no Alembic drift; RLS and deployment remain unverified.
 
 **Objectives**
 Build a dedicated security test suite proving each threat-model control and cross-user access denial.
@@ -422,7 +423,7 @@ feat: implement complete React frontend
 
 ## Phase 9.1: Business-Model Correction
 
-**Status:** Complete — pending review. Verified locally; no commit or push was created during the correction work.
+**Status:** Complete — committed as `77af2dc`. Verified locally and pushed; migration `0004` is applied to Supabase.
 
 **Objectives**
 Replace the legacy three-role model with the intended two-role account model, make upload available to every user, add administrator account management, and update audit/UI/documentation without changing the audit hash schema.
@@ -450,6 +451,42 @@ Replace the legacy three-role model with the intended two-role account model, ma
 **Suggested Commit Message**
 ```
 fix(auth): correct administrator oversight and document ownership model
+```
+
+---
+
+## Phase 9.2: Document Content, Previews, and Version History
+
+**Status:** Complete — pending final review. Migration `0005` is applied to Supabase; no deployment has been performed.
+
+**Objectives**
+Make READ and EDIT meaningful for document content: authorized previews and downloads, real replacement and plain-text editing, immutable version history, readable audit metadata, and security coverage without weakening the existing READ/EDIT model.
+
+**Deliverables**
+- Migration `0005_document_versions` with immutable version rows, content checks, unique `(document_id, version_number)`/`storage_key`, one-current partial unique index, and backfill of existing documents as version 1/current.
+- Initial uploads create version 1; replacement uploads and plain-text edits create the next current version and retain history.
+- Authorized `GET /preview`, `GET /versions`, `GET /versions/{number}/download`, `PUT /versions`, and `PUT /content` endpoints.
+- Optimistic concurrency using `expected_version_number`, row locking, 409 stale-write rejection, and best-effort cleanup of newly uploaded objects on failure.
+- Text editing limited to UTF-8 `text/plain`; DOCX preview falls back to secure download.
+- Audit actions `DOCUMENT_VERSION_CREATED`, `DOCUMENT_VERSION_DOWNLOAD`, and `DOCUMENT_PREVIEW` with sanitized details only.
+- Frontend preview, version history/download, text editor, replacement form, conflict recovery, and safe structured audit metadata rendering.
+- Soft deletion cleanup for current and historical version objects.
+
+**Acceptance Criteria**
+- READ can preview, view history, and download current/historical versions but cannot edit metadata, replace files, edit text, delete, or manage permissions.
+- EDIT can replace files and edit plain text as well as read/download, but cannot delete, transfer ownership, or manage permissions.
+- Administrators without a grant remain metadata-only and receive 403 for previews/version history.
+- No storage key, presigned URL, file content, credential, token, or secret appears in API metadata or audit details.
+- Stale writes return 409 and never overwrite newer content.
+- Existing authorization, account, audit, ownership, and storage behavior remains intact.
+
+**Tests**
+- 258 backend tests pass with 90% statement coverage, including migration backfill/downgrade, schema constraints, version authorization, stale writes, text editing, storage/audit failures, and historical-object deletion.
+- 15 frontend tests pass across 7 files; lint and production build pass.
+
+**Suggested Commit Message**
+```
+feat(documents): add version history and readable audit details
 ```
 
 ---

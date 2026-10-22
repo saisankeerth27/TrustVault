@@ -11,6 +11,7 @@ from app.models.document_permission import DocumentPermission
 from tests.factories import (
     make_audit_event,
     make_document,
+    make_document_version,
     make_permission,
     make_user,
 )
@@ -142,6 +143,121 @@ def test_regranting_after_revocation_preserves_history(db_session: Session) -> N
     assert active_count == 1
 
     db_session.add(make_permission(document.id, viewer.id, granted_by=owner.id))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"version_number": 0},
+        {"original_filename": "   "},
+        {"file_size": -1},
+        {"storage_key": "https://bucket.example/file.pdf"},
+        {"checksum": "not-a-sha256"},
+    ],
+)
+def test_document_version_content_constraints(
+    db_session: Session,
+    overrides: dict[str, object],
+) -> None:
+    owner = make_user()
+    db_session.add(owner)
+    db_session.flush()
+    document = make_document(owner_id=owner.id)
+    db_session.add(document)
+    db_session.flush()
+
+    db_session.add(
+        make_document_version(
+            document.id,
+            uploaded_by=owner.id,
+            **overrides,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_document_version_numbers_are_unique_per_document(
+    db_session: Session,
+) -> None:
+    owner = make_user()
+    db_session.add(owner)
+    db_session.flush()
+    document = make_document(owner_id=owner.id)
+    db_session.add(document)
+    db_session.flush()
+
+    db_session.add(make_document_version(document.id, uploaded_by=owner.id))
+    db_session.flush()
+    db_session.add(
+        make_document_version(
+            document.id,
+            uploaded_by=owner.id,
+            version_number=1,
+            is_current=False,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_only_one_current_document_version_is_allowed(
+    db_session: Session,
+) -> None:
+    owner = make_user()
+    db_session.add(owner)
+    db_session.flush()
+    document = make_document(owner_id=owner.id)
+    db_session.add(document)
+    db_session.flush()
+
+    db_session.add(make_document_version(document.id, uploaded_by=owner.id))
+    db_session.flush()
+    db_session.add(
+        make_document_version(
+            document.id,
+            uploaded_by=owner.id,
+            version_number=2,
+            is_current=True,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_version_storage_keys_are_unique_across_documents(
+    db_session: Session,
+) -> None:
+    owner = make_user()
+    db_session.add(owner)
+    db_session.flush()
+    first_document = make_document(owner_id=owner.id)
+    second_document = make_document(owner_id=owner.id)
+    db_session.add_all([first_document, second_document])
+    db_session.flush()
+
+    shared_key = "documents/shared/versions/1.pdf"
+    db_session.add(
+        make_document_version(
+            first_document.id,
+            uploaded_by=owner.id,
+            storage_key=shared_key,
+        )
+    )
+    db_session.flush()
+    db_session.add(
+        make_document_version(
+            second_document.id,
+            uploaded_by=owner.id,
+            storage_key=shared_key,
+        )
+    )
     with pytest.raises(IntegrityError):
         db_session.flush()
     db_session.rollback()

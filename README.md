@@ -2,8 +2,8 @@
 
 TrustVault is a secure, multi-tenant document vault that lets organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
-> **Status: Phase 9 — Complete frontend implemented and verified locally (awaiting review).** The Phase 9 commit is `a65046a`; the current working tree adds the business-model correction.
-> Phases 0–9 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, an authenticated document library, owner-managed READ/EDIT sharing with immediate revocation, an append-only hash-chained audit trail with a signed checkpoint and administrator audit dashboard, a 46-case threat-mapped security suite, and the complete React frontend. The corrected model has two account roles, `ADMINISTRATOR` and `USER`: every active user may upload and becomes the owner of that document, while access to other users' documents is granted per document. Administrators manage accounts, inspect all document metadata, and review global audit history without automatically receiving private file content. The frontend includes registration and login, a live access dashboard, a dedicated upload page with validation feedback, search/filter/sort/pagination, document details and metadata editing, owner-only permission management, administrator account management, an administrator audit viewer, desktop sidebar and mobile navigation, loading/error/empty states, and automated component/service tests. Storage behavior is tested with a mocked Supabase Storage adapter; a **live private-bucket smoke test has passed** against the configured Supabase project. There is no live deployment.
+> **Status: Phase 9 — Complete frontend implemented and verified locally (awaiting review).** The Phase 9 and business-model commits are `a65046a` and `77af2dc`; the current working tree adds authorized content previews, plain-text editing, file replacement, and retained version history, with migration `0005` applied to Supabase.
+> Phases 0–9 are implemented: documentation, the frontend/backend scaffold, the verified PostgreSQL schema, database-backed authentication and roles, a private validated upload pipeline, an authenticated document library, owner-managed READ/EDIT sharing with immediate revocation, an append-only hash-chained audit trail with a signed checkpoint and administrator audit dashboard, a 46-case threat-mapped security suite, and the complete React frontend. The corrected model has two account roles, `ADMINISTRATOR` and `USER`: every active user may upload and becomes the owner of that document, while access to other users' documents is granted per document. Administrators manage accounts, inspect all document metadata, and review global audit history without automatically receiving private file content. The frontend includes registration and login, a live access dashboard, a dedicated upload page with validation feedback, search/filter/sort/pagination, document details, authorized PDF/text/image previews, metadata and plain-text editing, replacement-file uploads with retained version history, owner-only permission management, administrator account management, an administrator audit viewer, desktop sidebar and mobile navigation, loading/error/empty states, and automated component/service tests. Administrators remain metadata-only unless explicitly granted READ or EDIT. Storage behavior is tested with a mocked Supabase Storage adapter; a **live private-bucket smoke test has passed** against the configured Supabase project. There is no live deployment.
 
 ## Project Objective
 
@@ -36,7 +36,8 @@ TrustVault/
 │   │   │   ├── 0001_initial_schema.py
 │   │   │   ├── 0002_add_refresh_tokens.py
 │   │   │   ├── 0003_add_audit_chain_index.py
-│   │   │   └── 0004_user_roles_and_login_tracking.py
+│   │   │   ├── 0004_user_roles_and_login_tracking.py
+│   │   │   └── 0005_document_versions.py
 │   │   ├── env.py
 │   │   └── script.py.mako
 │   ├── app/
@@ -229,8 +230,12 @@ Phases 5–6 implement the authenticated document library and named-user sharing
 - `GET /api/v1/documents/shared-with-me` returns only active non-deleted documents with an active grant for the caller, with bounded pagination and allow-listed sorting. Responses use `Cache-Control: no-store`.
 - `GET /api/v1/documents/{id}` returns safe metadata plus the caller's `access_level`: `OWNER`, `EDIT`, `READ`, or `ADMINISTRATOR`. Inaccessible and missing IDs return the same generic 404.
 - `PATCH /api/v1/documents/{id}` permits only `name`, `category`, and `description`. Owners and EDIT recipients may update; READ recipients and metadata-only administrators receive 403. Protected fields are rejected.
-- `GET /api/v1/documents/{id}/download` streams the private object through the backend for owners, READ recipients, and EDIT recipients. It sets a safe attachment filename, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`; it never returns a storage key or presigned URL.
-- `DELETE /api/v1/documents/{id}` is owner-only. It marks `deleted_at`, removes the document from normal reads, then attempts best-effort Supabase Storage cleanup. Metadata is retained for history.
+- `GET /api/v1/documents/{id}/download` streams the current private object through the backend for owners, READ recipients, and EDIT recipients. It sets a safe attachment filename, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`; it never returns a storage key or presigned URL.
+- `GET /api/v1/documents/{id}/preview` streams the current object inline for owners, READ recipients, and EDIT recipients with `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Administrators without a grant receive 403.
+- `GET /api/v1/documents/{id}/versions` returns version metadata and `GET /api/v1/documents/{id}/versions/{version_number}/download` streams a retained version. Neither exposes storage keys.
+- `PUT /api/v1/documents/{id}/versions` accepts a validated multipart replacement for owners and EDIT recipients and requires `expected_version_number`; stale writes return 409 rather than overwriting newer content.
+- `PUT /api/v1/documents/{id}/content` edits UTF-8 `text/plain` content as a new version for owners and EDIT recipients. Other MIME types return 415.
+- `DELETE /api/v1/documents/{id}` is owner-only. It marks `deleted_at`, removes the document from normal reads, then attempts best-effort Supabase Storage cleanup for the current and historical version objects. Metadata is retained for history.
 - `POST /api/v1/documents/upload` is available to every active authenticated user. Ownership is assigned to the uploader, with generated keys, validated content, and a server-computed SHA-256 checksum.
 - Owners manage sharing with `GET/POST /api/v1/documents/{id}/permissions` and `PATCH/DELETE /api/v1/documents/{id}/permissions/{permission_id}`. Grants target an active registered account by normalized email and accept only `READ` or `EDIT`.
 - A same-level grant is idempotent (`200`); a different active level returns `409`. Level changes revoke the existing row and insert a replacement, retaining history. Revocation is idempotent (`204`) and takes effect on the recipient's next request.
@@ -264,7 +269,7 @@ Storage behavior is covered by a mocked adapter, and a **live private-bucket con
 
 ## Database
 
-The schema has five tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Migration `0003` adds the audit chain sequence; `0004` adds `users.last_login_at`, migrates legacy roles, and adds role/status index support. Highlighted decisions:
+The schema has six tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, `document_versions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Migration `0003` adds the audit chain sequence; `0004` adds `users.last_login_at`, migrates legacy roles, and adds role/status index support; `0005` adds immutable content versions and backfills existing documents as version 1. Highlighted decisions:
 
 - Roles and statuses are constrained strings; no native PostgreSQL enums. The current role constraint allows only `ADMINISTRATOR` and `USER`.
 - Emails are stored lowercased and uniquely constrained.
@@ -272,7 +277,8 @@ The schema has five tables — `users`, `refresh_tokens`, `documents`, `document
 - Document permissions keep a full grant/revoke history with a partial unique index allowing only one active grant per user/document pair.
 - Audit events reference users and documents with `ON DELETE SET NULL` so history survives deletion.
 - Audit events use a positive, unique `chain_index` populated in migration `0003`; the application appends the hash chain and does not expose update/delete endpoints.
-- Documents use soft deletion (`deleted_at`).
+- Documents use soft deletion (`deleted_at`). Current-file columns remain denormalized for compatibility, while `document_versions` retains immutable content history with one current version per document.
+- Version uniqueness is enforced on `(document_id, version_number)` and `storage_key`; a partial unique index permits exactly one current version, and `storage_key` is never returned by the API.
 
 Full column, constraint, and index detail, plus RLS planning and connection management, is in [docs/DATABASE.md](docs/DATABASE.md). Migrations are applied only through Alembic; `alembic upgrade head` is a manual deployment step.
 
@@ -339,12 +345,12 @@ cd backend
 pytest
 ```
 
-The suite currently has **233 tests**, including **46 threat-mapped security cases** in `backend/tests/test_security.py`, the business-model acceptance suite in `backend/tests/test_business_model.py`, and focused request-limit tests in `backend/tests/test_request_limits.py`. It verifies:
+The suite currently has **258 tests**, including **46 threat-mapped security cases** in `backend/tests/test_security.py`, the business-model acceptance suite in `backend/tests/test_business_model.py`, the document-content/version suite in `backend/tests/test_document_versions.py`, and focused request-limit tests in `backend/tests/test_request_limits.py`. It verifies:
 
 - Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
 - Database URL normalization and Supabase pooler/SSL detection.
-- Models, tables, columns, indexes, and constraints for all five tables.
-- Migrations `0001`–`0004`: `upgrade head`, `alembic check` for drift, legacy-role data migration, `downgrade base`, and re-`upgrade`.
+- Models, tables, columns, indexes, and constraints for all six tables, including immutable version history and one-current/version uniqueness constraints.
+- Migrations `0001`–`0005`: `upgrade head`, `alembic check` for drift, legacy-role data migration, version backfill/downgrade, `downgrade base`, and re-`upgrade`.
 - Registration, login, refresh rotation, reuse detection, logout, and current-user behavior.
 - Expired, tampered, wrong-issuer/audience/type, disabled-account, and revoked-session rejection.
 - Role authorization helpers and fail-closed unknown-role handling.
@@ -357,7 +363,8 @@ The suite currently has **233 tests**, including **46 threat-mapped security cas
 - Supabase Storage configuration validators, private-bucket enforcement, header handling, and safe storage error mapping without live network access.
 - Document list authorization/scoping, name search with literal wildcard escaping, category/owner/date filters, sorting, pagination boundaries, and invalid query parameters.
 - Owner/shared/metadata-only visibility, owner/EDIT updates, READ/administrator denial, protected-field rejection, and generic 404 IDOR behavior.
-- Streamed download headers, UTF-8/header-injection-safe attachment names, storage-not-found/storage-failure mapping, and READ/EDIT/owner access rules.
+- Streamed download and inline-preview headers, UTF-8/header-injection-safe filenames, storage-not-found/storage-failure mapping, and READ/EDIT/owner access rules.
+- Version listing, current/historical downloads, READ denial of writes, EDIT replacement and text editing, stale-write conflicts, plain-text-only enforcement, history retained across replacement, and deletion cleanup for historical objects.
 - Soft deletion, list/detail exclusion, retained metadata, mocked object cleanup, cleanup-failure logging, and repeat/other-user delete denial.
 - Owner-only permission grant/list/update/revoke, idempotent same-level grants, conflict handling, active/revoked history, retained revocation rows, and revoke-and-regrant behavior.
 - Active excluded (disabled/missing) recipients, endpoint-forged identity rejection, owner self-grant conflict, and authenticated but unauthorized document manipulation.
@@ -375,7 +382,7 @@ Coverage is generated separately from test success:
 pytest --cov=app --cov-report=term-missing
 ```
 
-The verified local full-suite run passed **233 tests with 90% statement coverage**. Coverage is a diagnostic, not proof of security.
+The verified local full-suite run passed **258 tests with 90% statement coverage**. Coverage is a diagnostic, not proof of security.
 
 The GitHub Actions workflow `.github/workflows/backend-tests.yml` runs the full backend suite with coverage on pushes and pull requests that change `backend/**`. Remote CI execution is not verified until the workflow runs on GitHub.
 
@@ -388,7 +395,7 @@ npm test
 npm run build
 ```
 
-All three commands pass. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The 10 automated tests cover safe API error extraction, role-aware navigation, dashboard API-backed counts and failure handling, upload access for normal users, and administrator account oversight/actions. A browser-based walkthrough with live accounts and deployment remain unverified.
+All three commands pass. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The 15 automated tests cover safe API error extraction, role-aware navigation, dashboard API-backed counts and failure handling, upload access for normal users, administrator account oversight/actions, structured audit metadata, READ-only previews/history, plain-text version edits, and replacement uploads. A browser-based walkthrough with live accounts and deployment remain unverified.
 
 ## API Baseline
 
@@ -404,7 +411,11 @@ All three commands pass. The frontend is JavaScript/JSX only; `npm test` runs th
 - **Shared with me:** `GET /api/v1/documents/shared-with-me` → active documents explicitly shared with the caller
 - **Update:** `PATCH /api/v1/documents/{id}` → updates to `name`, `category`, and `description` for owners and EDIT recipients
 - **Download:** `GET /api/v1/documents/{id}/download` → private object stream for owners, READ recipients, and EDIT recipients
-- **Delete:** `DELETE /api/v1/documents/{id}` → owner-only soft deletion and best-effort object cleanup; returns 204
+- **Preview:** `GET /api/v1/documents/{id}/preview` → authorized inline content for owners, READ, and EDIT recipients
+- **Versions:** `GET /api/v1/documents/{id}/versions` and `GET /api/v1/documents/{id}/versions/{version_number}/download` → safe history metadata and retained-version downloads
+- **Replace version:** `PUT /api/v1/documents/{id}/versions` → owner/EDIT multipart replacement with optimistic version check
+- **Edit text:** `PUT /api/v1/documents/{id}/content` → owner/EDIT plain-text edit that creates a new version
+- **Delete:** `DELETE /api/v1/documents/{id}` → owner-only soft deletion and best-effort cleanup of every version object; returns 204
 - **List permissions:** `GET /api/v1/documents/{id}/permissions` → owner-only active and revoked grant history
 - **Grant permission:** `POST /api/v1/documents/{id}/permissions` → owner-only `READ`/`EDIT` grant; returns 201, or 200 for an idempotent same-level grant
 - **Update permission:** `PATCH /api/v1/documents/{id}/permissions/{permission_id}` → revoke-and-regrant level change with retained history
@@ -424,7 +435,7 @@ There are no audit mutation endpoints.
 
 ## Deployment Preparation
 
-No deployment has been performed or verified, and no migration has been applied to Supabase.
+No deployment has been performed or verified. Migrations through `0005` are applied to Supabase, and `alembic check` reports no schema drift.
 
 ### Vercel (frontend)
 
@@ -473,7 +484,8 @@ See [THREATS.md](THREATS.md) for the full threat model.
 - Upload-to-database consistency is compensating, not transactional: a failed metadata commit triggers best-effort object deletion, which could itself fail.
 - Soft deletion excludes metadata from normal reads but object cleanup occurs after commit; a cleanup failure can leave a private orphan object for later reconciliation.
 - RLS is not enabled; the backend uses a single privileged database role.
-- Migrations through `0004` have not been applied to Supabase, and no deployment has been verified.
+- Migrations through `0005` are applied to Supabase, and `alembic check` reports no pending operations; no deployment has been verified.
+- Version objects are immutable in normal application flows, but the backend has no object-lock or retention policy; a privileged storage operator could still alter or delete private content.
 - Authentication rate limiting is in-memory and per process; a multi-instance deployment needs a shared store.
 - There is no MFA, account-lockout policy, or idle-timeout mechanism.
 - Cross-site refresh cookies require Secure/SameSite=None and may be affected by browser third-party cookie policies; this is untested in production.
@@ -495,7 +507,8 @@ See [THREATS.md](THREATS.md) for the full threat model.
 | 7 — Audit Trail and Administrator Activity | Complete |
 | 8 — Security Tests and Threat-Model Verification | Complete |
 | 9 — Complete Frontend | Complete — awaiting review |
-| 9.1 — Business-Model Correction | Complete — pending review |
+| 9.1 — Business-Model Correction | Complete — committed as `77af2dc` |
+| 9.2 — Document Content, Previews, and Version History | Complete — pending review |
 | 10 — Deployment Hardening and End-to-End Verification | Not started |
 | 11 — Final Submission and Demo | Not started |
 

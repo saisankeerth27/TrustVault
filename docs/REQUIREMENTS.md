@@ -201,7 +201,7 @@ Administrators can also search accounts, inspect last-login/owned-document count
 - **FA-17:** Partially met. Querying, filtering, and pagination are implemented; CSV/JSON export is not.
 - **MR-9 summaries:** Aggregate document/user activity summaries are not implemented. Administrators can derive detail views through filters and the existing permission history.
 - **Administrator UI:** `/admin/audit` provides filters, pagination, event details, and an integrity panel. Owner-scoped audit views are intentionally not part of the Phase 7 policy.
-- **Not yet met / unverified:** independent immutable checkpoint storage and scheduled publication, audit export and aggregate summaries, deployment, RLS, and malware scanning. Live private-bucket storage and the current Supabase migration were verified locally.
+- **Not yet met / unverified:** independent immutable checkpoint storage and scheduled publication, audit export and aggregate summaries, deployment, RLS, and malware scanning. Live private-bucket storage passed its smoke test, and the Supabase database is at migration `0005` with no Alembic drift.
 
 ### Phase 8 Implementation Status (Verified Locally)
 
@@ -212,8 +212,8 @@ Administrators can also search accounts, inspect last-login/owned-document count
 - **Upload/path attacks:** Executable, content-mismatched, missing-content-type, empty, malformed-multipart, and malformed-document uploads are rejected before storage; traversal/absolute names return 400; control and Unicode format-control characters (including bidi overrides) cannot reach server-generated keys; DOCX member/uncompressed-size limits are tested.
 - **Session/rate/DoS:** Expired and tampered access tokens return 401, logout and disabled accounts invalidate protected document/audit access, brute-force login attempts return 429 with `Retry-After`, pre-authentication oversized uploads return 413, uploads without `Content-Length` return 411, and invalid/duplicate lengths return 400.
 - **Audit integrity:** Checkpoint creation refuses invalid or newer checkpoint replacement; forged administrator claims cannot read audit data; tail deletion after the latest checkpoint remains outside checkpoint detection.
-- **Verification:** 233 backend tests pass locally with 90% statement coverage. A GitHub Actions workflow runs the suite with coverage, but remote CI execution has not yet been verified.
-- **Not yet met / unverified:** RLS policy tests (RLS remains disabled; application authorization is the primary boundary), malware scanning, and deployment. A live private-bucket storage smoke test passed, and the current Supabase database is at migration `0003`.
+- **Verification:** the current suite has 258 backend tests passing locally with 90% statement coverage. A GitHub Actions workflow runs the suite with coverage, but remote CI execution has not yet been verified.
+- **Not yet met / unverified:** RLS policy tests (RLS remains disabled; application authorization is the primary boundary), malware scanning, and deployment. A live private-bucket storage smoke test passed, and the Supabase database is at migration `0005` with no Alembic drift.
 
 ### Phase 9 Implementation Status (Verified Locally)
 
@@ -221,8 +221,8 @@ Administrators can also search accounts, inspect last-login/owned-document count
 - **MR-9:** Administrators can reach the role-gated administrator area, account management, metadata/permission oversight, and audit viewer, including event filters, pagination, denied indicators, metadata details, and hash-chain/signed-checkpoint integrity verification.
 - **MR-3 / MR-4:** Owners can grant, update, and revoke READ/EDIT access through the sharing page and review active grants and revoked history. Permission changes refresh immediately after the backend confirms them; no administrator override is presented.
 - **UI quality:** Desktop uses a sidebar workspace shell and mobile uses labelled scrollable navigation. Forms validate input and surface bounded server error details. Major routes provide loading, error, empty, success, confirmation, forbidden, and not-found states.
-- **Verification:** `npm run lint` reports 0 warnings/errors, `npm test` passes 10 Vitest/React Testing Library tests, and `npm run build` succeeds with the existing chunk-size warning.
-- **Not yet met / unverified:** A browser-based manual walkthrough with live accounts remains outstanding. The live backend health, private Supabase Storage smoke test, and current Supabase migration were verified locally; RLS, malware scanning, and deployment remain unverified.
+- **Verification:** `npm run lint` reports 0 warnings/errors, `npm test` passes 15 Vitest/React Testing Library tests, and `npm run build` succeeds with the existing chunk-size warning.
+- **Not yet met / unverified:** A browser-based manual walkthrough with live accounts remains outstanding. Live backend health and the private Supabase Storage smoke test passed, and the Supabase database is at migration `0005` with no Alembic drift; RLS, malware scanning, and deployment remain unverified.
 
 ### Business-Model Correction Status (Verified Locally)
 
@@ -230,7 +230,18 @@ Administrators can also search accounts, inspect last-login/owned-document count
 - **MR-2:** Upload is available to every active user; ownership is assigned from the authenticated session.
 - **MR-9:** Administrators can search/filter accounts, inspect detail/last login/owned-document counts, change roles or status, inspect document permission history, and review targeted audit events. Self role/status changes and removal of the last active administrator are rejected. Disablement and role changes revoke target sessions.
 - **MR-6:** Account status/role changes audited with `target_user_id` and `resource_type` without changing the audit hash payload schema. Audit queries can filter target user and resource type.
-- **Verification:** 233 backend tests and 10 frontend tests pass; frontend lint and production build pass.
+- **Verification:** 233 backend tests and 10 frontend tests passed at the business-model commit `77af2dc`; frontend lint and production build pass.
+
+### Document Content, Previews, and Version History (Verified Locally)
+
+- **MR-2 / MR-7:** Owners, READ recipients, and EDIT recipients can preview supported PDF/text/image content through the authenticated backend. DOCX documents fall back to a secure download. Metadata-only administrators receive 403 for previews and version history.
+- **MR-2 versioning:** Every upload creates version 1. Owners and EDIT recipients can replace a file or edit UTF-8 plain text, creating an immutable new version while retaining all earlier versions. READ recipients cannot modify metadata, content, or versions.
+- **MR-2 concurrency:** Replacement and text editing require `expected_version_number`. A stale write returns 409 and never silently overwrites newer content.
+- **FA-5 / FA-7:** Current and historical objects are streamed only through authorized backend responses; no storage key or presigned URL is exposed. Soft deletion attempts cleanup of every version object.
+- **MR-6:** Preview, version download, and version creation produce sanitized audit events. Events contain version numbers, sizes, MIME type, source, and change summary - never file contents, credentials, or tokens.
+- **Frontend:** Document details integrate preview, version history, historical downloads, text editing, replacement upload, current-version tracking, and 409 conflict recovery. The administrator audit viewer renders structured metadata safely with no raw HTML.
+- **Verification:** 258 backend tests pass with 90% statement coverage, including `0005` backfill/downgrade, version constraints, READ denial, EDIT replacement/text editing, stale writes, storage and audit failures, and historical-object deletion. Frontend: 15 tests across 7 files, lint clean, production build successful.
+- **Not yet met / unverified:** Manual browser validation of real PDFs and DOCX, live deployment, and independent container-level object immutability remain outstanding. Supabase is at migration `0005` with no Alembic drift.
 
 ---
 
@@ -250,8 +261,11 @@ Administrators can also search accounts, inspect last-login/owned-document count
 
 ### Permissions
 - FA-9: A newly uploaded document's content is accessible only to the owner; administrators may see metadata but require an explicit grant for content.
-- FA-10: Granting READ allows reading and downloading but not editing, deleting, re-sharing, or managing permissions.
-- FA-11: Granting EDIT allows reading, downloading, and editing but not deleting, re-sharing, or managing permissions.
+- FA-10: Granting READ allows reading, previewing, downloading, and viewing version history but not editing, replacing content, deleting, re-sharing, or managing permissions.
+- FA-11: Granting EDIT allows reading, previewing, downloading, editing metadata or plain text, and uploading replacement versions but not deleting, re-sharing, or managing permissions.
+- FA-18: Every replacement or plain-text edit creates a new immutable version; current and historical downloads are authorized by the backend and never expose storage keys.
+- FA-19: Replacement requests must include the expected current version; stale writes return 409 without overwriting newer content.
+- FA-20: Preview and version operations are audited without recording file contents, passwords, tokens, or secrets.
 - FA-12: Revocation takes effect immediately.
 - FA-13: Permission changes are recorded in the audit trail. The permission history table also retains grant/revoke rows.
 

@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2–7 plus the business-model correction and used by the authentication, upload, document-management, permission, administrator, and audit pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py`, `0002_add_refresh_tokens.py`, `0003_add_audit_chain_index.py`, and `0004_user_roles_and_login_tracking.py`.
+This document describes the PostgreSQL schema implemented across Phases 2–7 plus the business-model correction and content-versioning work and used by the authentication, upload, document-management, permission, administrator, audit, preview, and version-history pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py`, `0002_add_refresh_tokens.py`, `0003_add_audit_chain_index.py`, `0004_user_roles_and_login_tracking.py`, and `0005_document_versions.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, administrator account management, and the append-only hash-chained audit writer exist. Migrations through `0004` have **not** been applied to the Supabase project.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, administrator account management, immutable document content versions, and the append-only hash-chained audit writer exist. Migrations through `0005` are applied to the Supabase project, and `alembic check` reports no pending operations.
 
 ## Entity Relationships
 
@@ -13,6 +13,8 @@ erDiagram
     users ||--o{ document_permissions : receives
     users ||--o{ document_permissions : grants
     documents ||--o{ document_permissions : has
+    documents ||--o{ document_versions : retains
+    users ||--o{ document_versions : uploads
     users ||--o{ audit_events : acts
     documents ||--o{ audit_events : targets
 
@@ -52,6 +54,21 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
         timestamptz deleted_at
+    }
+
+    document_versions {
+        uuid id PK
+        uuid document_id FK
+        integer version_number
+        varchar storage_key UK
+        varchar original_filename
+        varchar mime_type
+        bigint file_size
+        varchar checksum
+        uuid uploaded_by FK
+        text change_summary
+        boolean is_current
+        timestamptz created_at
     }
 
     document_permissions {
@@ -136,7 +153,7 @@ erDiagram
 | `created_at` / `updated_at` | TIMESTAMPTZ | Not null, defaults `now()` |
 | `deleted_at` | TIMESTAMPTZ | Nullable; soft-delete marker |
 
-**Deletion strategy.** `owner_id` uses `ON DELETE RESTRICT`, so an owner cannot be deleted while documents reference them; ownership must be transferred or documents removed first. Phase 5 uses soft deletion (`deleted_at`) so metadata and history survive and excludes soft-deleted rows from list/detail/update/download/delete. It then attempts best-effort Supabase Storage object cleanup after the database commit. Hard deletion remains out of scope; permission rows cascade only if a document is later hard-deleted.
+**Deletion strategy.** `owner_id` uses `ON DELETE RESTRICT`, so an owner cannot be deleted while documents reference them; ownership must be transferred or documents removed first. Phase 5 uses soft deletion (`deleted_at`) so metadata and history survive and excludes soft-deleted rows from list/detail/update/download/delete. It then attempts best-effort Supabase Storage object cleanup for the current object and every historical version storage key after the database commit. Hard deletion remains out of scope; permission and version rows cascade only if a document is later hard-deleted.
 
 **Storage keys are internal.** The `storage_key` must begin with `documents/` and must not contain `://`, so a backend bug cannot accidentally persist a public URL in the column that identifies a private object. Phase 4 writes generated keys of the form `documents/{owner_uuid}/{random_uuid}.{ext}` and never uses the user filename as the key.
 
@@ -159,6 +176,31 @@ erDiagram
 The trigram index requires the `pg_trgm` extension, created by the migration before the index.
 
 **Why `category` is a column and not a table.** Categories have not required independent identity, ownership, or lifecycle, so a nullable string keeps the schema small. Phase 5 continues to treat it as free-form metadata with case-insensitive filtering; promotion to a lookup table remains a future decision.
+
+**Current-file denormalization.** The `storage_key`, `mime_type`, `file_size`, and `checksum` columns on `documents` continue to describe the current content for compatibility with existing list/detail/download queries. Replacement transactions update them and the current `document_versions` row together; history lives only in `document_versions`.
+
+## `document_versions`
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | UUID | Primary key, default `gen_random_uuid()` |
+| `document_id` | UUID | Not null, FK `documents.id` `ON DELETE CASCADE` |
+| `version_number` | INTEGER | Not null, `>= 1`, unique per document |
+| `storage_key` | VARCHAR(512) | Not null, unique, `LIKE 'documents/%'`, not a URL |
+| `original_filename` | VARCHAR(255) | Not null, non-blank |
+| `mime_type` | VARCHAR(255) | Not null |
+| `file_size` | BIGINT | Not null, `>= 0` |
+| `checksum` | VARCHAR(64) | Not null, SHA-256 hex `^[0-9a-f]{64}$` |
+| `uploaded_by` | UUID | Nullable, FK `users.id` `ON DELETE SET NULL` |
+| `change_summary` | TEXT | Nullable; bounded by the API to 500 characters |
+| `is_current` | BOOLEAN | Not null, default `false`; exactly one current row per document |
+| `created_at` | TIMESTAMPTZ | Not null, default `now()` |
+
+**Immutable content history.** Each replacement or plain-text edit inserts a new row and flips the previous current row to `is_current = false`. `UNIQUE (document_id, version_number)` prevents duplicate sequence numbers, `UNIQUE (storage_key)` prevents object aliasing, and the partial unique index `uq_document_versions_current` on `(document_id)` `WHERE is_current` enforces at most one current version even under concurrency. `document_id` cascades on hard deletion; `uploaded_by` uses `SET NULL` so version history survives account deletion.
+
+**Initial backfill.** Migration `0005` inserts version 1/current for every existing document, using the document's original filename (`documents.name`), current current-file columns, owner as uploader, `documents.created_at`, and the summary `Initial upload`. Downgrading removes `document_versions` without changing the denormalized current-file columns.
+
+**Indexes:** `ix_document_versions_document_id`, `ix_document_versions_uploaded_by`, `ix_document_versions_created_at`, the partial unique `uq_document_versions_current`, and the two unique constraints above. Version listings are ordered newest-first by `version_number`.
 
 ## `document_permissions`
 
@@ -228,7 +270,8 @@ Until then, TrustVault must not be described as having database-enforced access 
 - Phase 3 migration: `backend/alembic/versions/0002_add_refresh_tokens.py` (revision `0002`) adds `refresh_tokens` and its indexes.
 - Phase 7 migration: `backend/alembic/versions/0003_add_audit_chain_index.py` (revision `0003`) adds `chain_index`, backfills existing audit rows, then adds the positive check and unique index.
 - Business-model migration: `backend/alembic/versions/0004_user_roles_and_login_tracking.py` (revision `0004`) adds nullable `last_login_at`, migrates legacy roles, rebuilds `ck_users_role`, and adds role/status/created-at indexes.
-- `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`; `0003.downgrade()` drops the chain index, check, and column; `0004.downgrade()` maps users to `DOCUMENT_OWNER`, restores the legacy role constraint, drops the new indexes, and removes `last_login_at`.
+- Content-version migration: `backend/alembic/versions/0005_document_versions.py` (revision `0005`) creates `document_versions`, its checks, unique constraints, and indexes, then backfills every existing document as version 1/current.
+- `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`; `0003.downgrade()` drops the chain index, check, and column; `0004.downgrade()` maps users to `DOCUMENT_OWNER`, restores the legacy role constraint, drops the new indexes, and removes `last_login_at`; `0005.downgrade()` drops the version indexes and table while retaining current-file metadata on `documents`.
 
 Common commands (run from `backend/` with `DATABASE_URL` set):
 
@@ -261,7 +304,7 @@ Details:
 
 ## Testing
 
-Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management/audit tests, one for the migration upgrade/check/downgrade/re-upgrade test. The full suite has 233 tests and never reads `DATABASE_URL` or contacts Supabase; storage is faked.
+Database tests run against an ephemeral PostgreSQL instance started by the `embedded-postgres` package (`backend/tests/conftest.py`). Two disposable databases are created per test session: one migrated for model/constraint/auth/upload/document-management/audit/version tests, one for the migration upgrade/check/downgrade/re-upgrade and `0005` backfill test. The full suite has 258 tests and never reads `DATABASE_URL` or contacts Supabase; storage is faked.
 
 Run the suite:
 
@@ -273,4 +316,4 @@ pytest
 
 ## Applying to Supabase
 
-The migrations have **not** been applied to the Supabase project. To apply them, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.
+Migrations through `0005` are applied to the Supabase project, and `alembic check` reports no drift. To apply future migrations, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.

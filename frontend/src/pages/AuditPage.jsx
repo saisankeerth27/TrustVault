@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react'
+import { AuditEventDetails } from '@/components/AuditEventDetails'
 import { ForbiddenState } from '@/components/ForbiddenState'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
@@ -766,14 +767,7 @@ export function AuditPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        <details>
-                          <summary className="cursor-pointer text-xs font-medium text-primary">
-                            View metadata
-                          </summary>
-                          <pre className="mt-2 max-h-64 max-w-72 overflow-auto rounded-md bg-muted/60 p-3 text-xs whitespace-pre-wrap break-all">
-                            {JSON.stringify(event.details, null, 2)}
-                          </pre>
-                        </details>
+                        <AuditEventDetails details={event.details} />
                       </td>
                     </tr>
                   ))}

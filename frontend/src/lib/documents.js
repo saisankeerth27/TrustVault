@@ -75,7 +75,8 @@ export const ACCESS_LEVEL_META = {
   EDIT: {
     label: 'Can edit',
     shortLabel: 'Edit',
-    description: 'Can view, download, and update document metadata.',
+    description:
+      'Can view, download, update metadata, and create new document versions.',
     tone: 'bg-sky-50 text-sky-800 ring-sky-200',
   },
   READ: {
@@ -114,6 +115,28 @@ export function canDeleteDocument(documentRecord) {
 
 export function canManageDocumentPermissions(documentRecord) {
   return accessLevelOf(documentRecord) === 'OWNER'
+}
+
+export function canReplaceDocumentFile(documentRecord) {
+  return canEditDocument(documentRecord)
+}
+
+export function previewKindOf(documentRecord) {
+  const mimeType = documentRecord?.mime_type || ''
+  if (mimeType === 'application/pdf') {
+    return 'pdf'
+  }
+  if (mimeType === 'image/png' || mimeType === 'image/jpeg') {
+    return 'image'
+  }
+  if (mimeType === 'text/plain') {
+    return 'text'
+  }
+  return 'unsupported'
+}
+
+export function canEditTextContent(documentRecord) {
+  return canReplaceDocumentFile(documentRecord) && previewKindOf(documentRecord) === 'text'
 }
 
 export function categoryChoices(currentCategory) {

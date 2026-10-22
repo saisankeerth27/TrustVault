@@ -23,6 +23,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.document_permission import DocumentPermission
+    from app.models.document_version import DocumentVersion
     from app.models.user import User
 
 
@@ -100,6 +101,11 @@ class Document(Base):
         foreign_keys=[owner_id],
     )
     permissions: Mapped[list[DocumentPermission]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    versions: Mapped[list[DocumentVersion]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
         passive_deletes=True,

@@ -36,6 +36,63 @@ class DocumentListResponse(BaseModel):
     has_previous: bool
 
 
+class DocumentVersionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    document_id: UUID
+    version_number: int
+    original_filename: str
+    mime_type: str
+    file_size: int
+    checksum: str
+    uploaded_by: UUID | None
+    uploader_name: str
+    change_summary: str | None
+    is_current: bool
+    created_at: datetime
+
+
+class DocumentVersionListResponse(BaseModel):
+    items: list[DocumentVersionResponse]
+    total: int
+    current_version_number: int | None
+
+
+class DocumentVersionReplacementResponse(BaseModel):
+    document: DocumentResponse
+    version: DocumentVersionResponse
+
+
+class DocumentContentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(max_length=10_000_000)
+    expected_version_number: int = Field(ge=1)
+    change_summary: str | None = Field(default=None, max_length=500)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        if not value:
+            raise ValueError("Document content must not be empty.")
+        if "\x00" in value:
+            raise ValueError("Document content contains invalid characters.")
+        return value
+
+    @field_validator("change_summary", mode="before")
+    @classmethod
+    def normalize_change_summary(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if "\x00" in stripped:
+            raise ValueError("Change summary contains invalid characters.")
+        return stripped or None
+
+
 class DocumentUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

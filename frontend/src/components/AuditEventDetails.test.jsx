@@ -1,0 +1,64 @@
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, expect, it } from 'vitest'
+import { AuditEventDetails } from '@/components/AuditEventDetails'
+import { auditEventSummary, auditFieldLabel } from '@/lib/audit'
+
+const details = {
+  actor_name: 'Avery Admin',
+  changed_fields: ['name', 'description'],
+  change_summary: '<img src=x onerror=alert(1)>',
+  file_size: 2048,
+  mime_type: 'application/pdf',
+  previous_version_number: 1,
+  resource_type: 'DOCUMENT',
+  source: 'UPLOAD',
+  version_number: 2,
+  metadata: {
+    recipient_id: '11111111-1111-4111-8111-111111111111',
+  },
+}
+
+describe('AuditEventDetails', () => {
+  it('renders structured, readable event metadata without HTML injection', async () => {
+    const interaction = userEvent.setup()
+    const { container } = render(<AuditEventDetails details={details} />)
+
+    await interaction.click(screen.getByText('View metadata'))
+
+    expect(
+      screen.getByText('Version 2 replaced version 1'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Version')).toBeInTheDocument()
+    expect(screen.getByText('File size')).toBeInTheDocument()
+    expect(screen.getByText('2.0 KB (2,048 bytes)')).toBeInTheDocument()
+    expect(screen.getByText('Changed fields')).toBeInTheDocument()
+    expect(screen.getByText('Changed name, description')).toBeInTheDocument()
+    expect(screen.getByText('description')).toBeInTheDocument()
+    expect(screen.getByText('Recipient ID')).toBeInTheDocument()
+    expect(
+      screen.getByText('11111111-1111-4111-8111-111111111111'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getAllByText('<img src=x onerror=alert(1)>').length,
+    ).toBeGreaterThan(0)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('Raw JSON')).toBeInTheDocument()
+  })
+
+  it('formats labels and summaries for compact audit rows', () => {
+    expect(auditFieldLabel('previous_version_number')).toBe('Previous version')
+    expect(auditFieldLabel('unmapped_field')).toBe('Unmapped Field')
+    expect(
+      auditEventSummary({
+        permission: 'READ',
+        reason: 'insufficient_access',
+        changed_fields: ['category'],
+      }),
+    ).toEqual([
+      'Changed category',
+      'Permission: read',
+      'Reason: insufficient access',
+    ])
+  })
+})

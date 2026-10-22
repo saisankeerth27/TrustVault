@@ -244,6 +244,18 @@ graph TB
 
 ---
 
+### 4.16 Unauthorized Content Preview, Versioning, and Replacement
+
+**Threat:** A user without ownership or a READ/EDIT grant attempts to preview, list history, download a historical version, replace content, or edit plain text. A malicious EDIT recipient attempts to overwrite a newer version or abuse preview/history to obtain raw storage access. A metadata-only administrator expects content access from role alone.
+
+**Mitigation:** Preview, history, current/historical download, replacement, and text editing all use the centralized document access policy. READ may preview, view history, and download; EDIT adds replacement and text editing; administrators remain metadata-only unless explicitly granted. Replacement and text edits require `expected_version_number`, lock the document, and return 409 rather than overwrite newer content. Files are streamed only by the backend; storage keys and presigned URLs are never exposed. Newly uploaded objects are deleted best-effort if the transaction fails. Audit details record version numbers and sanitized metadata but never content, credentials, tokens, or secrets.
+
+**Verification:** `backend/tests/test_document_versions.py` covers READ denial of writes, admin denial, authorized replacement/text edits, stale 409, unsupported MIME 415, missing resources, storage/audit failures, and cleanup. `frontend/src/pages/DocumentDetailsPage.test.jsx` and `AuditEventDetails.test.jsx` cover READ preview/history, EDIT replacement/text editing, and safe structured audit rendering.
+
+**Residual Risk:** Low–Medium. Version rows are immutable in normal application flows, but there is no object-lock or WORM retention, so privileged storage operators can alter objects. A manual real-browser PDF/DOCX check remains outstanding.
+
+---
+
 ## 5. Security Principles
 
 1. **Backend is authoritative.** Frontend visibility is never authorization.
@@ -265,7 +277,8 @@ graph TB
 | Malware in uploaded files | Medium | Add antivirus scanning; validation is not scanning |
 | Live Supabase Storage bucket policy is checked in the current environment | Medium | Verify private policy, least-privilege keys, and upload/delete behavior before deployment |
 | Upload object and metadata are not transactional | Low–Medium | Best-effort cleanup only; monitor orphans and add reconciliation |
-| Soft-deleted metadata can outlive a failed object cleanup | Low–Medium | Cleanup is best-effort after commit; log and reconcile private orphans |
+| Soft-deleted metadata and historical version objects can outlive a failed cleanup | Low–Medium | Cleanup is best-effort after commit; log and reconcile private orphans |
+| Historical versions are immutable only at the application layer | Low–Medium | Version rows cannot be updated through the API, but privileged storage/database operators can alter objects; add object-lock/WORM retention if required |
 | Audit summaries/export and owner audit views absent | Low | Global admin detail filters work; add aggregate/export features only if required |
 | Stolen access token valid until expiry | Medium | Short TTL; consider token binding |
 | Credential stuffing without MFA | Medium | Evaluate MFA |
@@ -364,7 +377,7 @@ These notes record the authorization controls actually implemented for named-use
 
 ## 13. Phase 7 Implementation Notes (Verified Locally with Mocked Storage)
 
-These notes record the audit controls actually implemented. Live private-bucket storage and the current Supabase migration state were verified locally; deployment remains unverified.
+These notes record the audit controls actually implemented. Live private-bucket storage passed its smoke test, and Supabase is at migration `0004` with no Alembic drift; deployment remains unverified.
 
 - **Append-only writer:** `app/services/audit.py` sanitizes metadata and appends events under an advisory transaction lock with contiguous `chain_index`, `previous_hash`, and canonical SHA-256 `event_hash`.
 - **Transactional semantics:** Mandatory audit events for successful state changes share the protected transaction; audit failure rolls back the change and returns generic 500. Denial events are best-effort and cannot change the 403/404 outcome.
@@ -399,3 +412,16 @@ The dedicated security suite is `backend/tests/test_security.py`; it contains 46
 | 4.14 Denial of service | `test_threat_4_14_oversized_upload_is_rejected_before_storage`, `test_threat_4_14_oversized_upload_is_rejected_before_authentication`, `test_threat_4_14_upload_without_content_length_is_rejected`, and `test_request_limits.py` missing/invalid/duplicate/oversized header tests; DOCX expansion limits are unit-tested |
 
 **Limitations:** The suite verifies implemented controls, not the absence of vulnerabilities. RLS, malware scanning, shared multi-instance rate limiting, MFA, and independent checkpoint storage remain unimplemented or unverified; deployment and a full browser walkthrough remain unverified. Events appended after the latest checkpoint and then deleted cannot be detected by that checkpoint. Checkpoint creation is not locked against concurrent writers; run it as a single scheduled job.
+
+---
+
+## 15. Document Content and Version-History Verification Notes (Verified Locally)
+
+This phase added authorized previews, replacement uploads, plain-text editing, immutable version metadata, and safe structured audit rendering. Supabase is at migration `0005` with no Alembic drift; no deployment was performed.
+
+- **Authorization:** Preview, version listing, historical/current downloads, replacement, and text editing use the centralized access policy. READ may preview/list/download history; EDIT adds replacement and text editing. Administrators without a grant receive 403 for content operations.
+- **Concurrency and cleanup:** Replacement and text editing require the expected current version, lock the document row, recheck the pointer, and return 409 on stale writes. Newly uploaded objects are best-effort deleted if the transaction or audit write fails. Soft deletion attempts cleanup of current and historical objects.
+- **Data exposure:** Responses stream content only through the backend with `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Storage keys, presigned URLs, file contents, and secrets are excluded from metadata and audit details.
+- **Audit UI:** Administrator audit details are rendered as structured text and nested metadata without `dangerouslySetInnerHTML`; long values wrap and raw JSON is optional.
+- **Verification:** 258 backend tests pass with 90% statement coverage, including migration backfill/downgrade, version constraints, READ/admin denial, EDIT replacement/text editing, stale writes, storage/audit failures, and historical-object cleanup. Frontend: 15 tests across 7 files, lint clean, and production build successful.
+- **Residual risk:** Real-browser PDF iframe and DOCX fallback behavior still require manual verification. Version immutability is enforced by application behavior and database rows, not object-lock/WORM storage policy.

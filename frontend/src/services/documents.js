@@ -66,6 +66,103 @@ export async function downloadDocument(documentId, fallbackName) {
   }
 }
 
+export async function listDocumentVersions(documentId, signal) {
+  const { data } = await apiClient.get(
+    `/api/v1/documents/${documentId}/versions`,
+    { signal },
+  )
+  return data
+}
+
+export async function downloadDocumentVersion(
+  documentId,
+  versionNumber,
+  fallbackName,
+  signal,
+) {
+  const response = await apiClient.get(
+    `/api/v1/documents/${documentId}/versions/${versionNumber}/download`,
+    {
+      responseType: 'blob',
+      timeout: 60_000,
+      headers: { Accept: 'application/octet-stream' },
+      signal,
+    },
+  )
+
+  return {
+    blob: response.data,
+    filename: filenameFromDisposition(
+      response.headers['content-disposition'],
+      fallbackName || `document-version-${versionNumber}`,
+    ),
+  }
+}
+
+export async function previewDocument(documentId, signal) {
+  const response = await apiClient.get(
+    `/api/v1/documents/${documentId}/preview`,
+    {
+      responseType: 'blob',
+      timeout: 60_000,
+      signal,
+    },
+  )
+  return {
+    blob: response.data,
+    contentType: response.headers['content-type'] || '',
+  }
+}
+
+export async function createDocumentVersion(
+  documentId,
+  file,
+  expectedVersionNumber,
+  changeSummary,
+  onProgress,
+) {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('expected_version_number', String(expectedVersionNumber))
+
+  const summary = changeSummary?.trim()
+  if (summary) {
+    formData.append('change_summary', summary)
+  }
+
+  const { data } = await apiClient.put(
+    `/api/v1/documents/${documentId}/versions`,
+    formData,
+    {
+      timeout: 60_000,
+      onUploadProgress: (event) => {
+        if (onProgress && event.total) {
+          onProgress(Math.min(100, Math.round((event.loaded * 100) / event.total)))
+        }
+      },
+    },
+  )
+  return data
+}
+
+export async function updateDocumentTextContent(
+  documentId,
+  content,
+  expectedVersionNumber,
+  changeSummary,
+) {
+  const { data } = await apiClient.put(
+    `/api/v1/documents/${documentId}/content`,
+    {
+      content,
+      expected_version_number: expectedVersionNumber,
+      change_summary: changeSummary?.trim() || null,
+    },
+    { timeout: 60_000 },
+  )
+  return data
+}
+
 export async function uploadDocument(file, metadata, onProgress) {
   const formData = new FormData()
   formData.append('file', file)

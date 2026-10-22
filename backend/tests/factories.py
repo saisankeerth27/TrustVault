@@ -6,6 +6,7 @@ from uuid import uuid4
 from app.models.audit_event import AuditEvent
 from app.models.document import Document
 from app.models.document_permission import DocumentPermission
+from app.models.document_version import DocumentVersion
 from app.models.enums import (
     AuditAction,
     AuditOutcome,
@@ -53,6 +54,29 @@ def document_kwargs(owner_id: object, **overrides: object) -> dict[str, object]:
 
 def make_document(owner_id: object, **overrides: object) -> Document:
     return Document(**document_kwargs(owner_id, **overrides))
+
+
+def make_document_version(
+    document_id: object,
+    *,
+    uploaded_by: object | None = None,
+    **overrides: object,
+) -> DocumentVersion:
+    suffix = uuid4().hex
+    values: dict[str, object] = {
+        "document_id": document_id,
+        "version_number": 1,
+        "storage_key": f"documents/{suffix}/versions/1.pdf",
+        "original_filename": "file.pdf",
+        "mime_type": "application/pdf",
+        "file_size": 1024,
+        "checksum": "c" * 64,
+        "uploaded_by": uploaded_by,
+        "change_summary": "Initial upload",
+        "is_current": True,
+    }
+    values.update(overrides)
+    return DocumentVersion(**values)
 
 
 def make_permission(

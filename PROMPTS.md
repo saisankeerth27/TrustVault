@@ -456,7 +456,7 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Backend full suite: **233 passed**, 90% statement coverage (one Starlette/httpx deprecation warning).
   - Migration `0004` explicit legacy-role upgrade/downgrade test passed, including `last_login_at`, role mapping, and indexes.
   - Frontend: `npm test` **10 passed across 5 files**; `npm run lint` 0 warnings/errors; `npm run build` succeeded with the existing chunk-size warning.
-  - OpenAPI/application description updated; no live deployment or Supabase migration was performed.
+  - OpenAPI/application description updated; no live deployment was performed. Migration `0004` was applied to Supabase after the commit.
 - **Issues discovered:**
   - The business-model test initially had one upload `503` because its fixture lacked the fake storage adapter; fixed by adding the fixture.
   - `test_models.py` still expected the old `users` column set; fixed and extended to assert the new role constraint.
@@ -468,6 +468,50 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
   - Updated model/migration tests and migration data coverage.
   - Corrected frontend loading-state behavior and role references.
   - Added targeted admin UI tests and refreshed documentation/test counts.
-- **Commit hash:** Pending final review and single commit.
-- **GitHub link:** Pending.
-- **Human review and decision:** Pending. The correction remains uncommitted at the time of this entry.
+- **Commit hash:** `77af2dc`
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault/commit/77af2dc
+- **Human review and decision:** Pending.
+
+---
+
+## 2026-10-22 — Post-Commit Operational Fix: Supabase Migration Applied
+
+- **Issue:** Login returned HTTP 500 because Supabase was still at migration `0003` and `users.last_login_at` did not exist. The browser reported the resulting bare 500 response as a CORS failure.
+- **Fix:** Applied `alembic upgrade head`; Supabase is now at `0004 (head)` and `alembic check` reports no pending operations.
+- **Verification:** Invalid login returns 401 with `Access-Control-Allow-Origin: http://localhost:5173`; the database contains 3 users (2 administrators, 1 normal user). Documentation was updated to reflect the applied migration.
+
+---
+
+## 2026-10-22 — Document Content, Previews, and Version History
+
+- **Date and phase:** 2026-10-22 — Phase 9.2 (document content, previews, and version history)
+- **Objective:** Make READ and EDIT meaningful for document content by adding authorized previews, retained version history, historical downloads, replacement uploads, plain-text editing with optimistic concurrency, readable/safe administrator audit metadata, and security coverage, without changing the existing READ/EDIT or administrator metadata-only model.
+- **Prompt / instruction summary:** The human requested content preview and version-history features with backend-streamed previews, versioned replacements, text editing, stale-write protection, audit additions, structured audit details, preservation of existing authorization/audit/storage behavior, updated tests/docs, and exactly one commit and push after verification with the message `feat(documents): add version history and readable audit details`.
+- **Files or code produced:**
+  - `backend/app/models/document_version.py`, `backend/app/models/document.py`, and model registration for immutable version rows, content constraints, unique version/storage keys, and one current version per document.
+  - `backend/alembic/versions/0005_document_versions.py` with constraints, indexes, and backfill of existing documents as version 1/current.
+  - `backend/app/services/document_versions.py` for listing, replacement concurrency, text edits, cleanup, and version audit events; `backend/app/services/documents.py` creates initial versions and cleans historical objects on soft delete.
+  - `backend/app/api/documents.py` preview/version/content endpoints and `backend/app/schemas/document.py` request/response schemas.
+  - New audit actions `DOCUMENT_VERSION_CREATED`, `DOCUMENT_VERSION_DOWNLOAD`, and `DOCUMENT_PREVIEW` with sanitized details.
+  - Frontend service methods, capability helpers, `DocumentPreview.jsx`, `VersionHistory.jsx`, `DocumentTextEditor.jsx`, `ReplaceDocumentVersion.jsx`, structured `AuditEventDetails.jsx`, `lib/audit.js`, and integrations in `DocumentDetailsPage.jsx` and `AuditPage.jsx`.
+  - Backend version/migration/constraint tests and frontend `AuditEventDetails.test.jsx` and `DocumentDetailsPage.test.jsx`.
+  - Updated README, architecture, database, requirements, implementation plan, threat model, and this log.
+- **Tests and verification performed:**
+  - Backend full suite: **258 passed**, 90% statement coverage.
+  - Migration `0005` upgrade/backfill/downgrade test passed; Supabase `alembic upgrade head` applied `0005`, `alembic current` reports `0005 (head)`, and `alembic check` reports no new operations.
+  - Frontend: `npm test` **15 passed across 7 files**; `npm run lint` 0 warnings/errors; `npm run build` succeeded with the existing chunk-size warning.
+  - `git diff` was reviewed for feature scope and secret exclusion; no deployment was performed.
+- **Issues discovered:**
+  - Initial text-edit and replacement buttons were enabled before the current version loaded; fixed by gating on `currentVersion` and version-list loading.
+  - Frontend lint reported `react-refresh/only-export-components` from audit helpers and `set-state-in-effect` in preview/editor/detail effects.
+  - A frontend test initially assumed `changed_fields` rendered as a string rather than the structured list.
+  - A documentation edit failed because the README used an em dash/arrow character; retried against the exact read output.
+  - PowerShell does not provide `rg`; `Select-String` was used for documentation checks.
+- **Corrections made:**
+  - Moved `auditFieldLabel`/`auditEventSummary` to `frontend/src/lib/audit.js`; initialized version loading true, keyed `DocumentPreview` by document and checksum, and adjusted the version-loading effect dependencies and loading reset.
+  - Updated test assertions to the structured audit output.
+  - Applied the README edit with the exact Unicode characters and corrected the table count to six.
+  - Preserved existing uncommitted documentation changes and included them in the final commit.
+- **Commit hash:** The final single commit created from this working tree; its hash is reported with the pushed commit. A commit cannot contain its own resulting hash, so no self-referential amend was used.
+- **GitHub link:** Reported with the pushed commit.
+- **Human review and decision:** Pending; work was verified locally before the single commit/push.

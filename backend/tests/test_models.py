@@ -13,6 +13,7 @@ def test_all_core_tables_are_registered() -> None:
         "users",
         "documents",
         "document_permissions",
+        "document_versions",
         "audit_events",
         "refresh_tokens",
     }
@@ -63,6 +64,49 @@ def test_documents_columns_and_constraints() -> None:
         "ix_documents_created_at",
         "ix_documents_name_trgm",
         "ix_documents_owner_active",
+    } <= index_names
+
+
+def test_document_versions_track_immutable_content_history() -> None:
+    table = Base.metadata.tables["document_versions"]
+
+    assert {
+        "document_id",
+        "version_number",
+        "storage_key",
+        "original_filename",
+        "mime_type",
+        "file_size",
+        "checksum",
+        "uploaded_by",
+        "change_summary",
+        "is_current",
+        "created_at",
+    } <= set(table.columns.keys())
+
+    foreign_keys = {
+        fk.parent.name: fk.ondelete
+        for fk in table.foreign_key_constraints
+        for fk in fk.elements
+    }
+    assert foreign_keys["document_id"] == "CASCADE"
+    assert foreign_keys["uploaded_by"] == "SET NULL"
+
+    constraint_names = {constraint.name for constraint in table.constraints}
+    assert {
+        "ck_document_versions_file_size_nonnegative",
+        "ck_document_versions_storage_key_not_url",
+        "ck_document_versions_checksum_sha256",
+        "uq_document_versions_document_number",
+        "uq_document_versions_storage_key",
+    } <= constraint_names
+
+    index_names = {index.name for index in table.indexes}
+    assert {
+        "ix_document_versions_document_id",
+        "ix_document_versions_uploaded_by",
+        "ix_document_versions_created_at",
+        "uq_document_versions_current",
     } <= index_names
 
 

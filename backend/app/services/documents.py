@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.document import Document
 from app.models.document_permission import DocumentPermission
+from app.models.document_version import DocumentVersion
 from app.models.enums import AuditAction, AuditOutcome
 from app.models.user import User
 from app.services.audit import record_event
@@ -81,6 +82,21 @@ def store_document(
 
     try:
         session.flush()
+        session.add(
+            DocumentVersion(
+                document_id=document.id,
+                version_number=1,
+                storage_key=storage_key,
+                original_filename=upload.name,
+                mime_type=upload.mime_type,
+                file_size=upload.size,
+                checksum=upload.checksum,
+                uploaded_by=owner.id,
+                change_summary="Initial upload",
+                is_current=True,
+            )
+        )
+        session.flush()
         record_event(
             session,
             action=AuditAction.DOCUMENT_UPLOAD,
@@ -91,6 +107,7 @@ def store_document(
                 "file_size": upload.size,
                 "mime_type": upload.mime_type,
                 "resource_type": "DOCUMENT",
+                "version_number": 1,
             },
         )
         session.commit()
@@ -257,6 +274,14 @@ def soft_delete_document(
     storage: SupabaseStorage,
 ) -> None:
     document.deleted_at = datetime.now(timezone.utc)
+    version_keys = list(
+        session.scalars(
+            select(DocumentVersion.storage_key).where(
+                DocumentVersion.document_id == document.id
+            )
+        ).all()
+    )
+    storage_keys = list(dict.fromkeys([document.storage_key, *version_keys]))
 
     try:
         record_event(
@@ -276,17 +301,18 @@ def soft_delete_document(
         logger.error("Document soft deletion failed.")
         raise DocumentDeletionError("The document could not be deleted.") from exc
 
-    try:
-        storage.delete_object(key=document.storage_key)
-    except StorageObjectNotFoundError:
-        logger.info("Document object was already absent during deletion.")
-    except (StorageConfigurationError, StorageOperationError):
-        logger.error(
-            "Document object cleanup failed after soft deletion; "
-            "the private object may require later cleanup."
-        )
-    except Exception:
-        logger.error(
-            "Document object cleanup failed unexpectedly after soft deletion; "
-            "the private object may require later cleanup."
-        )
+    for storage_key in storage_keys:
+        try:
+            storage.delete_object(key=storage_key)
+        except StorageObjectNotFoundError:
+            logger.info("Document object was already absent during deletion.")
+        except (StorageConfigurationError, StorageOperationError):
+            logger.error(
+                "Document object cleanup failed after soft deletion; "
+                "the private object may require later cleanup."
+            )
+        except Exception:
+            logger.error(
+                "Document object cleanup failed unexpectedly after soft deletion; "
+                "the private object may require later cleanup."
+            )

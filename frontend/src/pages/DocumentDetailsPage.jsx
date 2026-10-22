@@ -5,11 +5,13 @@ import {
   CalendarDays,
   Download,
   FileText,
+  FileUp,
   Fingerprint,
   HardDrive,
   KeyRound,
   LoaderCircle,
   Pencil,
+  PencilLine,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
@@ -21,6 +23,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { z } from 'zod'
 import { useAuth } from '@/auth/useAuth'
 import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
+import { DocumentPreview } from '@/components/documents/DocumentPreview'
+import { DocumentTextEditor } from '@/components/documents/DocumentTextEditor'
+import { ReplaceDocumentVersion } from '@/components/documents/ReplaceDocumentVersion'
+import { VersionHistory } from '@/components/documents/VersionHistory'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
@@ -29,15 +35,24 @@ import {
   ACCESS_LEVEL_META,
   canDeleteDocument,
   canEditDocument,
+  canEditTextContent,
   canManageDocumentPermissions,
   canReadDocument,
+  canReplaceDocumentFile,
   categoryChoices,
   formatBytes,
   formatDateTime,
   saveBlob,
 } from '@/lib/documents'
 import { getApiErrorMessage } from '@/services/api'
-import { deleteDocument, downloadDocument, getDocument, updateDocument } from '@/services/documents'
+import {
+  deleteDocument,
+  downloadDocument,
+  downloadDocumentVersion,
+  getDocument,
+  listDocumentVersions,
+  updateDocument,
+} from '@/services/documents'
 
 const editSchema = z.object({
   name: z
@@ -82,9 +97,16 @@ function DocumentDetailsView({ documentId }) {
   const [actionError, setActionError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [isEditing, setIsEditing] = useState(false)
+  const [isEditingContent, setIsEditingContent] = useState(false)
+  const [isReplacingFile, setIsReplacingFile] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadingVersion, setDownloadingVersion] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [versions, setVersions] = useState([])
+  const [isLoadingVersions, setIsLoadingVersions] = useState(true)
+  const [versionsError, setVersionsError] = useState(null)
+  const [versionsRefreshKey, setVersionsRefreshKey] = useState(0)
   const [refreshKey, setRefreshKey] = useState(0)
   const {
     register,
@@ -126,11 +148,66 @@ function DocumentDetailsView({ documentId }) {
 
   const canRead = canReadDocument(documentRecord)
   const canEdit = canEditDocument(documentRecord)
+  const canEditContent = canEditTextContent(documentRecord)
+  const canReplaceFile = canReplaceDocumentFile(documentRecord)
   const canDelete = canDeleteDocument(documentRecord)
   const canManagePermissions = canManageDocumentPermissions(documentRecord)
   const isMetadataOnly = documentRecord?.access_level === 'ADMINISTRATOR'
   const accessMeta = ACCESS_LEVEL_META[documentRecord?.access_level]
   const isNotFound = loadError?.response?.status === 404
+  const recordId = documentRecord?.id
+  const currentVersion = versions.find((version) => version.is_current) ?? null
+
+  useEffect(() => {
+    if (!recordId || !canRead) {
+      return undefined
+    }
+
+    const controller = new AbortController()
+
+    listDocumentVersions(recordId, controller.signal)
+      .then((payload) => {
+        setVersions(payload.items)
+      })
+      .catch((error) => {
+        if (!isAbortError(error)) {
+          setVersions([])
+          setVersionsError(getApiErrorMessage(error))
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsLoadingVersions(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [canRead, recordId, versionsRefreshKey])
+
+  function refreshVersions() {
+    setIsLoadingVersions(true)
+    setVersionsError(null)
+    setVersionsRefreshKey((key) => key + 1)
+  }
+
+  function applyVersionResult(result) {
+    setDocumentRecord(result.document)
+    setVersions((current) => [
+      result.version,
+      ...current
+        .filter((version) => version.id !== result.version.id)
+        .map((version) => ({ ...version, is_current: false })),
+    ])
+    setIsEditingContent(false)
+    setIsReplacingFile(false)
+    setActionError(null)
+    setNotice(`Version ${result.version.version_number} created.`)
+  }
+
+  function handleVersionConflict() {
+    refreshVersions()
+    setNotice('The version history was refreshed because a newer version exists.')
+  }
 
   const onSubmit = async (values) => {
     setActionError(null)
@@ -177,6 +254,23 @@ function DocumentDetailsView({ documentId }) {
       setActionError(getApiErrorMessage(error))
     } finally {
       setIsDownloading(false)
+    }
+  }
+
+  async function handleVersionDownload(version) {
+    setActionError(null)
+    setDownloadingVersion(version.version_number)
+    try {
+      const { blob, filename } = await downloadDocumentVersion(
+        documentRecord.id,
+        version.version_number,
+        version.original_filename,
+      )
+      saveBlob(blob, filename)
+    } catch (error) {
+      setActionError(getApiErrorMessage(error))
+    } finally {
+      setDownloadingVersion(null)
     }
   }
 
@@ -290,6 +384,8 @@ function DocumentDetailsView({ documentId }) {
                 variant="outline"
                 onClick={() => {
                   setIsEditing((editing) => !editing)
+                  setIsEditingContent(false)
+                  setIsReplacingFile(false)
                   setActionError(null)
                   setNotice(null)
                 }}
@@ -299,7 +395,49 @@ function DocumentDetailsView({ documentId }) {
                 ) : (
                   <Pencil className="size-4" aria-hidden="true" />
                 )}
-                {isEditing ? 'Cancel edit' : 'Edit metadata'}
+                {isEditing ? 'Cancel metadata edit' : 'Edit metadata'}
+              </Button>
+            ) : null}
+            {canEditContent ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsEditingContent((editing) => !editing)
+                  setIsEditing(false)
+                  setIsReplacingFile(false)
+                  setActionError(null)
+                  setNotice(null)
+                }}
+                disabled={!currentVersion || isLoadingVersions}
+              >
+                {isEditingContent ? (
+                  <X className="size-4" aria-hidden="true" />
+                ) : (
+                  <PencilLine className="size-4" aria-hidden="true" />
+                )}
+                {isEditingContent ? 'Cancel text edit' : 'Edit text'}
+              </Button>
+            ) : null}
+            {canReplaceFile ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsReplacingFile((replacing) => !replacing)
+                  setIsEditing(false)
+                  setIsEditingContent(false)
+                  setActionError(null)
+                  setNotice(null)
+                }}
+                disabled={!currentVersion || isLoadingVersions}
+              >
+                {isReplacingFile ? (
+                  <X className="size-4" aria-hidden="true" />
+                ) : (
+                  <FileUp className="size-4" aria-hidden="true" />
+                )}
+                {isReplacingFile ? 'Cancel new version' : 'New version'}
               </Button>
             ) : null}
             {canManagePermissions ? (
@@ -357,6 +495,26 @@ function DocumentDetailsView({ documentId }) {
         </div>
       ) : null}
 
+      {isEditingContent && canEditContent ? (
+        <DocumentTextEditor
+          documentRecord={documentRecord}
+          currentVersion={currentVersion}
+          onSaved={applyVersionResult}
+          onConflict={handleVersionConflict}
+          onCancel={() => setIsEditingContent(false)}
+        />
+      ) : null}
+
+      {isReplacingFile && canReplaceFile ? (
+        <ReplaceDocumentVersion
+          documentRecord={documentRecord}
+          currentVersion={currentVersion}
+          onReplaced={applyVersionResult}
+          onConflict={handleVersionConflict}
+          onCancel={() => setIsReplacingFile(false)}
+        />
+      ) : null}
+
       {confirmDelete && canDelete ? (
         <Card className="border-destructive/30">
           <CardContent className="flex flex-col gap-4 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
@@ -393,6 +551,24 @@ function DocumentDetailsView({ documentId }) {
                 {isDeleting ? 'Deleting...' : 'Delete document'}
               </Button>
             </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {canRead ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Secure content preview</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Content is fetched through the authenticated API. Storage keys and private
+              object URLs are never sent to the browser.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <DocumentPreview
+              key={`${documentRecord.id}-${documentRecord.checksum}`}
+              documentRecord={documentRecord}
+            />
           </CardContent>
         </Card>
       ) : null}
@@ -454,7 +630,7 @@ function DocumentDetailsView({ documentId }) {
             </div>
             <p>
               The backend resolves ownership and active grants from the database on every request.
-              Revoked access is denied immediately, including for downloads.
+              Revoked access is denied immediately for previews, version history, and downloads.
             </p>
             <p>
               Storage keys and private object URLs are never exposed. Downloads are proxied through
@@ -472,6 +648,18 @@ function DocumentDetailsView({ documentId }) {
           </CardContent>
         </Card>
       </div>
+
+      {canRead ? (
+        <VersionHistory
+          versions={versions}
+          currentVersionNumber={currentVersion?.version_number ?? null}
+          isLoading={isLoadingVersions}
+          error={versionsError}
+          onRefresh={refreshVersions}
+          onDownload={handleVersionDownload}
+          downloadingVersion={downloadingVersion}
+        />
+      ) : null}
 
       {isEditing && canEdit ? (
         <Card>
