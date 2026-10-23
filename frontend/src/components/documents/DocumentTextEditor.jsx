@@ -23,6 +23,7 @@ export function DocumentTextEditor({
   const [loadError, setLoadError] = useState(null)
   const [saveError, setSaveError] = useState(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [isStale, setIsStale] = useState(false)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -49,7 +50,11 @@ export function DocumentTextEditor({
 
   const hasChanges = content !== originalContent
   const canSave =
-    Boolean(currentVersion) && hasChanges && content.length > 0 && !isSaving
+    Boolean(currentVersion) &&
+    hasChanges &&
+    content.length > 0 &&
+    !isSaving &&
+    !isStale
 
   async function handleSubmit(event) {
     event.preventDefault()
@@ -69,11 +74,12 @@ export function DocumentTextEditor({
       onSaved(result)
     } catch (error) {
       if (error?.response?.status === 409) {
+        setIsStale(true)
         onConflict?.()
       }
       setSaveError(
         error?.response?.status === 409
-          ? `${getApiErrorMessage(error)} Refresh and retry to avoid overwriting a newer version.`
+          ? `${getApiErrorMessage(error)} Close this editor and reopen it from the refreshed version before saving again.`
           : getApiErrorMessage(error),
       )
     } finally {
@@ -87,8 +93,7 @@ export function DocumentTextEditor({
         <div>
           <CardTitle>Edit text content</CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
-            Saving creates version {(currentVersion?.version_number ?? 0) + 1}. Earlier
-            versions remain available.
+            Saving creates a new immutable version. Earlier versions remain available.
           </p>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
@@ -139,7 +144,7 @@ export function DocumentTextEditor({
                 rows={18}
                 maxLength={10_000_000}
                 spellCheck={false}
-                disabled={isSaving}
+                disabled={isSaving || isStale}
                 className="flex min-h-80 w-full rounded-md border border-input bg-background px-3 py-3 font-mono text-sm leading-6 shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               />
               <div className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
@@ -160,7 +165,7 @@ export function DocumentTextEditor({
                 maxLength={500}
                 onChange={(event) => setChangeSummary(event.target.value)}
                 placeholder="Describe what changed in this version"
-                disabled={isSaving}
+                disabled={isSaving || isStale}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               />
             </div>
@@ -178,7 +183,7 @@ export function DocumentTextEditor({
                 type="button"
                 variant="outline"
                 onClick={onCancel}
-                disabled={isSaving}
+                disabled={isSaving || isStale}
               >
                 Cancel
               </Button>

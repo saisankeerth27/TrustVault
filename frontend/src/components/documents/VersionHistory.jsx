@@ -10,6 +10,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react'
+import { HistoryPagination } from '@/components/documents/HistoryPagination'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatBytes, formatDateTime } from '@/lib/documents'
@@ -17,8 +18,13 @@ import { cn } from '@/lib/utils'
 
 export function VersionHistory({
   versions = [],
+  total = 0,
   currentVersionNumber,
   totalSize,
+  page = 1,
+  pageSize = 5,
+  pages = 0,
+  onPageChange,
   isLoading,
   error,
   actionError,
@@ -31,7 +37,14 @@ export function VersionHistory({
 }) {
   const [confirmingVersion, setConfirmingVersion] = useState(null)
 
-  const hasMultipleVersions = versions.length > 1
+  const hasMultipleVersions = total > 1
+  const confirmingIndex = confirmingVersion
+    ? versions.findIndex((version) => version.id === confirmingVersion.id)
+    : -1
+  const rollbackCandidate =
+    confirmingVersion?.is_current && confirmingIndex >= 0
+      ? versions[confirmingIndex + 1] ?? null
+      : null
 
   async function handleConfirmDelete() {
     if (!confirmingVersion || !onDeleteVersion) return
@@ -111,8 +124,7 @@ export function VersionHistory({
             {versions.map((version) => {
               const isDownloading = downloadingVersion === version.version_number
               const isDeleting = deletingVersion === version.version_number
-              const isHistorical = !version.is_current
-              const allowDelete = canDeleteVersion && isHistorical && hasMultipleVersions
+              const allowDelete = canDeleteVersion && hasMultipleVersions
 
               return (
                 <li
@@ -193,7 +205,7 @@ export function VersionHistory({
                           size="sm"
                           onClick={() => setConfirmingVersion(version)}
                           disabled={Boolean(deletingVersion) || Boolean(downloadingVersion)}
-                          aria-label={`Delete historical version ${version.version_number}`}
+                          aria-label={`Delete version ${version.version_number}`}
                           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                         >
                           {isDeleting ? (
@@ -233,7 +245,7 @@ export function VersionHistory({
                     Delete Version {confirmingVersion.version_number}?
                   </h3>
                   <p className="text-sm text-muted-foreground leading-5">
-                    You are deleting historical Version {confirmingVersion.version_number} (
+                    You are deleting Version {confirmingVersion.version_number} (
                     <strong className="text-foreground">{confirmingVersion.original_filename}</strong>,{' '}
                     {formatBytes(confirmingVersion.file_size)}).
                   </p>
@@ -241,7 +253,12 @@ export function VersionHistory({
               </div>
 
               <p className="text-xs text-muted-foreground bg-muted/40 p-3 rounded-md">
-                This will safely delete the specific object from private storage and update your retained storage total. The audit record of this revision and its deletion will be preserved. Other versions will remain intact.
+                {confirmingVersion.is_current
+                  ? rollbackCandidate
+                    ? `This is the current version. Deleting it rolls the document back to Version ${rollbackCandidate.version_number}; that file becomes the active preview and download, and no version numbers are reused.`
+                    : 'This is the current version. At least one version must remain, so this deletion cannot proceed.'
+                  : 'This removes the selected revision from private storage. Other versions and the current document content remain available.'}{' '}
+                The audit record of this revision and its deletion will be preserved.
               </p>
 
               <div className="flex justify-end gap-3 pt-2">
@@ -274,6 +291,15 @@ export function VersionHistory({
             </div>
           </div>
         ) : null}
+
+        <HistoryPagination
+          page={page}
+          pages={pages}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={onPageChange}
+          itemLabel="versions"
+        />
 
         {currentVersionNumber ? (
           <p className="text-xs text-muted-foreground">

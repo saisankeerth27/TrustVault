@@ -6,7 +6,9 @@ import { AuthContext } from '@/auth/useAuth'
 import { DocumentDetailsPage } from '@/pages/DocumentDetailsPage'
 import {
   createDocumentVersion,
+  deleteDocumentVersion,
   getDocument,
+  listDocumentActivity,
   listDocumentVersions,
   previewDocument,
   updateDocumentTextContent,
@@ -15,12 +17,13 @@ import {
 vi.mock('@/services/documents', () => ({
   createDocumentVersion: vi.fn(),
   deleteDocument: vi.fn(),
+  deleteDocumentVersion: vi.fn(),
   downloadDocument: vi.fn(),
   downloadDocumentVersion: vi.fn(),
   getDocument: vi.fn(),
+  listDocumentActivity: vi.fn(),
   listDocumentVersions: vi.fn(),
   previewDocument: vi.fn(),
-  updateDocument: vi.fn(),
   updateDocumentTextContent: vi.fn(),
 }))
 
@@ -64,6 +67,23 @@ function makeVersion(number, current = false) {
   }
 }
 
+function versionPayload(items, overrides = {}) {
+  const current = items.find((version) => version.is_current) ?? null
+  return {
+    items,
+    total: items.length,
+    total_size: items.reduce((sum, version) => sum + version.file_size, 0),
+    current_version: current,
+    current_version_number: current?.version_number ?? null,
+    page: 1,
+    page_size: 5,
+    pages: 1,
+    has_next: false,
+    has_previous: false,
+    ...overrides,
+  }
+}
+
 function renderPage() {
   return render(
     <AuthContext.Provider
@@ -88,10 +108,15 @@ describe('DocumentDetailsPage content workflows', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     getDocument.mockResolvedValue(textDocument)
-    listDocumentVersions.mockResolvedValue({
-      items: [makeVersion(1, true)],
-      total: 1,
-      current_version_number: 1,
+    listDocumentVersions.mockResolvedValue(versionPayload([makeVersion(1, true)]))
+    listDocumentActivity.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 5,
+      pages: 0,
+      has_next: false,
+      has_previous: false,
     })
     previewDocument.mockResolvedValue({
       blob: new Blob(['Initial notes\n'], { type: 'text/plain' }),
@@ -113,6 +138,7 @@ describe('DocumentDetailsPage content workflows', () => {
     expect(screen.queryByRole('button', { name: 'New version' })).toBeNull()
     expect(listDocumentVersions).toHaveBeenCalledWith(
       textDocument.id,
+      { page: 1, page_size: 5 },
       expect.any(AbortSignal),
     )
   })
@@ -120,6 +146,12 @@ describe('DocumentDetailsPage content workflows', () => {
   it('saves edited plain-text content as a new version', async () => {
     const interaction = userEvent.setup()
     const newVersion = makeVersion(2, true)
+    listDocumentVersions
+      .mockReset()
+      .mockResolvedValueOnce(versionPayload([makeVersion(1, true)]))
+      .mockResolvedValueOnce(
+        versionPayload([newVersion, makeVersion(1, false)]),
+      )
     updateDocumentTextContent.mockResolvedValue({
       document: {
         ...textDocument,
@@ -220,6 +252,172 @@ describe('DocumentDetailsPage content workflows', () => {
 
     expect(await screen.findByRole('button', { name: 'Edit PDF' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull()
+  })
+
+  it('shows read-only metadata without an Edit metadata action for owners', async () => {
+    getDocument.mockResolvedValue({ ...textDocument, access_level: 'OWNER' })
+    renderPage()
+
+    expect(await screen.findByText('Shared notes')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit metadata' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Edit metadata' })).toBeNull()
+  })
+
+  it('paginates version history five at a time', async () => {
+    const interaction = userEvent.setup()
+    getDocument.mockResolvedValue({ ...textDocument, access_level: 'OWNER' })
+    const firstPageVersions = [7, 6, 5, 4, 3].map((number) =>
+      makeVersion(number, number === 7),
+    )
+    const secondPageVersions = [makeVersion(2, false), makeVersion(1, false)]
+    listDocumentVersions.mockImplementation((_documentId, params) => {
+      if (params.page === 2) {
+        return Promise.resolve(
+          versionPayload(secondPageVersions, {
+            total: 7,
+            page: 2,
+            pages: 2,
+            has_next: false,
+            has_previous: true,
+            current_version: makeVersion(7, true),
+            current_version_number: 7,
+          }),
+        )
+      }
+      return Promise.resolve(
+        versionPayload(firstPageVersions, {
+          total: 7,
+          page: 1,
+          pages: 2,
+          has_next: true,
+          has_previous: false,
+        }),
+      )
+    })
+
+    renderPage()
+
+    expect((await screen.findAllByText('Version 7')).length).toBeGreaterThan(0)
+    expect(screen.getByText('Showing 1-5 of 7 versions')).toBeInTheDocument()
+    await interaction.click(
+      screen.getByRole('button', { name: 'versions page 2' }),
+    )
+
+    await waitFor(() =>
+      expect(listDocumentVersions).toHaveBeenLastCalledWith(
+        textDocument.id,
+        { page: 2, page_size: 5 },
+        expect.any(AbortSignal),
+      ),
+    )
+    expect((await screen.findAllByText('Version 2')).length).toBeGreaterThan(0)
+    expect(screen.getByText('Showing 6-7 of 7 versions')).toBeInTheDocument()
+  })
+
+  it('deletes the current version only after confirming rollback', async () => {
+    const interaction = userEvent.setup()
+    getDocument.mockResolvedValue({ ...textDocument, access_level: 'OWNER' })
+    const versionThree = makeVersion(3, true)
+    const versionTwo = makeVersion(2, false)
+    const versionOne = makeVersion(1, false)
+    listDocumentVersions
+      .mockReset()
+      .mockResolvedValueOnce(
+        versionPayload([versionThree, versionTwo, versionOne], {
+          total: 3,
+          pages: 1,
+          current_version_number: 3,
+        }),
+      )
+      .mockResolvedValueOnce(
+        versionPayload(
+          [
+            { ...versionTwo, is_current: true },
+            versionOne,
+          ],
+          {
+            total: 2,
+            pages: 1,
+            current_version_number: 2,
+          },
+        ),
+      )
+    deleteDocumentVersion.mockResolvedValue({
+      document: {
+        ...textDocument,
+        access_level: 'OWNER',
+        checksum: versionTwo.checksum,
+        file_size: 30,
+      },
+      current_version: { ...versionTwo, is_current: true },
+      deleted_version_number: 3,
+      deleted_file_size: versionThree.file_size,
+      retained_total_size: 30,
+      storage_deleted: true,
+      rolled_back: true,
+    })
+
+    renderPage()
+
+    await interaction.click(
+      await screen.findByRole('button', { name: 'Delete version 3' }),
+    )
+    expect(
+      screen.getByText(/rolls the document back to Version 2/i),
+    ).toBeInTheDocument()
+    await interaction.click(
+      screen.getByRole('button', { name: 'Confirm deletion' }),
+    )
+
+    await waitFor(() =>
+      expect(deleteDocumentVersion).toHaveBeenCalledWith(
+        textDocument.id,
+        3,
+      ),
+    )
+    expect(
+      await screen.findByText(
+        'Version 3 deleted. The document rolled back to Version 2.',
+      ),
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(listDocumentVersions).toHaveBeenCalledTimes(2),
+    )
+    await waitFor(() =>
+      expect(listDocumentActivity).toHaveBeenCalledTimes(2),
+    )
+  })
+
+  it('blocks a stale text editor until it is reopened', async () => {
+    const interaction = userEvent.setup()
+    updateDocumentTextContent.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          error: {
+            message: 'The document has changed since it was loaded.',
+          },
+        },
+      },
+    })
+    renderPage()
+
+    await interaction.click(
+      await screen.findByRole('button', { name: 'Edit text' }),
+    )
+    const editor = await screen.findByLabelText('File content')
+    await interaction.clear(editor)
+    await interaction.type(editor, 'Conflicting update')
+    await interaction.click(
+      screen.getByRole('button', { name: 'Save new version' }),
+    )
+
+    expect(
+      await screen.findByText(/Close this editor and reopen it/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Save new version' }),
+    ).toBeDisabled()
   })
 
   it('prevents READ-only recipient from seeing Edit PDF button for PDF document', async () => {

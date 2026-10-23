@@ -147,14 +147,6 @@ export function canEditPdfContent(documentRecord) {
   return canReplaceDocumentFile(documentRecord) && previewKindOf(documentRecord) === 'pdf'
 }
 
-export function categoryChoices(currentCategory) {
-  const choices = [...CATEGORY_OPTIONS]
-  if (currentCategory && !choices.includes(currentCategory)) {
-    choices.push(currentCategory)
-  }
-  return choices
-}
-
 export function saveBlob(blob, filename) {
   const objectUrl = URL.createObjectURL(blob)
   const anchor = document.createElement('a')

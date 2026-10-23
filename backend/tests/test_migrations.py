@@ -168,6 +168,78 @@ def test_0005_backfills_existing_documents_and_downgrades_cleanly(
     command.upgrade(config, "head")
 
 
+def test_0007_backfills_next_version_number(
+    migration_database_url: str,
+) -> None:
+    config = alembic_config(migration_database_url)
+    command.downgrade(config, "0006")
+
+    engine = create_engine(migration_database_url, poolclass=NullPool)
+    try:
+        with engine.begin() as connection:
+            user_id = connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(name, email, password_hash, role, status) "
+                    "VALUES ('Sequence Owner', 'sequence@example.com', "
+                    "'not-a-real-hash', 'USER', 'ACTIVE') RETURNING id"
+                )
+            ).scalar_one()
+            document_id = connection.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(owner_id, name, category, description, storage_key, "
+                    "mime_type, file_size, checksum) "
+                    "VALUES (:owner_id, 'Sequence.pdf', 'Contracts', "
+                    "'Sequence document', 'documents/sequence/v3.pdf', "
+                    "'application/pdf', 2048, :checksum) RETURNING id"
+                ),
+                {"owner_id": user_id, "checksum": "f" * 64},
+            ).scalar_one()
+            for version_number, key in (
+                (1, "documents/sequence/v1.pdf"),
+                (3, "documents/sequence/v3.pdf"),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO document_versions "
+                        "(document_id, version_number, storage_key, "
+                        "original_filename, mime_type, file_size, checksum, "
+                        "uploaded_by, change_summary, is_current) "
+                        "VALUES (:document_id, :version_number, :storage_key, "
+                        "'Sequence.pdf', 'application/pdf', 1024, :checksum, "
+                        ":uploaded_by, 'Revision', :is_current)"
+                    ),
+                    {
+                        "document_id": document_id,
+                        "version_number": version_number,
+                        "storage_key": key,
+                        "checksum": "a" * 64,
+                        "uploaded_by": user_id,
+                        "is_current": version_number == 3,
+                    },
+                )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(migration_database_url, poolclass=NullPool)
+    try:
+        with engine.connect() as connection:
+            next_version_number = connection.execute(
+                text(
+                    "SELECT next_version_number FROM documents "
+                    "WHERE id = :document_id"
+                ),
+                {"document_id": document_id},
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert next_version_number == 4
+
+
 def test_migration_upgrade_check_and_downgrade(migration_database_url: str) -> None:
     config = alembic_config(migration_database_url)
 

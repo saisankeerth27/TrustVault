@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
@@ -58,12 +58,13 @@ from app.services.document_access import (
     authorize_document,
 )
 from app.services.document_versions import (
-    CurrentDocumentVersionDeletionError,
     DocumentVersionConflictError,
     DocumentVersionDeletionError,
     DocumentVersionNotFoundError,
     DocumentVersionOperationError,
-    delete_historical_version,
+    LastDocumentVersionDeletionError,
+    count_document_versions,
+    delete_document_version as delete_document_version_record,
     get_current_version,
     get_document_version,
     list_document_versions,
@@ -111,6 +112,11 @@ router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
 _DOWNLOAD_CHUNK_SIZE = 64 * 1024
 _NOT_FOUND_MESSAGE = "Document not found."
+_OWNER_ROUTINE_ACTIONS = (
+    AuditAction.DOCUMENT_PREVIEW.value,
+    AuditAction.DOCUMENT_DOWNLOAD.value,
+    AuditAction.DOCUMENT_VERSION_DOWNLOAD.value,
+)
 
 
 def _document_not_found() -> HTTPException:
@@ -499,6 +505,8 @@ def update_document(
 def list_versions(
     document_id: UUID,
     response: Response,
+    page: Annotated[int, Query(ge=1, le=100_000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 5,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> DocumentVersionListResponse:
@@ -516,22 +524,156 @@ def list_versions(
         logger.warning("Document version access denied for user %s.", current_user.id)
         raise _access_denied() from exc
 
-    versions = list_document_versions(session, document=authorized.document)
-    current = next((version for version in versions if version.is_current), None)
+    total = count_document_versions(
+        session,
+        document_id=authorized.document.id,
+    )
+    pages = (total + page_size - 1) // page_size
+    versions = list_document_versions(
+        session,
+        document=authorized.document,
+        page=page,
+        page_size=page_size,
+    )
+    current = get_current_version(
+        session,
+        document_id=authorized.document.id,
+    )
     response.headers["Cache-Control"] = "no-store"
     return DocumentVersionListResponse(
         items=[
             DocumentVersionResponse.model_validate(version)
             for version in versions
         ],
-        total=len(versions),
+        total=total,
         total_size=total_document_version_size(
             session,
             document_id=authorized.document.id,
         ),
+        current_version=(
+            DocumentVersionResponse.model_validate(current)
+            if current is not None
+            else None
+        ),
         current_version_number=(
             current.version_number if current is not None else None
         ),
+        page=page,
+        page_size=page_size,
+        pages=pages,
+        has_next=page < pages,
+        has_previous=page > 1 and pages > 0,
+    )
+
+
+@router.delete(
+    "/{document_id}/versions/{version_number}",
+    response_model=DocumentVersionDeletionResponse,
+)
+def delete_document_version(
+    document_id: UUID,
+    version_number: int,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    storage: SupabaseStorage = Depends(get_storage_service),
+) -> DocumentVersionDeletionResponse:
+    try:
+        authorized = authorize_document(
+            session,
+            user=current_user,
+            document_id=document_id,
+            capability=DocumentCapability.READ,
+        )
+    except DocumentNotFoundError as exc:
+        logger.warning(
+            "Document version deletion denied for user %s.",
+            current_user.id,
+        )
+        raise _document_not_found() from exc
+    except DocumentAccessDeniedError as exc:
+        logger.warning(
+            "Document version deletion denied for user %s.",
+            current_user.id,
+        )
+        raise _access_denied() from exc
+
+    if authorized.access_level is not DocumentAccessLevel.OWNER:
+        record_best_effort(
+            session,
+            action=AuditAction.DOCUMENT_VERSION_DELETE,
+            outcome=AuditOutcome.DENIED,
+            actor=current_user,
+            document_id=authorized.document.id,
+            details={
+                "version_number": version_number,
+                "resource_type": "DOCUMENT",
+                "reason": "only_owner_can_delete_versions",
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the document owner can delete document versions.",
+        )
+
+    try:
+        version = get_document_version(
+            session,
+            document=authorized.document,
+            version_number=version_number,
+        )
+    except DocumentVersionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document version not found.",
+        ) from exc
+
+    try:
+        (
+            updated_document,
+            current_version,
+            deleted_size,
+            retained_total_size,
+            storage_deleted,
+            rolled_back,
+        ) = delete_document_version_record(
+            session,
+            document=authorized.document,
+            version=version,
+            actor=current_user,
+            storage=storage,
+            access_level=authorized.access_level.value,
+        )
+    except LastDocumentVersionDeletionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one document version must be retained.",
+        ) from exc
+    except DocumentVersionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document version not found.",
+        ) from exc
+    except DocumentVersionDeletionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The document version content could not be safely deleted.",
+        ) from exc
+
+    response.headers["Cache-Control"] = "no-store"
+    updated_document.access_level = authorized.access_level.value
+    logger.info(
+        "Document version deleted by user %s.",
+        current_user.id,
+    )
+    return DocumentVersionDeletionResponse(
+        document=DocumentResponse.model_validate(updated_document),
+        current_version=DocumentVersionResponse.model_validate(current_version),
+        deleted_version_number=version_number,
+        deleted_file_size=deleted_size,
+        retained_total_size=retained_total_size,
+        storage_deleted=storage_deleted,
+        rolled_back=rolled_back,
     )
 
 
@@ -543,7 +685,7 @@ def list_document_activity(
     document_id: UUID,
     response: Response,
     page: Annotated[int, Query(ge=1, le=100_000)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 5,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> AuditEventListResponse:
@@ -564,7 +706,14 @@ def list_document_activity(
     if authorized.access_level is not DocumentAccessLevel.OWNER:
         raise _access_denied()
 
-    conditions = [AuditEvent.document_id == authorized.document.id]
+    conditions = [
+        AuditEvent.document_id == authorized.document.id,
+        or_(
+            AuditEvent.actor_id.is_(None),
+            AuditEvent.actor_id != authorized.document.owner_id,
+            AuditEvent.action.notin_(_OWNER_ROUTINE_ACTIONS),
+        ),
+    ]
     total = int(
         session.scalar(
             select(func.count()).select_from(AuditEvent).where(*conditions)
@@ -917,108 +1066,6 @@ def download_document_version(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
-    )
-
-
-@router.delete(
-    "/{document_id}/versions/{version_number}",
-    response_model=DocumentVersionDeletionResponse,
-)
-def delete_document_version(
-    document_id: UUID,
-    version_number: int,
-    current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_db),
-    storage: SupabaseStorage = Depends(get_storage_service),
-) -> DocumentVersionDeletionResponse:
-    try:
-        authorized = authorize_document(
-            session,
-            user=current_user,
-            document_id=document_id,
-            capability=DocumentCapability.READ,
-        )
-    except DocumentNotFoundError as exc:
-        logger.warning("Document version delete denied for user %s.", current_user.id)
-        raise _document_not_found() from exc
-    except DocumentAccessDeniedError as exc:
-        logger.warning("Document version delete denied for user %s.", current_user.id)
-        raise _access_denied() from exc
-
-    if authorized.access_level is not DocumentAccessLevel.OWNER:
-        record_best_effort(
-            session,
-            action=AuditAction.DOCUMENT_VERSION_DELETE,
-            outcome=AuditOutcome.DENIED,
-            actor=current_user,
-            document_id=authorized.document.id,
-            details={
-                "version_number": version_number,
-                "resource_type": "DOCUMENT",
-                "reason": "only_owner_can_delete_versions",
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the document owner can delete document versions.",
-        )
-
-    try:
-        version = get_document_version(
-            session,
-            document=authorized.document,
-            version_number=version_number,
-        )
-    except DocumentVersionNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document version not found.",
-        ) from exc
-
-    total_versions = int(
-        session.scalar(
-            select(func.count()).select_from(DocumentVersion).where(
-                DocumentVersion.document_id == authorized.document.id
-            )
-        )
-        or 0
-    )
-    if version.is_current or total_versions <= 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "The current version cannot be deleted. Use the document "
-                "deletion workflow to delete the entire document."
-            ),
-        )
-
-    try:
-        deleted_file_size, retained_total_size, storage_deleted = (
-            delete_historical_version(
-                session,
-                document=authorized.document,
-                version=version,
-                actor=current_user,
-                storage=storage,
-                access_level=authorized.access_level.value,
-            )
-        )
-    except CurrentDocumentVersionDeletionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The current version cannot be deleted.",
-        ) from exc
-    except DocumentVersionDeletionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The document version content could not be safely deleted.",
-        ) from exc
-
-    return DocumentVersionDeletionResponse(
-        deleted_version_number=version_number,
-        deleted_file_size=deleted_file_size,
-        retained_total_size=retained_total_size,
-        storage_deleted=storage_deleted,
     )
 
 

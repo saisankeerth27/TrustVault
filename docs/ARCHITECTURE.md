@@ -4,7 +4,7 @@
 
 TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and private Supabase Storage buckets. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 10 — PDF Preview, In-Browser Annotation Editing, Version Control, and Audit Integrity):** authentication, database-backed roles, rotating refresh sessions, the complete JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints and versioned audit hash schemas (migration `0006`), administrator account management and audit dashboard, retained document-content versions, authorized previews (PDF with Mozilla PDF.js, plain-text, images), in-browser PDF annotation editing (`pdf-lib`), owner-only historical version deletion, and a comprehensive security regression suite are implemented and verified locally. The model features two account roles, `ADMINISTRATOR` and `USER`; every active user can upload and owns their uploads, while other-document access requires a per-document grant. Storage tests use a mocked Supabase Storage adapter; a **live private-bucket connectivity/upload/download/delete smoke test passed** against Supabase Storage. The Supabase database is at migration `0006` (head), and `alembic check` reports no pending operations. Administrators remain metadata-only unless explicitly granted document access.
+> **Implementation status (Phase 11 — History Pagination, Safe Version Rollback, and Stale-Editor Protection):** authentication, database-backed roles, rotating refresh sessions, the complete JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints and versioned audit hash schemas (migration `0006`), administrator account management and audit dashboard, retained document-content versions, authorized previews (PDF with Mozilla PDF.js, plain-text, images), in-browser PDF annotation editing (`pdf-lib`), owner-only version deletion with current-version rollback, paginated history/activity, stale-editor protection, and a comprehensive security regression suite are implemented and verified locally. The model features two account roles, `ADMINISTRATOR` and `USER`; every active user can upload and owns their uploads, while other-document access requires a per-document grant. Storage tests use a mocked Supabase Storage adapter; a **live private-bucket connectivity/upload/download/delete smoke test passed** against Supabase Storage. The repository migration head is `0007`; live Supabase migration state and drift were not re-verified in this local run. Administrators remain metadata-only unless explicitly granted document access.
 
 ### Architecture Diagram
 
@@ -158,13 +158,13 @@ The backend is the **intended sole enforcement point** for security. It is respo
 
 ## 5. Database Architecture (Implemented)
 
-The schema contains six tables. Migrations `0001`–`0005` establish the schema, audit chain sequence, current two-role model, login tracking/account indexes, and immutable content-version history with a backfilled version 1. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
+The schema contains six tables. Migrations `0001`–`0007` establish the schema, audit chain sequence, current two-role model, login tracking/account indexes, content-version history with a backfilled version 1, versioned audit hash schema, and the persistent document version sequence. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
 
 | Table | Purpose |
 |-------|---------|
 | `users` | Accounts, hashed passwords, role, status, timestamps |
 | `refresh_tokens` | Hashed opaque refresh tokens, rotation families, expiry, revocation |
-| `documents` | Metadata: owner, name, category, description, storage key, MIME type, size, checksum, soft-delete timestamp |
+| `documents` | Metadata: owner, name, category, description, current storage key, MIME type, size, checksum, next version number, soft-delete timestamp |
 | `document_permissions` | Per-user, per-document grant history (`READ`/`EDIT`) with revocation timestamps |
 | `document_versions` | Immutable content-version metadata: document, version number, storage key, original filename, MIME type, size, checksum, uploader, change summary, current flag |
 | `audit_events` | Append-oriented event records with contiguous chain sequence, action, outcome, JSONB details, and hash-chain columns |
@@ -318,13 +318,14 @@ The backend verifies identity and session state on **every** protected request. 
 4. Storage not-found maps to 404; configuration/operation failures map to generic 503. No storage key or presigned URL is exposed.
 5. A successful download appends `DOCUMENT_DOWNLOAD`; preview appends `DOCUMENT_PREVIEW`; authorization denials append the corresponding denial event best-effort.
 
-### Version history and replacement (implemented)
+### Version history, replacement, and deletion (implemented)
 
-1. Upload creates version 1. Replacement and plain-text edits create the next immutable version and mark only that row current.
-2. `GET /api/v1/documents/{id}/versions` requires READ and returns safe metadata only. `GET /api/v1/documents/{id}/versions/{version_number}/download` streams a retained object through the backend and audits `DOCUMENT_VERSION_DOWNLOAD`.
-3. `PUT /api/v1/documents/{id}/versions` and `PUT /api/v1/documents/{id}/content` require EDIT. Both require `expected_version_number`; a mismatch returns 409 without overwriting newer content.
+1. Upload creates version 1. Replacement and plain-text edits take the next persistent `documents.next_version_number`, create a new row, and mark only that row current. Deleted numbers are never reused.
+2. `GET /api/v1/documents/{id}/versions` requires READ, returns safe metadata only, and is paginated five per page by default (maximum 100). `GET /api/v1/documents/{id}/versions/{version_number}/download` streams a retained object through the backend and audits `DOCUMENT_VERSION_DOWNLOAD`.
+3. `PUT /api/v1/documents/{id}/versions` and `PUT /api/v1/documents/{id}/content` require EDIT. Both require `expected_version_number`; a mismatch returns 409 without overwriting newer content. The browser editor becomes stale and must be closed and reopened after a conflict.
 4. Replacement uploads the new private object before the transaction, locks the document row, rechecks the current version, updates denormalized current-file columns, and commits with `DOCUMENT_VERSION_CREATED`. Failure triggers best-effort cleanup of the newly uploaded object.
 5. Plain-text editing is limited to UTF-8 `text/plain` documents; other types return 415. Audit details record version numbers, sizes, MIME type, source, and an optional change summary - never file contents, passwords, tokens, or secrets.
+6. `DELETE /api/v1/documents/{id}/versions/{version_number}` is owner-only. It locks the document/version, rejects deletion of the final version, deletes the private object, and commits the row removal with `DOCUMENT_VERSION_DELETE`. Deleting the current version first marks it non-current, marks the highest remaining version current, and updates the denormalized active-file columns in the same transaction.
 
 ### Shared-document listing (implemented)
 
@@ -550,6 +551,9 @@ Planned policies:
 | Stale replacement or text edit | 409 Conflict | Current content is preserved; client must refresh version history |
 | Text edit attempted on non-`text/plain` content | 415 Unsupported Media Type | No upload or version is created |
 | Version persistence fails after upload | 500 Internal Server Error | Transaction rolls back; newly uploaded object is cleaned up best-effort |
+| Attempt to delete the last remaining version | 400 Bad Request | No row, storage object, or active pointer changes |
+| Current-version deletion | 200 with rollback metadata | Highest remaining version becomes active; audit records previous/current version numbers |
+| Version storage cleanup fails during deletion | 503 Service Unavailable | The version row and active pointer remain unchanged |
 | Supabase DB unreachable | 503 Service Unavailable | Requests fail; no silent fallback |
 | JWT missing/expired/invalid, revoked session, or disabled account | 401 Unauthorized | Request rejected |
 | Permission denied / wrong role or insufficient grant (Phases 4–7) | 403 Forbidden | Generic message; no document metadata leaked; denial audit event attempted best-effort |
@@ -650,7 +654,7 @@ Planned policies:
 - **Token and brute-force defenses:** Expired and signature-tampered access tokens return 401, logout invalidates a previously issued access token through the active-session check, and the login limiter returns 429 with `Retry-After` without echoing the email or password.
 - **Denial of service:** An unauthenticated oversized upload is rejected with 413 before request-body parsing or authentication, uploads without `Content-Length` return 411, and invalid/duplicate lengths return 400. DOCX expansion limits are tested.
 - **Account status and audit role:** Disabled users are denied document and administrator audit endpoints, and a validly signed administrator role claim cannot read audit data when the database role is `USER`.
-- **Coverage:** The full 258-test suite passes with 90% statement coverage. Authorization and document services remain the most security-sensitive modules; dependency, application, error, and audit-schema modules are at or near full coverage.
+- **Coverage:** The full 269-test suite passes with 88% statement coverage. Authorization and document services remain the most security-sensitive modules; dependency, application, error, and audit-schema modules are at or near full coverage.
 - **CI:** `.github/workflows/backend-tests.yml` runs the full suite and coverage on backend pushes and pull requests. The workflow has not yet run on GitHub.
 - **Honest limitations:** RLS is still not enabled, so there are no database RLS policy tests; application-level authorization remains the primary boundary and is verified directly. Malware scanning and deployment remain outstanding; live private-bucket storage passed its smoke test, and the Supabase database was migrated to `0004` and checked for schema drift. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.
 
@@ -662,9 +666,9 @@ Planned policies:
 - **Navigation and accessibility:** desktop routes use a sidebar workspace shell; mobile uses a compact top bar with scrollable, labelled navigation. Links and sign-out retain accessible names, and administrator destinations are separated from workspace destinations.
 - **Dashboard:** `/dashboard` loads real permitted-document, shared-document, and owned-document counts plus recent documents from the authenticated list endpoints. It does not display sample accounts or fabricated activity.
 - **Document library:** name search, category, exact owner-ID, created-date filters, allow-listed sorting, and pagination are exposed through the backend query contract. Invalid owner UUIDs are never sent to the API, and document details expose the owner ID needed for exact filtering.
-- **Complete surfaces:** the dedicated `/upload` page provides validation/progress feedback; details provide metadata editing, download, and owner deletion; owners can grant, update, revoke, and review history; administrators can filter audit events and verify integrity. All of these actions use the real backend contracts.
+- **Complete surfaces:** the dedicated `/upload` page provides validation/progress feedback; details provide preview, read-only metadata, download, version/activity history, and owner deletion (the metadata edit form was later removed); owners can grant, update, revoke, and review history; administrators can filter audit events and verify integrity. All of these actions use the real backend contracts.
 - **Error handling:** API errors use the backend envelope and include bounded validation field messages without exposing raw submitted values. Forms retain loading, error, empty, success, confirmation, forbidden, and not-found states.
-- **Verification:** `npm run lint` reports 0 warnings/errors, `npm test` now passes 15 Vitest/React Testing Library tests (10 at Phase 9 completion), and `npm run build` succeeds while retaining the existing chunk-size warning. A browser-based multi-account walkthrough and deployment behavior remain unverified.
+- **Verification:** at Phase 9 completion, `npm run lint` reported 0 warnings/errors, `npm test` passed 15 Vitest/React Testing Library tests, and `npm run build` succeeded. The current suite has 23 tests across 8 files and lint reports warnings but no errors. A browser-based multi-account walkthrough and deployment behavior remain unverified.
 
 ---
 
@@ -686,9 +690,11 @@ Planned policies:
 - **Schema:** migration `0005_document_versions` adds `document_versions`, unique `(document_id, version_number)` and `storage_key` constraints, content checks, a partial unique current-version index, and backfills every existing document as version 1/current. Supabase is at `0005` and `alembic check` reports no drift.
 - **Initial upload:** creates version 1 with the original filename, uploader, checksum, size, and `Initial upload` summary; the existing current-file columns remain denormalized for compatibility.
 - **Preview:** `GET /api/v1/documents/{id}/preview` requires READ, streams through the backend with inline disposition, no-store caching, and nosniff. PDF/text/image previews are rendered client-side; DOCX falls back to download. Administrators without a grant receive 403.
-- **Text editing:** `PUT /api/v1/documents/{id}/content` requires EDIT and `text/plain`; it creates a new version and supports optional change summaries. The browser editor handles 409 conflicts by reloading version history.
+- **Text editing:** `PUT /api/v1/documents/{id}/content` requires EDIT and `text/plain`; it creates a new version and supports optional change summaries. The browser editor handles 409 conflicts by becoming stale and requiring close/reopen, preventing a second save against an outdated base.
 - **Replacement:** `PUT /api/v1/documents/{id}/versions` requires EDIT and uploads a validated multipart file. The service uploads first, locks the document, rechecks `expected_version_number`, flips the current pointer, and updates denormalized columns. Stale writes return 409 and never overwrite silently.
-- **History/download:** authenticated users with READ can list versions and download any retained version through the backend. No storage key or presigned URL is returned. Soft deletion attempts cleanup for the current and all historical objects.
-- **Audit:** `DOCUMENT_VERSION_CREATED`, `DOCUMENT_VERSION_DOWNLOAD`, and `DOCUMENT_PREVIEW` include version/size/MIME/source context and are sanitized. File contents, passwords, tokens, and secrets are never recorded. The administrator audit UI renders structured metadata without raw HTML and provides local copy/raw JSON views.
-- **Frontend:** previews, version history, text editing, replacement uploads, current-version tracking, conflict recovery, and historical downloads are integrated into document details; READ remains read-only and administrators remain metadata-only.
-- **Verification:** 258 backend tests pass with 90% statement coverage, including version constraints, backfill/downgrade, authorization, stale writes, storage failures, audit failures, and historical-object deletion. Frontend: 15 tests across 7 files, lint clean, production build successful. Manual browser preview of real PDFs/DOCX and deployment remain unverified.
+- **History/download:** authenticated users with READ can list paginated versions and download any retained version through the backend. No storage key or presigned URL is returned. Soft deletion attempts cleanup for the current and all historical objects.
+- **Deletion/rollback:** owners can delete versions when more than one remains. Deleting the current version rolls back to the highest remaining version and updates the active content pointer atomically; deleting the last version returns 400. Migration `0007` adds `documents.next_version_number` so deleted numbers are not reused.
+- **Activity:** owner timelines are server-paginated five per page and exclude the owner's own routine preview/download/version-download events while retaining other users' routine access and all non-routine owner actions.
+- **Audit:** `DOCUMENT_VERSION_CREATED`, `DOCUMENT_VERSION_DELETE`, `DOCUMENT_VERSION_DOWNLOAD`, and `DOCUMENT_PREVIEW` include version/size/MIME/source/rollback context and are sanitized. File contents, passwords, tokens, and secrets are never recorded. The administrator audit UI renders structured metadata without raw HTML and provides local copy/raw JSON views.
+- **Frontend:** previews, paginated version history, text editing, replacement uploads, current-version tracking, rollback-aware deletion, stale-editor handling, paginated owner activity, and version downloads are integrated into document details; READ remains read-only and administrators remain metadata-only. The metadata edit UI was removed so metadata is displayed read-only.
+- **Verification:** 269 backend tests pass with 88% statement coverage, including version constraints, `0007` sequence/backfill/downgrade, authorization, stale writes, last-version rejection, current-version rollback, storage failures, audit failures, and deletion cleanup. Frontend: 23 tests across 8 files, lint with warnings and no errors, production build successful. Manual browser preview of real PDFs/DOCX and deployment remain unverified.

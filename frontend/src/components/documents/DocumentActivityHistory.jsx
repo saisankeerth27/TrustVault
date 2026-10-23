@@ -13,6 +13,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react'
+import { HistoryPagination } from '@/components/documents/HistoryPagination'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatAuditAction, outcomeMeta } from '@/lib/audit'
@@ -20,6 +21,8 @@ import { formatBytes, formatDateTime } from '@/lib/documents'
 import { cn } from '@/lib/utils'
 import { getApiErrorMessage } from '@/services/api'
 import { listDocumentActivity } from '@/services/documents'
+
+const ACTIVITY_PAGE_SIZE = 5
 
 function ActionIcon({ action, outcome }) {
   if (outcome === 'DENIED') {
@@ -139,20 +142,32 @@ function VersionChangesView({ details }) {
   )
 }
 
-export function DocumentActivityHistory({ documentId }) {
+export function DocumentActivityHistory({ documentId, refreshKey = 0 }) {
   const [events, setEvents] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [refreshKey, setRefreshKey] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageCount, setPageCount] = useState(0)
+  const [total, setTotal] = useState(0)
+  const [localRefreshKey, setLocalRefreshKey] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
     setIsLoading(true)
     setError(null)
 
-    listDocumentActivity(documentId, controller.signal)
+    listDocumentActivity(
+      documentId,
+      { page, page_size: ACTIVITY_PAGE_SIZE },
+      controller.signal,
+    )
       .then((data) => {
         setEvents(data.items || [])
+        setPageCount(data.pages || 0)
+        setTotal(data.total || 0)
+        if (data.pages > 0 && page > data.pages) {
+          setPage(data.pages)
+        }
       })
       .catch((err) => {
         if (err?.code !== 'ERR_CANCELED' && err?.name !== 'CanceledError') {
@@ -166,7 +181,7 @@ export function DocumentActivityHistory({ documentId }) {
       })
 
     return () => controller.abort()
-  }, [documentId, refreshKey])
+  }, [documentId, refreshKey, localRefreshKey, page])
 
   return (
     <Card>
@@ -185,7 +200,10 @@ export function DocumentActivityHistory({ documentId }) {
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => setRefreshKey((k) => k + 1)}
+          onClick={() => {
+            setPage(1)
+            setLocalRefreshKey((key) => key + 1)
+          }}
           disabled={isLoading}
         >
           <RefreshCw className={cn('size-4', isLoading && 'animate-spin')} aria-hidden="true" />
@@ -218,6 +236,7 @@ export function DocumentActivityHistory({ documentId }) {
               const details = event.details || {}
               const isMetadataEdit = event.action === 'DOCUMENT_METADATA_UPDATE'
               const isVersionCreated = event.action === 'DOCUMENT_VERSION_CREATED'
+              const isVersionDeleted = event.action === 'DOCUMENT_VERSION_DELETE'
 
               return (
                 <li key={event.id} className="space-y-1.5">
@@ -271,6 +290,15 @@ export function DocumentActivityHistory({ documentId }) {
                     <VersionChangesView details={details} />
                   ) : null}
 
+                  {isVersionDeleted ? (
+                    <p className="text-xs text-muted-foreground">
+                      Deleted Version {details.version_number}
+                      {details.rollback && details.rolled_back_to_version_number
+                        ? `. The document rolled back to Version ${details.rolled_back_to_version_number}.`
+                        : '. The current version was unchanged.'}
+                    </p>
+                  ) : null}
+
                   {/* Permission action details */}
                   {event.action.startsWith('PERMISSION_') ? (
                     <p className="text-xs text-muted-foreground">
@@ -290,6 +318,18 @@ export function DocumentActivityHistory({ documentId }) {
             })}
           </ol>
         )}
+
+        {!isLoading && !error ? (
+          <HistoryPagination
+            className="mt-4"
+            page={page}
+            pages={pageCount}
+            pageSize={ACTIVITY_PAGE_SIZE}
+            total={total}
+            onPageChange={setPage}
+            itemLabel="activity events"
+          />
+        ) : null}
       </CardContent>
     </Card>
   )

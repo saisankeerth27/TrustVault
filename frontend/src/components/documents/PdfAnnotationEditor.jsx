@@ -49,6 +49,19 @@ if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 }
 
+function normalizedPdfFilename(name, fallback) {
+  const base = (name || fallback || 'annotated').trim().replace(/\.pdf$/i, '')
+  return `${base || 'annotated'}.pdf`
+}
+
+function pdfSafeText(value) {
+  return String(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[^\x20-\x7e]/g, '?')
+}
+
 const TOOL_TYPES = {
   TEXT_NOTE: 'text_note',
   FREE_TEXT: 'free_text',
@@ -178,6 +191,7 @@ export function PdfAnnotationEditor({
   const [highlightPreview, setHighlightPreview] = useState(null)
 
   const [isSaving, setIsSaving] = useState(false)
+  const [isStale, setIsStale] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [saveProgress, setSaveProgress] = useState(0)
   const [changeSummary, setChangeSummary] = useState('')
@@ -334,7 +348,7 @@ export function PdfAnnotationEditor({
 
   async function handleSave(e) {
     e.preventDefault()
-    if (!hasAnnotations || !currentVersion || isSaving) return
+    if (!hasAnnotations || !currentVersion || isSaving || isStale) return
     setSaveError(null)
     setIsSaving(true)
     setSaveProgress(5)
@@ -350,44 +364,52 @@ export function PdfAnnotationEditor({
 
       for (const ann of annotations) {
         const page = pages[ann.pageIndex]
-        if (!page) continue
-        const { height: pH } = page.getSize()
-        // Convert top-left → bottom-left (PDF coordinate system)
-        const pdfY = pH - ann.y
+        if (!page || !pdfDoc) continue
+        const pdfjsPage = await pdfDoc.getPage(ann.pageIndex + 1)
+        const viewport = pdfjsPage.getViewport({ scale: 1 })
+        const [pdfX, pdfY] = viewport.convertToPdfPoint(ann.x, ann.y)
+        const text = pdfSafeText(ann.text)
 
         switch (ann.type) {
           case TOOL_TYPES.TEXT_NOTE:
             page.drawRectangle({
-              x: ann.x, y: pdfY - 22, width: 160, height: 22,
+              x: pdfX, y: pdfY - 22, width: 160, height: 22,
               color: rgb(1, 0.95, 0.7), borderColor: rgb(0.95, 0.65, 0.1), borderWidth: 1,
               opacity: 0.9,
             })
-            page.drawText(ann.text, {
-              x: ann.x + 4, y: pdfY - 16, font: helvetica, size: 9,
+            page.drawText(text, {
+              x: pdfX + 4, y: pdfY - 16, font: helvetica, size: 9,
               color: rgb(0.1, 0.1, 0.1), maxWidth: 152,
             })
             break
           case TOOL_TYPES.FREE_TEXT:
-            page.drawText(ann.text, {
-              x: ann.x, y: pdfY - 13, font: helvetica, size: 12,
+            page.drawText(text, {
+              x: pdfX, y: pdfY - 13, font: helvetica, size: 12,
               color: rgb(0.05, 0.27, 0.71),
             })
             break
-          case TOOL_TYPES.HIGHLIGHT:
+          case TOOL_TYPES.HIGHLIGHT: {
+            const [pdfRight, pdfBottom] = viewport.convertToPdfPoint(
+              ann.x + (ann.w || 100),
+              ann.y + (ann.h || 20),
+            )
             page.drawRectangle({
-              x: ann.x, y: pH - ann.y - (ann.h || 20),
-              width: ann.w || 100, height: ann.h || 20,
+              x: Math.min(pdfX, pdfRight),
+              y: Math.min(pdfY, pdfBottom),
+              width: Math.abs(pdfRight - pdfX),
+              height: Math.abs(pdfBottom - pdfY),
               color: rgb(0.99, 0.87, 0.1), opacity: 0.35,
             })
             break
+          }
           case TOOL_TYPES.SIGNATURE:
-            page.drawText(ann.text, {
-              x: ann.x, y: pdfY - 18, font: helvetica, size: 18,
+            page.drawText(text, {
+              x: pdfX, y: pdfY - 18, font: helvetica, size: 18,
               color: rgb(0.05, 0.25, 0.67),
             })
             page.drawLine({
-              start: { x: ann.x, y: pdfY - 20 },
-              end: { x: ann.x + Math.min(ann.text.length * 10, 200), y: pdfY - 20 },
+              start: { x: pdfX, y: pdfY - 20 },
+              end: { x: pdfX + Math.min(text.length * 10, 200), y: pdfY - 20 },
               thickness: 1, color: rgb(0.05, 0.25, 0.67),
             })
             break
@@ -402,7 +424,7 @@ export function PdfAnnotationEditor({
 
       const file = new File(
         [new Blob([annotatedBytes], { type: 'application/pdf' })],
-        filename || documentRecord?.name || 'annotated.pdf',
+        normalizedPdfFilename(filename, documentRecord?.name),
         { type: 'application/pdf' },
       )
 
@@ -422,9 +444,10 @@ export function PdfAnnotationEditor({
       onSaved(result)
     } catch (err) {
       if (err?.response?.status === 409) {
+        setIsStale(true)
         onConflict?.()
         setSaveError(
-          `${getApiErrorMessage(err)} Reload to get the latest version, then re-apply your annotations.`,
+          `${getApiErrorMessage(err)} Close this editor and reopen it from the refreshed version before saving again.`,
         )
       } else {
         setSaveError(getApiErrorMessage(err))
@@ -478,8 +501,8 @@ export function PdfAnnotationEditor({
               Edit PDF — Annotations
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Add text notes, free-text, highlights, and typed signatures. Saving creates version{' '}
-              {(currentVersion?.version_number ?? 0) + 1}.
+              Add text notes, free-text, highlights, and typed signatures. Saving creates a
+              new immutable version.
             </p>
             <p className="rounded border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-800">
               This editor adds visual annotations to the PDF pages. It does not modify underlying body text.
@@ -759,7 +782,7 @@ export function PdfAnnotationEditor({
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 type="submit"
-                disabled={!hasAnnotations || !currentVersion || isSaving}
+                disabled={!hasAnnotations || !currentVersion || isSaving || isStale}
               >
                 {isSaving ? (
                   <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />

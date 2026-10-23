@@ -77,6 +77,7 @@ def store_document(
         mime_type=upload.mime_type,
         file_size=upload.size,
         checksum=upload.checksum,
+        next_version_number=2,
     )
     session.add(document)
 

@@ -9,6 +9,7 @@ export const AUDIT_ACTION_OPTIONS = [
   { value: 'DOCUMENT_METADATA_UPDATE', label: 'Document metadata updated' },
   { value: 'DOCUMENT_DOWNLOAD', label: 'Document downloaded' },
   { value: 'DOCUMENT_VERSION_CREATED', label: 'Document version created' },
+  { value: 'DOCUMENT_VERSION_DELETE', label: 'Document version deleted' },
   { value: 'DOCUMENT_VERSION_DOWNLOAD', label: 'Document version downloaded' },
   { value: 'DOCUMENT_PREVIEW', label: 'Document previewed' },
   { value: 'DOCUMENT_DELETE', label: 'Document deleted' },
@@ -110,19 +111,25 @@ const AUDIT_FIELD_LABELS = {
   change_summary: 'Change summary',
   changed_fields: 'Changed fields',
   client_ip: 'Client IP',
+  current_version_number: 'Resulting current version',
   file_size: 'File size',
   mime_type: 'MIME type',
+  previous_current_version_number: 'Previous current version',
   previous_permission: 'Previous permission',
   previous_version_number: 'Previous version',
   reason: 'Reason',
   recipient_id: 'Recipient ID',
   resource_type: 'Resource type',
   role: 'Role',
+  rolled_back_to_version_number: 'Rolled back to version',
+  rollback: 'Rollback',
   source: 'Source',
   status: 'Status',
+  storage_deleted: 'Storage object deleted',
   target_user_id: 'Target user',
   user_agent: 'User agent',
   version_number: 'Version',
+  was_current: 'Was current version',
 }
 
 function auditScalarText(value) {
@@ -156,6 +163,12 @@ export function auditEventSummary(details) {
         ? `Version ${versionNumber} replaced version ${previousVersion}`
         : `Version ${versionNumber}`,
     )
+  }
+  if (
+    details.rollback &&
+    Number.isInteger(details.rolled_back_to_version_number)
+  ) {
+    parts.push(`Rolled back to version ${details.rolled_back_to_version_number}`)
   }
   if (Array.isArray(details.changed_fields) && details.changed_fields.length > 0) {
     parts.push(`Changed ${details.changed_fields.join(', ')}`)

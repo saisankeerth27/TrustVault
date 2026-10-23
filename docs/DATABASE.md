@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2–7 plus the business-model correction and content-versioning work and used by the authentication, upload, document-management, permission, administrator, audit, preview, and version-history pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations `0001_initial_schema.py`, `0002_add_refresh_tokens.py`, `0003_add_audit_chain_index.py`, `0004_user_roles_and_login_tracking.py`, and `0005_document_versions.py`.
+This document describes the PostgreSQL schema implemented across Phases 2–7 plus the business-model correction and content-versioning work and used by the authentication, upload, document-management, permission, administrator, audit, preview, and version-history pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations through `0007_version_sequence.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, administrator account management, immutable document content versions, and the append-only hash-chained audit writer exist. Migrations through `0005` are applied to the Supabase project, and `alembic check` reports no pending operations.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, administrator account management, document content versions with safe owner rollback, persistent version numbering, and the append-only hash-chained audit writer exist. The repository migration head is `0007`; live Supabase migration state and drift were not re-verified in this local run.
 
 ## Entity Relationships
 
@@ -150,6 +150,7 @@ erDiagram
 | `mime_type` | VARCHAR(255) | Not null |
 | `file_size` | BIGINT | Not null, `>= 0` |
 | `checksum` | VARCHAR(64) | Not null, SHA-256 hex `^[0-9a-f]{64}$` |
+| `next_version_number` | INTEGER | Not null, default `2`, `>= 2`; next number to allocate |
 | `created_at` / `updated_at` | TIMESTAMPTZ | Not null, defaults `now()` |
 | `deleted_at` | TIMESTAMPTZ | Nullable; soft-delete marker |
 
@@ -177,7 +178,9 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 
 **Why `category` is a column and not a table.** Categories have not required independent identity, ownership, or lifecycle, so a nullable string keeps the schema small. Phase 5 continues to treat it as free-form metadata with case-insensitive filtering; promotion to a lookup table remains a future decision.
 
-**Current-file denormalization.** The `storage_key`, `mime_type`, `file_size`, and `checksum` columns on `documents` continue to describe the current content for compatibility with existing list/detail/download queries. Replacement transactions update them and the current `document_versions` row together; history lives only in `document_versions`.
+**Current-file denormalization.** The `storage_key`, `mime_type`, `file_size`, and `checksum` columns on `documents` describe the current content for list/detail/download compatibility. Replacement transactions update them and the current `document_versions` row together. Deleting the current version atomically points these columns at the highest remaining version.
+
+**Persistent version sequence.** Migration `0007` adds `documents.next_version_number` with a check that it is at least `2` and backfills it as `GREATEST(max(version_number) + 1, 2)`. Replacement and content edits take this value before insert and advance it in the same transaction, so deleting the highest version cannot cause a later revision to reuse its number.
 
 ## `document_versions`
 
@@ -196,7 +199,7 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 | `is_current` | BOOLEAN | Not null, default `false`; exactly one current row per document |
 | `created_at` | TIMESTAMPTZ | Not null, default `now()` |
 
-**Immutable content history.** Each replacement or plain-text edit inserts a new row and flips the previous current row to `is_current = false`. `UNIQUE (document_id, version_number)` prevents duplicate sequence numbers, `UNIQUE (storage_key)` prevents object aliasing, and the partial unique index `uq_document_versions_current` on `(document_id)` `WHERE is_current` enforces at most one current version even under concurrency. `document_id` cascades on hard deletion; `uploaded_by` uses `SET NULL` so version history survives account deletion.
+**Content history and deliberate deletion.** Each replacement or plain-text edit inserts a new row and flips the previous current row to `is_current = false`. Version rows are never updated except for the current flag during replacement or rollback, and are never deleted implicitly. An owner may explicitly delete a version when more than one remains; deleting the current version flips the highest remaining row back to current and updates the document's denormalized content columns in the same transaction. `UNIQUE (document_id, version_number)` prevents duplicate sequence numbers, `UNIQUE (storage_key)` prevents object aliasing, and the partial unique index `uq_document_versions_current` on `(document_id)` `WHERE is_current` enforces at most one current version even under concurrency. `document_id` cascades on hard deletion; `uploaded_by` uses `SET NULL` so version history survives account deletion.
 
 **Initial backfill.** Migration `0005` inserts version 1/current for every existing document, using the document's original filename (`documents.name`), current current-file columns, owner as uploader, `documents.created_at`, and the summary `Initial upload`. Downgrading removes `document_versions` without changing the denormalized current-file columns.
 
@@ -316,4 +319,4 @@ pytest
 
 ## Applying to Supabase
 
-Migrations through `0005` are applied to the Supabase project, and `alembic check` reports no drift. To apply future migrations, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.
+The repository migration head is `0007`; live Supabase migration state and `alembic check` were not re-verified in this local run. To apply pending migrations, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.

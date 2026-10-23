@@ -693,6 +693,93 @@ def test_preview_and_version_download_audit_failures_are_safe(
     )
     assert "SECRET" not in download.text
 
+def test_version_history_is_paginated_newest_first_without_duplicates(
+    api_client: TestClient,
+    db_session: Session,
+    version_storage: VersionStorage,
+) -> None:
+    owner_email, _ = _create_user(db_session)
+    owner_token = _token_for(api_client, owner_email)
+    document = _upload(api_client, owner_token)
+
+    for version_number in range(2, 14):
+        response = api_client.put(
+            f"/api/v1/documents/{document['id']}/versions",
+            headers=bearer(owner_token),
+            files={
+                "file": (
+                    f"v{version_number}.pdf",
+                    b"%PDF-1.4\n" + str(version_number).encode(),
+                    "application/pdf",
+                )
+            },
+            data={"expected_version_number": str(version_number - 1)},
+        )
+        assert response.status_code == 201
+
+    first = api_client.get(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+    )
+    assert first.status_code == 200
+    first_page = first.json()
+    assert first_page["total"] == 13
+    assert first_page["page"] == 1
+    assert first_page["page_size"] == 5
+    assert first_page["pages"] == 3
+    assert first_page["has_next"] is True
+    assert first_page["has_previous"] is False
+    assert [item["version_number"] for item in first_page["items"]] == [
+        13,
+        12,
+        11,
+        10,
+        9,
+    ]
+
+    pages = [first_page]
+    for page in (2, 3):
+        response = api_client.get(
+            f"/api/v1/documents/{document['id']}/versions",
+            params={"page": page},
+            headers=bearer(owner_token),
+        )
+        assert response.status_code == 200
+        pages.append(response.json())
+
+    assert [item["version_number"] for item in pages[1]["items"]] == [
+        8,
+        7,
+        6,
+        5,
+        4,
+    ]
+    assert [item["version_number"] for item in pages[2]["items"]] == [3, 2, 1]
+    assert pages[2]["has_next"] is False
+    assert pages[2]["has_previous"] is True
+    all_version_numbers = [
+        item["version_number"] for page in pages for item in page["items"]
+    ]
+    assert len(all_version_numbers) == len(set(all_version_numbers)) == 13
+
+    empty_page = api_client.get(
+        f"/api/v1/documents/{document['id']}/versions",
+        params={"page": 4},
+        headers=bearer(owner_token),
+    )
+    assert empty_page.status_code == 200
+    assert empty_page.json()["items"] == []
+    assert empty_page.json()["has_next"] is False
+    assert empty_page.json()["has_previous"] is True
+
+    oversized = api_client.get(
+        f"/api/v1/documents/{document['id']}/versions",
+        params={"page_size": 101},
+        headers=bearer(owner_token),
+    )
+    assert oversized.status_code == 422
+
+
 def test_owner_can_delete_historical_version(
     api_client: TestClient,
     db_session: Session,
@@ -758,38 +845,89 @@ def test_owner_can_delete_historical_version(
     assert delete_events[0].details["version_number"] == 1
 
 
-def test_cannot_delete_current_version_or_single_version_document(
+def test_current_version_deletion_rolls_back_to_highest_remaining_version(
     api_client: TestClient,
     db_session: Session,
     version_storage: VersionStorage,
 ) -> None:
     owner_email, _ = _create_user(db_session)
     owner_token = _token_for(api_client, owner_email)
-    document = _upload(api_client, owner_token)
+    document = _upload(api_client, owner_token, content=PDF_V1)
+    version_one = _versions(api_client, owner_token, document["id"]).json()["items"][0]
 
-    # Attempt to delete single version (which is current)
-    del_res = api_client.delete(
+    last_version = api_client.delete(
         f"/api/v1/documents/{document['id']}/versions/1",
         headers=bearer(owner_token),
     )
-    assert del_res.status_code == 400
-    assert "current version cannot be deleted" in del_res.json()["error"]["message"].lower()
+    assert last_version.status_code == 400
+    assert "at least one document version" in (
+        last_version.json()["error"]["message"].lower()
+    )
+    assert version_one["id"] in {
+        version["id"]
+        for version in _versions(api_client, owner_token, document["id"]).json()[
+            "items"
+        ]
+    }
 
-    # Create version 2
-    api_client.put(
+    create_v2 = api_client.put(
         f"/api/v1/documents/{document['id']}/versions",
         headers=bearer(owner_token),
-        files={"file": ("v2.pdf", b"%PDF-1.4\nv2", "application/pdf")},
+        files={"file": ("v2.pdf", PDF_V2, "application/pdf")},
         data={"expected_version_number": "1"},
     )
+    assert create_v2.status_code == 201
+    assert create_v2.json()["version"]["version_number"] == 2
 
-    # Attempt to delete version 2 (the current version)
-    del_res2 = api_client.delete(
+    rollback = api_client.delete(
         f"/api/v1/documents/{document['id']}/versions/2",
         headers=bearer(owner_token),
     )
-    assert del_res2.status_code == 400
-    assert "current version cannot be deleted" in del_res2.json()["error"]["message"].lower()
+    assert rollback.status_code == 200
+    body = rollback.json()
+    assert body["deleted_version_number"] == 2
+    assert body["rolled_back"] is True
+    assert body["current_version"]["version_number"] == 1
+    assert body["document"]["checksum"] == version_one["checksum"]
+    assert body["document"]["file_size"] == version_one["file_size"]
+
+    after = _versions(api_client, owner_token, document["id"]).json()
+    assert after["total"] == 1
+    assert after["current_version_number"] == 1
+    assert after["items"][0]["id"] == version_one["id"]
+    assert after["items"][0]["is_current"] is True
+
+    preview = api_client.get(
+        f"/api/v1/documents/{document['id']}/preview",
+        headers=bearer(owner_token),
+    )
+    assert preview.status_code == 200
+    assert preview.content == PDF_V1
+
+    create_v3 = api_client.put(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+        files={"file": ("v3.pdf", PDF_V2, "application/pdf")},
+        data={"expected_version_number": "1"},
+    )
+    assert create_v3.status_code == 201
+    assert create_v3.json()["version"]["version_number"] == 3
+
+    db_session.expire_all()
+    stored_document = db_session.get(Document, UUID(document["id"]))
+    assert stored_document is not None
+    assert stored_document.next_version_number == 4
+
+    rollback_event = next(
+        event
+        for event in _events(db_session)
+        if event.action == "DOCUMENT_VERSION_DELETE"
+        and event.details.get("version_number") == 2
+    )
+    assert rollback_event.details["rollback"] is True
+    assert rollback_event.details["rolled_back_to_version_number"] == 1
+    assert rollback_event.details["current_version_number"] == 1
+    assert rollback_event.details["was_current"] is True
 
 
 def test_edit_and_read_recipients_cannot_delete_historical_version(
@@ -926,52 +1064,171 @@ def test_failed_storage_deletion_does_not_report_success(
     )
     assert len(list_res.json()["items"]) == 2
 
+    current_failure = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/2",
+        headers=bearer(owner_token),
+    )
+    assert current_failure.status_code == 503
+    list_after_current_failure = api_client.get(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(owner_token),
+    ).json()
+    assert list_after_current_failure["total"] == 2
+    assert list_after_current_failure["current_version_number"] == 2
 
-def test_document_activity_endpoint_owner_only_and_records_change_history(
+    version_storage.fail_delete = None
+    current_rollback = api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/2",
+        headers=bearer(owner_token),
+    )
+    assert current_rollback.status_code == 200
+    assert current_rollback.json()["rolled_back"] is True
+    assert current_rollback.json()["current_version"]["version_number"] == 1
+
+
+def test_document_activity_is_filtered_and_paginated_for_owner(
     api_client: TestClient,
     db_session: Session,
     version_storage: VersionStorage,
 ) -> None:
-    owner_email, _ = _create_user(db_session, name="Akash Owner")
-    editor_email, _ = _create_user(db_session, name="Akash Editor")
+    owner_email, owner = _create_user(db_session, name="Akash Owner")
+    editor_email, editor = _create_user(db_session, name="Akash Editor")
+    admin_email, _ = _create_user(
+        db_session,
+        role=UserRole.ADMINISTRATOR,
+        name="Audit Admin",
+    )
     owner_token = _token_for(api_client, owner_email)
     editor_token = _token_for(api_client, editor_email)
+    admin_token = _token_for(api_client, admin_email)
 
-    document = _upload(api_client, owner_token, filename="notes.txt", content_type="text/plain", content=b"Initial notes\n")
-    api_client.post(
-        f"/api/v1/documents/{document['id']}/permissions",
-        headers=bearer(owner_token),
-        json={"email": editor_email, "permission": "EDIT"},
+    document = _upload(
+        api_client,
+        owner_token,
+        filename="notes.txt",
+        content_type="text/plain",
+        content=b"Initial notes\n",
     )
+    _grant(api_client, owner_token, document["id"], editor_email, "EDIT")
 
-    # Editor updates description
-    patch_res = api_client.patch(
+    assert api_client.patch(
         f"/api/v1/documents/{document['id']}",
         headers=bearer(editor_token),
         json={"description": "Updated semester notes"},
+    ).status_code == 200
+    assert api_client.get(
+        f"/api/v1/documents/{document['id']}/preview",
+        headers=bearer(editor_token),
+    ).status_code == 200
+    assert api_client.get(
+        f"/api/v1/documents/{document['id']}/download",
+        headers=bearer(editor_token),
+    ).status_code == 200
+    assert api_client.get(
+        f"/api/v1/documents/{document['id']}/preview",
+        headers=bearer(owner_token),
+    ).status_code == 200
+    assert api_client.get(
+        f"/api/v1/documents/{document['id']}/download",
+        headers=bearer(owner_token),
+    ).status_code == 200
+    create_v2 = api_client.put(
+        f"/api/v1/documents/{document['id']}/versions",
+        headers=bearer(editor_token),
+        files={"file": ("v2.txt", b"Revised notes\n", "text/plain")},
+        data={"expected_version_number": "1", "change_summary": "Editor revision"},
     )
-    assert patch_res.status_code == 200
+    assert create_v2.status_code == 201
+    assert api_client.delete(
+        f"/api/v1/documents/{document['id']}/versions/1",
+        headers=bearer(editor_token),
+    ).status_code == 403
 
-    # Owner views document activity
-    act_res = api_client.get(
+    first_page = api_client.get(
         f"/api/v1/documents/{document['id']}/activity",
         headers=bearer(owner_token),
     )
-    assert act_res.status_code == 200
-    items = act_res.json()["items"]
-    assert len(items) >= 2
+    assert first_page.status_code == 200
+    first_payload = first_page.json()
+    assert first_payload["page"] == 1
+    assert first_payload["page_size"] == 5
+    assert first_payload["total"] == 7
+    assert first_payload["pages"] == 2
+    assert first_payload["has_next"] is True
+    assert first_payload["has_previous"] is False
+    assert len(first_payload["items"]) == 5
 
-    # Check the metadata update event
-    meta_events = [e for e in items if e["action"] == "DOCUMENT_METADATA_UPDATE"]
-    assert len(meta_events) == 1
-    meta_event = meta_events[0]
-    assert meta_event["actor_name"] == "Akash Editor"
-    assert "description" in meta_event["details"]["field_changes"]
-    assert meta_event["details"]["field_changes"]["description"]["new"] == "Updated semester notes"
+    second_page = api_client.get(
+        f"/api/v1/documents/{document['id']}/activity",
+        params={"page": 2},
+        headers=bearer(owner_token),
+    )
+    assert second_page.status_code == 200
+    second_payload = second_page.json()
+    assert second_payload["page"] == 2
+    assert second_payload["has_next"] is False
+    assert second_payload["has_previous"] is True
+    items = first_payload["items"] + second_payload["items"]
+    assert len(items) == len({item["id"] for item in items}) == 7
 
-    # Editor cannot view document activity (owner-only)
-    act_denied = api_client.get(
+    owner_routine_actions = {
+        "DOCUMENT_PREVIEW",
+        "DOCUMENT_DOWNLOAD",
+        "DOCUMENT_VERSION_DOWNLOAD",
+    }
+    assert not any(
+        item["actor_id"] == str(owner.id)
+        and item["action"] in owner_routine_actions
+        for item in items
+    )
+    actions = {item["action"] for item in items}
+    assert {
+        "DOCUMENT_UPLOAD",
+        "PERMISSION_GRANT",
+        "DOCUMENT_METADATA_UPDATE",
+        "DOCUMENT_PREVIEW",
+        "DOCUMENT_DOWNLOAD",
+        "DOCUMENT_VERSION_CREATED",
+        "DOCUMENT_VERSION_DELETE",
+    } <= actions
+
+    metadata_event = next(
+        item for item in items if item["action"] == "DOCUMENT_METADATA_UPDATE"
+    )
+    assert metadata_event["actor_id"] == str(editor.id)
+    assert metadata_event["actor_name"] == "Akash Editor"
+    assert "description" in metadata_event["details"]["field_changes"]
+    assert (
+        metadata_event["details"]["field_changes"]["description"]["new"]
+        == "Updated semester notes"
+    )
+
+    denied_delete = next(
+        item
+        for item in items
+        if item["action"] == "DOCUMENT_VERSION_DELETE"
+    )
+    assert denied_delete["outcome"] == "DENIED"
+
+    admin_events = api_client.get(
+        "/api/v1/admin/audit-events",
+        params={"document_id": document["id"], "page_size": 100},
+        headers=bearer(admin_token),
+    )
+    assert admin_events.status_code == 200
+    admin_payload = admin_events.json()
+    assert admin_payload["total"] == 9
+    admin_actions = [item["action"] for item in admin_payload["items"]]
+    assert admin_actions.count("DOCUMENT_PREVIEW") == 2
+    assert admin_actions.count("DOCUMENT_DOWNLOAD") == 2
+    assert any(
+        item["actor_id"] == str(owner.id)
+        and item["action"] == "DOCUMENT_PREVIEW"
+        for item in admin_payload["items"]
+    )
+
+    denied = api_client.get(
         f"/api/v1/documents/{document['id']}/activity",
         headers=bearer(editor_token),
     )
-    assert act_denied.status_code == 403
+    assert denied.status_code == 403

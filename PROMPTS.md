@@ -552,3 +552,45 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 - **Commit hash:** (To be recorded with the single push)
 - **GitHub link:** https://github.com/saisankeerth27/TrustVault
 - **Human review and decision:** Pending human review.
+
+---
+
+## 2026-10-23 - Phase 11: History Pagination, Safe Version Rollback, and Stale-Editor Protection
+
+- **Date and phase:** 2026-10-23 - Phase 11 (history pagination, current-version rollback, stale editor protection)
+- **Objective:** Make version history and owner activity reliable at scale, allow owners to delete the current version without corrupting the document, prevent version-number reuse, and prevent stale editors from overwriting newer revisions.
+- **Prompt / instruction summary:** Continue the document-history fixes: paginate version history and owner activity five at a time, exclude owner routine preview/download events from the owner timeline, support safe current-version deletion with rollback, add a persistent version sequence, harden editor conflict states, fix PDF annotation coordinate conversion, update tests/docs, run all checks, and create one final commit `fix(documents): paginate history and support safe version rollback`.
+- **Files or code produced:**
+  - `backend/alembic/versions/0007_version_sequence.py`: adds and backfills `documents.next_version_number`.
+  - `backend/app/models/document.py`, `backend/app/services/documents.py`, `backend/tests/factories.py`: persistent version sequence schema and creation defaults.
+  - `backend/app/services/document_versions.py`: paginated version listing, safe current-version rollback deletion, locking, storage cleanup, and rollback audit details.
+  - `backend/app/api/documents.py`: consolidated version deletion route, paginated version history, paginated/filtered owner activity.
+  - `backend/app/schemas/document.py`: current version and pagination metadata; rollback-aware deletion response.
+  - `backend/tests/test_document_versions.py`, `backend/tests/test_models.py`, `backend/tests/test_migrations.py`: rollback, pagination, activity filtering, storage-failure, model, and `0007` backfill coverage.
+  - `frontend/src/components/documents/HistoryPagination.jsx`: shared accessible pagination controls.
+  - `frontend/src/components/documents/VersionHistory.jsx`, `DocumentActivityHistory.jsx`: paginated lists and rollback/deletion details.
+  - `frontend/src/pages/DocumentDetailsPage.jsx`: paginated version/activity state, rollback refresh, read-only metadata display.
+  - `frontend/src/components/documents/DocumentTextEditor.jsx`, `PdfAnnotationEditor.jsx`: stale-editor locking, normalized PDF filenames, PDF-safe text, and viewport-based coordinate conversion.
+  - `frontend/src/lib/audit.js`: version-delete/rollback labels and summaries.
+  - `frontend/src/pages/DocumentDetailsPage.test.jsx`, `frontend/src/components/documents/DocumentActivityHistory.test.jsx`: pagination, rollback, stale-editor, and activity refresh coverage.
+  - Updated `README.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/REQUIREMENTS.md`, `THREATS.md`, and this activity log.
+- **Tests and verification performed:**
+  - Backend pytest: **269 passed**, 1 warning.
+  - Backend coverage: **88% statement coverage**.
+  - Frontend Vitest: **23 passed across 8 files**.
+  - Frontend lint: **0 errors, 5 warnings**.
+  - Production build: `vite build` completed successfully.
+- **Issues discovered:**
+  - The first PDF coordinate conversion edit introduced an extra brace and broke the build; the syntax error was fixed and the build/parser tests passed.
+  - Stale editors could remain open after a 409 and save again; both editors now require close/reopen.
+  - Deleting the current version would have left the document pointer invalid; deletion now rolls back to the highest remaining version in one transaction.
+  - Version numbers could be reused after deleting the highest version; `next_version_number` now prevents reuse.
+- **Corrections made:**
+  - Consolidated duplicate version-delete route definitions.
+  - Rejected deletion of the final version with HTTP 400.
+  - Added server-side pagination and owner routine-action filtering with deterministic ordering.
+  - Excluded owner routine preview/download events from the owner activity timeline while retaining administrative audit coverage.
+  - Updated test mocks and added regression coverage for pagination, rollback, stale editors, and activity refresh.
+- **Commit hash:** The final single commit created from this working tree; its hash is reported with the pushed commit.
+- **GitHub link:** Reported with the pushed commit.
+- **Human review and decision:** Pending; local verification completed before the single commit/push.

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useForm } from 'react-hook-form'
 import {
   ArrowLeft,
   CalendarDays,
@@ -10,7 +9,6 @@ import {
   HardDrive,
   KeyRound,
   LoaderCircle,
-  Pencil,
   PencilLine,
   RefreshCw,
   ShieldAlert,
@@ -20,7 +18,6 @@ import {
   X,
 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { z } from 'zod'
 import { useAuth } from '@/auth/useAuth'
 import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
 import { DocumentActivityHistory } from '@/components/documents/DocumentActivityHistory'
@@ -37,13 +34,11 @@ import {
   ACCESS_LEVEL_META,
   canDeleteDocument,
   canDeleteHistoricalVersion,
-  canEditDocument,
   canEditPdfContent,
   canEditTextContent,
   canManageDocumentPermissions,
   canReadDocument,
   canReplaceDocumentFile,
-  categoryChoices,
   formatBytes,
   formatDateTime,
   saveBlob,
@@ -57,21 +52,9 @@ import {
   getDocument,
   listDocumentVersions,
   previewDocument,
-  updateDocument,
 } from '@/services/documents'
 
-const editSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(1, { message: 'Document name is required.' })
-    .max(255, { message: 'Name must be 255 characters or fewer.' }),
-  category: z.string().trim().max(100, { message: 'Category must be 100 characters or fewer.' }),
-  description: z
-    .string()
-    .trim()
-    .max(2000, { message: 'Description must be 2,000 characters or fewer.' }),
-})
+const VERSION_PAGE_SIZE = 5
 
 function isAbortError(error) {
   return error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError'
@@ -102,7 +85,6 @@ function DocumentDetailsView({ documentId }) {
   const [loadError, setLoadError] = useState(null)
   const [actionError, setActionError] = useState(null)
   const [notice, setNotice] = useState(null)
-  const [isEditing, setIsEditing] = useState(false)
   const [isEditingContent, setIsEditingContent] = useState(false)
   const [isEditingPdf, setIsEditingPdf] = useState(false)
   const [pdfBlob, setPdfBlob] = useState(null)
@@ -114,22 +96,18 @@ function DocumentDetailsView({ documentId }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [versions, setVersions] = useState([])
+  const [currentVersion, setCurrentVersion] = useState(null)
+  const [versionPage, setVersionPage] = useState(1)
+  const [versionPages, setVersionPages] = useState(0)
+  const [versionTotal, setVersionTotal] = useState(0)
+  const [versionTotalSize, setVersionTotalSize] = useState(0)
   const [isLoadingVersions, setIsLoadingVersions] = useState(true)
   const [versionsError, setVersionsError] = useState(null)
   const [versionsRefreshKey, setVersionsRefreshKey] = useState(0)
   const [versionActionError, setVersionActionError] = useState(null)
   const [deletingVersion, setDeletingVersion] = useState(null)
+  const [activityRefreshKey, setActivityRefreshKey] = useState(0)
   const [refreshKey, setRefreshKey] = useState(0)
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setError,
-    clearErrors,
-    formState: { errors, isSubmitting },
-  } = useForm({
-    defaultValues: { name: '', category: '', description: '' },
-  })
 
   useEffect(() => {
     const controller = new AbortController()
@@ -137,11 +115,6 @@ function DocumentDetailsView({ documentId }) {
     getDocument(documentId, controller.signal)
       .then((payload) => {
         setDocumentRecord(payload)
-        reset({
-          name: payload.name,
-          category: payload.category || '',
-          description: payload.description || '',
-        })
       })
       .catch((error) => {
         if (!isAbortError(error)) {
@@ -156,10 +129,9 @@ function DocumentDetailsView({ documentId }) {
       })
 
     return () => controller.abort()
-  }, [documentId, refreshKey, reset])
+  }, [documentId, refreshKey])
 
   const canRead = canReadDocument(documentRecord)
-  const canEdit = canEditDocument(documentRecord)
   const canEditContent = canEditTextContent(documentRecord)
   const canEditPdf = canEditPdfContent(documentRecord)
   const canReplaceFile = canReplaceDocumentFile(documentRecord)
@@ -170,7 +142,6 @@ function DocumentDetailsView({ documentId }) {
   const accessMeta = ACCESS_LEVEL_META[documentRecord?.access_level]
   const isNotFound = loadError?.response?.status === 404
   const recordId = documentRecord?.id
-  const currentVersion = versions.find((version) => version.is_current) ?? null
 
   useEffect(() => {
     if (!isEditingPdf || !recordId || pdfBlob) {
@@ -205,10 +176,27 @@ function DocumentDetailsView({ documentId }) {
     }
 
     const controller = new AbortController()
+    setIsLoadingVersions(true)
+    setVersionsError(null)
 
-    listDocumentVersions(recordId, controller.signal)
+    listDocumentVersions(
+      recordId,
+      { page: versionPage, page_size: VERSION_PAGE_SIZE },
+      controller.signal,
+    )
       .then((payload) => {
-        setVersions(payload.items)
+        setVersions(payload.items || [])
+        setCurrentVersion(
+          payload.current_version ??
+            (payload.items || []).find((version) => version.is_current) ??
+            null,
+        )
+        setVersionPages(payload.pages || 0)
+        setVersionTotal(payload.total || 0)
+        setVersionTotalSize(payload.total_size || 0)
+        if (payload.pages > 0 && versionPage > payload.pages) {
+          setVersionPage(payload.pages)
+        }
       })
       .catch((error) => {
         if (!isAbortError(error)) {
@@ -223,7 +211,7 @@ function DocumentDetailsView({ documentId }) {
       })
 
     return () => controller.abort()
-  }, [canRead, recordId, versionsRefreshKey])
+  }, [canRead, recordId, versionPage, versionsRefreshKey])
 
   function refreshVersions() {
     setIsLoadingVersions(true)
@@ -233,58 +221,22 @@ function DocumentDetailsView({ documentId }) {
 
   function applyVersionResult(result) {
     setDocumentRecord(result.document)
-    setVersions((current) => [
-      result.version,
-      ...current
-        .filter((version) => version.id !== result.version.id)
-        .map((version) => ({ ...version, is_current: false })),
-    ])
+    setCurrentVersion(result.version)
     setIsEditingContent(false)
     setIsEditingPdf(false)
     setPdfBlob(null)
     setIsReplacingFile(false)
     setActionError(null)
     setNotice(`Version ${result.version.version_number} created.`)
+    setVersionPage(1)
+    setActivityRefreshKey((key) => key + 1)
+    refreshVersions()
   }
 
   function handleVersionConflict() {
+    setVersionPage(1)
     refreshVersions()
     setNotice('The version history was refreshed because a newer version exists.')
-  }
-
-  const onSubmit = async (values) => {
-    setActionError(null)
-    setNotice(null)
-
-    const result = editSchema.safeParse(values)
-    if (!result.success) {
-      clearErrors()
-      for (const issue of result.error.issues) {
-        const field = issue.path[0]
-        if (field === 'name' || field === 'category' || field === 'description') {
-          setError(field, { type: 'manual', message: issue.message })
-        }
-      }
-      return
-    }
-
-    try {
-      const updated = await updateDocument(documentRecord.id, {
-        name: result.data.name,
-        category: result.data.category || null,
-        description: result.data.description || null,
-      })
-      setDocumentRecord(updated)
-      reset({
-        name: updated.name,
-        category: updated.category || '',
-        description: updated.description || '',
-      })
-      setIsEditing(false)
-      setNotice('Document metadata updated.')
-    } catch (error) {
-      setActionError(getApiErrorMessage(error))
-    }
   }
 
   async function handleDownload() {
@@ -336,10 +288,24 @@ function DocumentDetailsView({ documentId }) {
     setVersionActionError(null)
     setDeletingVersion(version.version_number)
     try {
-      const result = await deleteDocumentVersion(documentRecord.id, version.version_number)
-      setVersions((current) => current.filter((v) => v.version_number !== version.version_number))
+      const result = await deleteDocumentVersion(
+        documentRecord.id,
+        version.version_number,
+      )
+      const remaining = Math.max(0, versionTotal - 1)
+      const nextPages = Math.ceil(remaining / VERSION_PAGE_SIZE)
+      setDocumentRecord(result.document)
+      setCurrentVersion(result.current_version)
+      setVersionTotal(remaining)
+      setVersionPages(nextPages)
+      setVersionTotalSize(result.retained_total_size)
+      setVersionPage(Math.min(versionPage, Math.max(1, nextPages)))
+      setActivityRefreshKey((key) => key + 1)
+      refreshVersions()
       setNotice(
-        `Version ${version.version_number} deleted. Storage freed: ${result.storage_deleted ? 'Yes' : 'No'}.`,
+        result.rolled_back
+          ? `Version ${version.version_number} deleted. The document rolled back to Version ${result.current_version.version_number}.`
+          : `Version ${version.version_number} deleted. Storage freed: ${result.storage_deleted ? 'Yes' : 'No'}.`,
       )
     } catch (error) {
       setVersionActionError(getApiErrorMessage(error))
@@ -437,34 +403,12 @@ function DocumentDetailsView({ documentId }) {
                 {isDownloading ? 'Preparing...' : 'Download'}
               </Button>
             ) : null}
-            {canEdit ? (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setIsEditing((editing) => !editing)
-                  setIsEditingContent(false)
-                  setIsEditingPdf(false)
-                  setIsReplacingFile(false)
-                  setActionError(null)
-                  setNotice(null)
-                }}
-              >
-                {isEditing ? (
-                  <X className="size-4" aria-hidden="true" />
-                ) : (
-                  <Pencil className="size-4" aria-hidden="true" />
-                )}
-                {isEditing ? 'Cancel metadata edit' : 'Edit metadata'}
-              </Button>
-            ) : null}
             {canEditContent ? (
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => {
                   setIsEditingContent((editing) => !editing)
-                  setIsEditing(false)
                   setIsEditingPdf(false)
                   setIsReplacingFile(false)
                   setActionError(null)
@@ -486,7 +430,6 @@ function DocumentDetailsView({ documentId }) {
                 variant="outline"
                 onClick={() => {
                   setIsEditingPdf((editing) => !editing)
-                  setIsEditing(false)
                   setIsEditingContent(false)
                   setIsReplacingFile(false)
                   setActionError(null)
@@ -508,7 +451,6 @@ function DocumentDetailsView({ documentId }) {
                 variant="outline"
                 onClick={() => {
                   setIsReplacingFile((replacing) => !replacing)
-                  setIsEditing(false)
                   setIsEditingContent(false)
                   setIsEditingPdf(false)
                   setActionError(null)
@@ -764,8 +706,13 @@ function DocumentDetailsView({ documentId }) {
       {canRead ? (
         <VersionHistory
           versions={versions}
+          total={versionTotal}
           currentVersionNumber={currentVersion?.version_number ?? null}
-          totalSize={versions.reduce((sum, v) => sum + (v.file_size || 0), 0)}
+          totalSize={versionTotalSize}
+          page={versionPage}
+          pageSize={VERSION_PAGE_SIZE}
+          pages={versionPages}
+          onPageChange={setVersionPage}
           isLoading={isLoadingVersions}
           error={versionsError}
           actionError={versionActionError}
@@ -779,117 +726,12 @@ function DocumentDetailsView({ documentId }) {
       ) : null}
 
       {canDelete ? (
-        <DocumentActivityHistory documentId={documentRecord.id} />
+        <DocumentActivityHistory
+          documentId={documentRecord.id}
+          refreshKey={activityRefreshKey}
+        />
       ) : null}
 
-      {isEditing && canEdit ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Edit metadata</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form className="grid gap-5" onSubmit={handleSubmit(onSubmit)}>
-              <div className="space-y-2">
-                <label htmlFor="edit-name" className="text-sm font-medium">
-                  Document name
-                </label>
-                <input
-                  id="edit-name"
-                  type="text"
-                  maxLength={255}
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={isSubmitting}
-                  aria-invalid={errors.name ? true : undefined}
-                  aria-describedby={errors.name ? 'edit-name-error' : undefined}
-                  {...register('name')}
-                />
-                {errors.name ? (
-                  <p id="edit-name-error" className="text-sm text-destructive">
-                    {errors.name.message}
-                  </p>
-                ) : null}
-              </div>
-
-              <div className="grid gap-5 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <label htmlFor="edit-category" className="text-sm font-medium">
-                    Category
-                  </label>
-                  <input
-                    id="edit-category"
-                    type="text"
-                    maxLength={100}
-                    list="edit-category-options"
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={isSubmitting}
-                    aria-invalid={errors.category ? true : undefined}
-                    aria-describedby={errors.category ? 'edit-category-error' : undefined}
-                    {...register('category')}
-                  />
-                  <datalist id="edit-category-options">
-                    {categoryChoices(documentRecord.category).map((category) => (
-                      <option key={category} value={category} />
-                    ))}
-                  </datalist>
-                  {errors.category ? (
-                    <p id="edit-category-error" className="text-sm text-destructive">
-                      {errors.category.message}
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="space-y-2 sm:row-span-2">
-                  <label htmlFor="edit-description" className="text-sm font-medium">
-                    Description
-                  </label>
-                  <textarea
-                    id="edit-description"
-                    rows={4}
-                    maxLength={2000}
-                    className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={isSubmitting}
-                    aria-invalid={errors.description ? true : undefined}
-                    aria-describedby={errors.description ? 'edit-description-error' : undefined}
-                    {...register('description')}
-                  />
-                  {errors.description ? (
-                    <p id="edit-description-error" className="text-sm text-destructive">
-                      {errors.description.message}
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-3">
-                <Button type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? (
-                    <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <ShieldCheck className="size-4" aria-hidden="true" />
-                  )}
-                  {isSubmitting ? 'Saving...' : 'Save changes'}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setIsEditing(false)
-                    setActionError(null)
-                    reset({
-                      name: documentRecord.name,
-                      category: documentRecord.category || '',
-                      description: documentRecord.description || '',
-                    })
-                  }}
-                  disabled={isSubmitting}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      ) : null}
     </div>
   )
 }

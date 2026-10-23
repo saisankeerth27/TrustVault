@@ -42,8 +42,8 @@ class DocumentVersionOperationError(Exception):
     """Raised when a new version cannot be persisted."""
 
 
-class CurrentDocumentVersionDeletionError(Exception):
-    """Raised when an attempt is made to delete the current version."""
+class LastDocumentVersionDeletionError(Exception):
+    """Raised when deleting a version would remove the document's final version."""
 
 
 class DocumentVersionDeletionError(Exception):
@@ -71,10 +71,27 @@ def get_current_version(
     return session.scalar(statement)
 
 
+def count_document_versions(
+    session: Session,
+    *,
+    document_id: UUID,
+) -> int:
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(DocumentVersion)
+            .where(DocumentVersion.document_id == document_id)
+        )
+        or 0
+    )
+
+
 def list_document_versions(
     session: Session,
     *,
     document: Document,
+    page: int = 1,
+    page_size: int = 5,
 ) -> list[DocumentVersion]:
     return list(
         session.scalars(
@@ -82,6 +99,8 @@ def list_document_versions(
             .where(DocumentVersion.document_id == document.id)
             .options(selectinload(DocumentVersion.uploader))
             .order_by(DocumentVersion.version_number.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         ).all()
     )
 
@@ -177,9 +196,10 @@ def replace_document_version(
     current.is_current = False
     session.flush()
 
+    version_number = locked_document.next_version_number
     version = DocumentVersion(
         document_id=locked_document.id,
-        version_number=current.version_number + 1,
+        version_number=version_number,
         storage_key=storage_key,
         original_filename=upload.name,
         mime_type=upload.mime_type,
@@ -195,6 +215,7 @@ def replace_document_version(
     locked_document.mime_type = upload.mime_type
     locked_document.file_size = upload.size
     locked_document.checksum = upload.checksum
+    locked_document.next_version_number = version_number + 1
 
     try:
         session.flush()
@@ -246,7 +267,7 @@ def replace_document_version(
     return locked_document, version
 
 
-def delete_historical_version(
+def delete_document_version(
     session: Session,
     *,
     document: Document,
@@ -254,23 +275,72 @@ def delete_historical_version(
     actor: User,
     storage: SupabaseStorage,
     access_level: str,
-) -> tuple[int, int, bool]:
-    total_versions = int(
-        session.scalar(
-            select(func.count()).select_from(DocumentVersion).where(
-                DocumentVersion.document_id == document.id
-            )
+) -> tuple[Document, DocumentVersion, int, int, bool, bool]:
+    locked_document = session.scalar(
+        select(Document)
+        .where(
+            Document.id == document.id,
+            Document.deleted_at.is_(None),
         )
-        or 0
+        .options(selectinload(Document.owner))
+        .with_for_update()
     )
-    if version.is_current or total_versions <= 1:
-        raise CurrentDocumentVersionDeletionError
+    if locked_document is None:
+        raise DocumentVersionNotFoundError
 
-    deleted_version_number = version.version_number
-    deleted_file_size = version.file_size
-    storage_key = version.storage_key
-    checksum = version.checksum
-    original_filename = version.original_filename
+    target = session.scalar(
+        select(DocumentVersion)
+        .where(
+            DocumentVersion.id == version.id,
+            DocumentVersion.document_id == locked_document.id,
+        )
+        .options(selectinload(DocumentVersion.uploader))
+        .with_for_update()
+    )
+    if target is None:
+        raise DocumentVersionNotFoundError
+
+    total_versions = count_document_versions(
+        session,
+        document_id=locked_document.id,
+    )
+    if total_versions <= 1:
+        raise LastDocumentVersionDeletionError
+
+    current = get_current_version(
+        session,
+        document_id=locked_document.id,
+        for_update=True,
+    )
+    if current is None:
+        raise DocumentVersionDeletionError(
+            "The document does not have a current version."
+        )
+
+    was_current = target.is_current
+    rollback_version: DocumentVersion | None = None
+    if was_current:
+        rollback_version = session.scalar(
+            select(DocumentVersion)
+            .where(
+                DocumentVersion.document_id == locked_document.id,
+                DocumentVersion.id != target.id,
+            )
+            .options(selectinload(DocumentVersion.uploader))
+            .order_by(DocumentVersion.version_number.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if rollback_version is None:
+            raise DocumentVersionDeletionError(
+                "The document version could not be safely deleted."
+            )
+
+    deleted_version_number = target.version_number
+    deleted_file_size = target.file_size
+    storage_key = target.storage_key
+    checksum = target.checksum
+    original_filename = target.original_filename
 
     storage_deleted = False
     try:
@@ -290,26 +360,52 @@ def delete_historical_version(
         ) from exc
 
     details: dict[str, Any] = {
+        "access_level": access_level,
         "checksum": checksum,
         "file_size": deleted_file_size,
         "original_filename": original_filename,
         "resource_type": "DOCUMENT",
         "storage_deleted": storage_deleted,
         "version_number": deleted_version_number,
-        "access_level": access_level,
+        "was_current": was_current,
     }
 
     try:
-        session.delete(version)
+        if was_current:
+            if rollback_version is None:
+                raise DocumentVersionDeletionError(
+                    "The document version could not be safely deleted."
+                )
+            target.is_current = False
+            session.flush()
+            rollback_version.is_current = True
+            locked_document.storage_key = rollback_version.storage_key
+            locked_document.mime_type = rollback_version.mime_type
+            locked_document.file_size = rollback_version.file_size
+            locked_document.checksum = rollback_version.checksum
+            details["rollback"] = True
+            details["rolled_back_to_version_number"] = (
+                rollback_version.version_number
+            )
+            details["previous_current_version_number"] = deleted_version_number
+            details["current_version_number"] = rollback_version.version_number
+        else:
+            details["rollback"] = False
+            details["current_version_number"] = current.version_number
+
+        session.delete(target)
         record_event(
             session,
             action=AuditAction.DOCUMENT_VERSION_DELETE,
             outcome=AuditOutcome.SUCCESS,
             actor=actor,
-            document_id=document.id,
+            document_id=locked_document.id,
             details=details,
         )
         session.commit()
+    except DocumentVersionDeletionError:
+        session.rollback()
+        raise
     except Exception as exc:
         try:
             session.rollback()
@@ -325,12 +421,28 @@ def delete_historical_version(
             "The document version could not be fully deleted."
         ) from exc
 
+    session.refresh(locked_document)
+    resulting_current = get_current_version(
+        session,
+        document_id=locked_document.id,
+    )
+    if resulting_current is None:
+        raise DocumentVersionDeletionError(
+            "The document does not have a current version."
+        )
     retained_total_size = total_document_version_size(
         session,
-        document_id=document.id,
+        document_id=locked_document.id,
     )
-    logger.info("Historical document version deleted by user %s.", actor.id)
-    return deleted_file_size, retained_total_size, storage_deleted
+    logger.info("Document version deleted by user %s.", actor.id)
+    return (
+        locked_document,
+        resulting_current,
+        deleted_file_size,
+        retained_total_size,
+        storage_deleted,
+        was_current,
+    )
 
 
 def _delete_new_object(storage: SupabaseStorage, storage_key: str) -> None:

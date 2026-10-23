@@ -47,6 +47,7 @@ def document_kwargs(owner_id: object, **overrides: object) -> dict[str, object]:
         "mime_type": "application/pdf",
         "file_size": 1024,
         "checksum": "b" * 64,
+        "next_version_number": 2,
     }
     values.update(overrides)
     return values

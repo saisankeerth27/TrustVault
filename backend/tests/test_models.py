@@ -50,11 +50,16 @@ def test_users_columns_and_uniqueness() -> None:
 def test_documents_columns_and_constraints() -> None:
     table = Base.metadata.tables["documents"]
 
-    assert {"owner_id", "storage_key", "checksum", "deleted_at"} <= set(
-        table.columns.keys()
-    )
+    assert {
+        "owner_id",
+        "storage_key",
+        "checksum",
+        "next_version_number",
+        "deleted_at",
+    } <= set(table.columns.keys())
     constraint_names = {constraint.name for constraint in table.constraints}
     assert "ck_documents_file_size_nonnegative" in constraint_names
+    assert "ck_documents_next_version_number_minimum" in constraint_names
     assert "ck_documents_storage_key_not_url" in constraint_names
 
     index_names = {index.name for index in table.indexes}

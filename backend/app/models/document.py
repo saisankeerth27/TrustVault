@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -32,6 +33,10 @@ class Document(Base):
     __table_args__ = (
         CheckConstraint("length(btrim(name)) > 0", name="ck_documents_name_not_blank"),
         CheckConstraint("file_size >= 0", name="ck_documents_file_size_nonnegative"),
+        CheckConstraint(
+            "next_version_number >= 2",
+            name="ck_documents_next_version_number_minimum",
+        ),
         CheckConstraint(
             "storage_key LIKE 'documents/%'",
             name="ck_documents_storage_key_prefix",
@@ -80,6 +85,11 @@ class Document(Base):
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    next_version_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("2"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

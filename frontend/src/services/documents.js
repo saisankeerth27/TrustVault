@@ -41,11 +41,6 @@ export async function getDocument(documentId, signal) {
   return data
 }
 
-export async function updateDocument(documentId, metadata) {
-  const { data } = await apiClient.patch(`/api/v1/documents/${documentId}`, metadata)
-  return data
-}
-
 export async function deleteDocument(documentId) {
   await apiClient.delete(`/api/v1/documents/${documentId}`)
 }
@@ -66,10 +61,10 @@ export async function downloadDocument(documentId, fallbackName) {
   }
 }
 
-export async function listDocumentVersions(documentId, signal) {
+export async function listDocumentVersions(documentId, params, signal) {
   const { data } = await apiClient.get(
     `/api/v1/documents/${documentId}/versions`,
-    { signal },
+    { params, signal },
   )
   return data
 }
@@ -106,10 +101,10 @@ export async function deleteDocumentVersion(documentId, versionNumber) {
   return data
 }
 
-export async function listDocumentActivity(documentId, signal) {
+export async function listDocumentActivity(documentId, params, signal) {
   const { data } = await apiClient.get(
     `/api/v1/documents/${documentId}/activity`,
-    { signal },
+    { params, signal },
   )
   return data
 }
