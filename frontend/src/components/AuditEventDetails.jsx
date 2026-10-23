@@ -7,6 +7,7 @@ import {
   auditFieldLabel,
 } from '@/lib/audit'
 import { formatBytes } from '@/lib/documents'
+import { cn } from '@/lib/utils'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HEX_PATTERN = /^[0-9a-f]{16,}$/i
@@ -63,6 +64,28 @@ function ScalarValue({ value }) {
         {text}
       </span>
       {isTechnical && text.length > 8 ? <CopyValueButton text={text} /> : null}
+    </span>
+  )
+}
+
+function MetadataScalar({ field, value }) {
+  if (value === null || value === undefined || value === '') {
+    return <span className="text-muted-foreground italic">Not recorded</span>
+  }
+
+  const text = String(value)
+  const needsCopy = /(^|_)(id|hash|request_id|chain_index)$/.test(field)
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span
+        className={cn(
+          'min-w-0 break-all',
+          needsCopy ? 'font-mono text-[11px]' : 'text-xs',
+        )}
+      >
+        {text}
+      </span>
+      {needsCopy ? <CopyValueButton text={text} label={`Copy ${auditFieldLabel(field)}`} /> : null}
     </span>
   )
 }
@@ -161,14 +184,30 @@ function displayValue(key, value) {
   return String(value)
 }
 
-export function AuditEventDetails({ details }) {
+export function AuditEventDetails({ event = {}, details = event.details }) {
   const [isOpen, setIsOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [coords, setCoords] = useState(null)
   const triggerRef = useRef(null)
   const popoverRef = useRef(null)
 
-  const metadata = details && typeof details === 'object' ? details : {}
+  const eventDetails = details && typeof details === 'object' ? details : {}
+  const metadata = {
+    ...eventDetails,
+    event_id: event.id,
+    chain_index: event.chain_index,
+    actor_id: event.actor_id,
+    target_user_id: event.target_user_id,
+    document_id: event.document_id,
+    request_id: event.request_id,
+    hash_schema: event.hash_schema,
+    resource_type: event.resource_type,
+  }
+  for (const key of Object.keys(metadata)) {
+    if (metadata[key] === undefined || metadata[key] === null || metadata[key] === '') {
+      delete metadata[key]
+    }
+  }
   const entries = Object.entries(metadata)
   const summary = auditEventSummary(metadata)
 
@@ -189,11 +228,12 @@ export function AuditEventDetails({ details }) {
       left = window.innerWidth - popoverWidth - padding
     }
 
+    const panelHeight = Math.min(580, window.innerHeight - padding * 2)
     let top = rect.bottom + 6
-    const estimatedHeight = 420
-    if (top + estimatedHeight > window.innerHeight && rect.top > estimatedHeight) {
-      top = Math.max(padding, rect.top - estimatedHeight - 6)
+    if (top + panelHeight > window.innerHeight - padding) {
+      top = Math.max(padding, rect.top - panelHeight - 6)
     }
+    top = Math.min(top, window.innerHeight - panelHeight - padding)
 
     setCoords({
       top: Math.max(padding, top),
@@ -352,7 +392,7 @@ export function AuditEventDetails({ details }) {
                         {key === 'file_size' ? (
                           <ScalarValue value={displayValue(key, value)} />
                         ) : (
-                          <ScalarValue value={value} />
+                          <MetadataScalar field={key} value={value} />
                         )}
                       </span>
                     )}

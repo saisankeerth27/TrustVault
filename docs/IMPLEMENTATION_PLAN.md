@@ -568,3 +568,14 @@ docs: finalize TrustVault for submission
 5. Commit with a phase-specific message and push without force.
 6. Stop for human review after each phase.
 7. Record genuine activity in `PROMPTS.md`; never fabricate results.
+
+## Administrator Dashboard Correction (2026-10-23)
+
+**Status:** Implemented locally; final verification and review in progress. No commit or push has been performed yet.
+
+- The global `/admin/audit` UI uses backend pagination at 15 records per page. Its main table avoids standalone request/document IDs; the accessible metadata dialog retains dedicated request/document/event/actor/target identifiers with copy actions.
+- Account management keeps names, email, role, and status as primary information and provides a copyable account ID control with confirmation and a selection fallback.
+- The Documents library hides Owner ID filtering from normal users while retaining it for administrator oversight. The backend's existing owner query parameter and authorization-scoped document query remain unchanged.
+- Admin navigation is limited to the existing user-management/oversight and audit destinations. Integrity verification remains integrated into `/admin/audit`; no separate integrity route or Trust Templates route exists in this repository.
+- Audit hashing/checkpoint algorithms were not changed because the current implementation already shares canonical event serialization and validates chain linkage/signature. The local environment has no checkpoint signing key/path configured, so live signed-checkpoint status is unverified; no history repair or checkpoint creation was attempted.
+- New frontend tests cover audit ID placement/pagination, copyable account IDs, and current navigation labels. Full test/build results will be recorded after validation.

@@ -8,7 +8,6 @@ import {
   Fingerprint,
   LoaderCircle,
   RefreshCw,
-  Search,
   ShieldAlert,
   ShieldCheck,
   X,
@@ -30,7 +29,7 @@ import { cn } from '@/lib/utils'
 import { getApiErrorMessage } from '@/services/api'
 import { getAuditIntegrity, listAuditEvents } from '@/services/audit'
 
-const PAGE_SIZE = 25
+const PAGE_SIZE = 15
 const EMPTY_FILTERS = {
   action: '',
   outcome: '',
@@ -248,7 +247,6 @@ export function AuditPage() {
     targetUserId: UUID_PATTERN.test(initialTargetUserId) ? initialTargetUserId : '',
     documentId: UUID_PATTERN.test(initialDocumentId) ? initialDocumentId : '',
   }))
-  const [filterError, setFilterError] = useState(null)
   const [page, setPage] = useState(1)
   const [result, setResult] = useState(EMPTY_RESULT)
   const [isLoadingEvents, setIsLoadingEvents] = useState(true)
@@ -261,9 +259,39 @@ export function AuditPage() {
   const [lastChecked, setLastChecked] = useState(null)
 
   const hasFilters = useMemo(
-    () => Object.values(appliedFilters).some(Boolean),
-    [appliedFilters],
+    () => Object.values(draftFilters).some(Boolean),
+    [draftFilters],
   )
+
+  useEffect(() => {
+    const pendingIds = {
+      actorId: draftFilters.actorId.trim(),
+      targetUserId: draftFilters.targetUserId.trim(),
+      documentId: draftFilters.documentId.trim(),
+    }
+    if (
+      pendingIds.actorId === appliedFilters.actorId &&
+      pendingIds.targetUserId === appliedFilters.targetUserId &&
+      pendingIds.documentId === appliedFilters.documentId
+    ) {
+      return undefined
+    }
+
+    const timer = window.setTimeout(() => {
+      setIsLoadingEvents(true)
+      setEventError(null)
+      setPage(1)
+      setAppliedFilters((current) => ({ ...current, ...pendingIds }))
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [
+    appliedFilters.actorId,
+    appliedFilters.documentId,
+    appliedFilters.targetUserId,
+    draftFilters.actorId,
+    draftFilters.documentId,
+    draftFilters.targetUserId,
+  ])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -296,7 +324,13 @@ export function AuditPage() {
 
     listAuditEvents(params, controller.signal)
       .then((payload) => {
-        setResult(payload)
+        if (!controller.signal.aborted) {
+          if (page > payload.pages && page > 1) {
+            setPage(payload.pages > 0 ? payload.pages : 1)
+            return
+          }
+          setResult(payload)
+        }
       })
       .catch((requestError) => {
         if (!isAbortError(requestError)) {
@@ -317,11 +351,14 @@ export function AuditPage() {
     const controller = new AbortController()
     getAuditIntegrity(controller.signal)
       .then((payload) => {
-        setIntegrity(payload)
-        setLastChecked(new Date().toISOString())
+        if (!controller.signal.aborted) {
+          setIntegrity(payload)
+          setLastChecked(payload.verified_at)
+        }
       })
       .catch((requestError) => {
         if (!isAbortError(requestError)) {
+          setIntegrity(null)
           setIntegrityError(getApiErrorMessage(requestError))
         }
       })
@@ -345,6 +382,13 @@ export function AuditPage() {
 
   function updateDraft(field, value) {
     setDraftFilters((current) => ({ ...current, [field]: value }))
+    if (['actorId', 'targetUserId', 'documentId'].includes(field) && value) {
+      return
+    }
+    setIsLoadingEvents(true)
+    setEventError(null)
+    setPage(1)
+    setAppliedFilters((current) => ({ ...current, [field]: value }))
   }
 
   function beginEventRequest() {
@@ -354,6 +398,8 @@ export function AuditPage() {
 
   function beginIntegrityRequest() {
     setIsLoadingIntegrity(true)
+    setIntegrity(null)
+    setLastChecked(null)
     setIntegrityError(null)
   }
 
@@ -362,50 +408,7 @@ export function AuditPage() {
     setIntegrityRefreshKey((key) => key + 1)
   }
 
-  function applyFilters(event) {
-    event.preventDefault()
-    const actorId = draftFilters.actorId.trim()
-    const targetUserId = draftFilters.targetUserId.trim()
-    const documentId = draftFilters.documentId.trim()
-
-    if (actorId && !UUID_PATTERN.test(actorId)) {
-      setFilterError('Actor ID must be a valid UUID.')
-      return
-    }
-    if (targetUserId && !UUID_PATTERN.test(targetUserId)) {
-      setFilterError('Target user ID must be a valid UUID.')
-      return
-    }
-    if (documentId && !UUID_PATTERN.test(documentId)) {
-      setFilterError('Document ID must be a valid UUID.')
-      return
-    }
-    if (
-      draftFilters.dateFrom &&
-      draftFilters.dateTo &&
-      draftFilters.dateFrom > draftFilters.dateTo
-    ) {
-      setFilterError('The start date must be on or before the end date.')
-      return
-    }
-
-    setFilterError(null)
-    beginEventRequest()
-    setPage(1)
-    setAppliedFilters({
-      action: draftFilters.action,
-      outcome: draftFilters.outcome,
-      actorId,
-      targetUserId,
-      documentId,
-      resourceType: draftFilters.resourceType.trim(),
-      dateFrom: draftFilters.dateFrom,
-      dateTo: draftFilters.dateTo,
-    })
-  }
-
   function clearFilters() {
-    setFilterError(null)
     beginEventRequest()
     setDraftFilters({ ...EMPTY_FILTERS })
     setAppliedFilters({ ...EMPTY_FILTERS })
@@ -454,7 +457,7 @@ export function AuditPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form className="space-y-5" onSubmit={applyFilters}>
+          <div className="space-y-5">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="space-y-2">
                 <label htmlFor="audit-action" className="text-sm font-medium">
@@ -583,17 +586,7 @@ export function AuditPage() {
               </div>
             </div>
 
-            {filterError ? (
-              <p role="alert" className="text-sm text-destructive">
-                {filterError}
-              </p>
-            ) : null}
-
             <div className="flex flex-wrap items-center gap-3 border-t pt-4">
-              <Button type="submit">
-                <Search className="size-4" aria-hidden="true" />
-                Apply filters
-              </Button>
               {hasFilters || Object.values(draftFilters).some(Boolean) ? (
                 <Button type="button" variant="ghost" onClick={clearFilters}>
                   <X className="size-4" aria-hidden="true" />
@@ -604,7 +597,7 @@ export function AuditPage() {
                 {isLoadingEvents ? 'Loading events...' : rangeLabel}
               </p>
             </div>
-          </form>
+          </div>
         </CardContent>
       </Card>
 
@@ -664,7 +657,7 @@ export function AuditPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1240px] text-sm">
+              <table className="w-full min-w-[900px] text-sm">
                 <thead className="border-b bg-muted/40 text-left text-xs tracking-wide text-muted-foreground uppercase">
                   <tr>
                     <th scope="col" className="px-6 py-3 font-medium">
@@ -680,13 +673,7 @@ export function AuditPage() {
                       Actor
                     </th>
                     <th scope="col" className="px-4 py-3 font-medium">
-                      Target / resource
-                    </th>
-                    <th scope="col" className="px-4 py-3 font-medium">
                       Document
-                    </th>
-                    <th scope="col" className="px-4 py-3 font-medium">
-                      Request ID
                     </th>
                     <th scope="col" className="px-6 py-3 font-medium">
                       Details
@@ -723,51 +710,14 @@ export function AuditPage() {
                         <span className="block max-w-40 truncate">
                           {event.actor_name || 'System / anonymous'}
                         </span>
-                        {event.actor_id ? (
-                          <span
-                            title={event.actor_id}
-                            className="mt-0.5 block max-w-40 truncate font-mono text-[11px] text-muted-foreground"
-                          >
-                            {event.actor_id}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="block text-xs font-medium">
-                          {event.resource_type || 'Unclassified'}
-                        </span>
-                        {event.target_user_id ? (
-                          <span
-                            title={event.target_user_id}
-                            className="mt-0.5 block max-w-36 truncate font-mono text-[11px] text-muted-foreground"
-                          >
-                            {event.target_user_id}
-                          </span>
-                        ) : null}
                       </td>
                       <td className="px-4 py-4">
                         <span className="block max-w-44 truncate">
                           {event.document_name || '-'}
                         </span>
-                        {event.document_id ? (
-                          <span
-                            title={event.document_id}
-                            className="mt-0.5 block max-w-44 truncate font-mono text-[11px] text-muted-foreground"
-                          >
-                            {event.document_id}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-4">
-                        <span
-                          title={event.request_id || undefined}
-                          className="block max-w-36 truncate font-mono text-xs text-muted-foreground"
-                        >
-                          {event.request_id || '—'}
-                        </span>
                       </td>
                       <td className="px-6 py-4">
-                        <AuditEventDetails details={event.details} />
+                        <AuditEventDetails event={event} />
                       </td>
                     </tr>
                   ))}

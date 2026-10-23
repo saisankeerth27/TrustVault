@@ -39,7 +39,9 @@ export function VersionHistory({
 
   const hasMultipleVersions = total > 1
   const confirmingIndex = confirmingVersion
-    ? versions.findIndex((version) => version.id === confirmingVersion.id)
+    ? versions.findIndex(
+        (version) => version.version_number === confirmingVersion.version_number,
+      )
     : -1
   const rollbackCandidate =
     confirmingVersion?.is_current && confirmingIndex >= 0
@@ -66,7 +68,7 @@ export function VersionHistory({
             Version history
           </CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
-            Every file revision is preserved with its author, checksum, and size. Historical
+            Every file revision is preserved with its author and size. Historical
             versions can be downloaded or safely pruned by the document owner.
           </p>
         </div>
@@ -128,7 +130,7 @@ export function VersionHistory({
 
               return (
                 <li
-                  key={version.id}
+                  key={version.version_number}
                   className={cn(
                     'rounded-lg border px-4 py-4 transition-colors',
                     version.is_current ? 'border-primary/30 bg-primary/5' : 'bg-card',
@@ -170,12 +172,6 @@ export function VersionHistory({
                         <span>{version.original_filename}</span>
                       </div>
 
-                      <p
-                        className="font-mono text-[11px] break-all text-muted-foreground"
-                        title={version.checksum}
-                      >
-                        SHA-256 {version.checksum}
-                      </p>
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">

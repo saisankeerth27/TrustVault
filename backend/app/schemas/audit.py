@@ -36,6 +36,24 @@ class AuditEventListResponse(BaseModel):
     has_previous: bool
 
 
+class DocumentActivityEventResponse(BaseModel):
+    occurred_at: datetime
+    actor_name: str | None
+    action: str
+    outcome: AuditOutcome
+    details: dict[str, Any]
+
+
+class DocumentActivityListResponse(BaseModel):
+    items: list[DocumentActivityEventResponse]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+    has_next: bool
+    has_previous: bool
+
+
 class ChainIntegrityResponse(BaseModel):
     status: str
     event_count: int
@@ -54,5 +72,6 @@ class CheckpointIntegrityResponse(BaseModel):
 
 class AuditIntegrityResponse(BaseModel):
     status: str
+    verified_at: datetime
     chain: ChainIntegrityResponse
     checkpoint: CheckpointIntegrityResponse

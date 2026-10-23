@@ -168,6 +168,8 @@ graph TB
 
 **Verification:** Tests assert generic storage/persistence errors, secret-safe logs, metadata-only response fields, owner-only download denial, safe attachment encoding, no storage-key leakage, and audit metadata sanitization.
 
+Administrator diagnostic identifiers are intentionally confined to administrator account and audit surfaces. The global audit table uses human-readable document names; request IDs, document IDs, event IDs/sequences, and actor/target IDs are exposed through the admin-only metadata dialog with copy actions. Normal document activity uses a separate allowlisted response and does not inherit global audit diagnostics.
+
 **Residual Risk:** Low–Medium. Timing side channels and name leakage in shared contexts require ongoing review.
 
 ---

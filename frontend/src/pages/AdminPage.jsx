@@ -3,6 +3,8 @@ import {
   Activity,
   ArrowLeft,
   ArrowRight,
+  Check,
+  Copy,
   FileText,
   LoaderCircle,
   RefreshCw,
@@ -81,6 +83,68 @@ function StatusBadge({ status }) {
     >
       {status === 'ACTIVE' ? 'Active' : 'Disabled'}
     </span>
+  )
+}
+
+function AccountId({ id }) {
+  const [copyStatus, setCopyStatus] = useState('')
+
+  async function copyId() {
+    let copied = false
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(id)
+        copied = true
+      }
+    } catch {
+      copied = false
+    }
+
+    if (!copied) {
+      const field = document.createElement('textarea')
+      field.value = id
+      field.setAttribute('readonly', '')
+      field.style.position = 'fixed'
+      field.style.opacity = '0'
+      document.body.append(field)
+      field.select()
+      copied = document.execCommand('copy')
+      field.remove()
+    }
+
+    if (copied) {
+      setCopyStatus('Copied')
+    } else {
+      setCopyStatus('Copy unavailable; select the ID to copy it.')
+    }
+  }
+
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2">
+      <span className="select-all break-all font-mono text-[11px] text-muted-foreground">
+        {id}
+      </span>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-7"
+        onClick={copyId}
+        aria-label={`Copy account ID for ${id}`}
+        title="Copy account ID"
+      >
+        {copyStatus === 'Copied' ? (
+          <Check className="size-3.5 text-emerald-600" aria-hidden="true" />
+        ) : (
+          <Copy className="size-3.5" aria-hidden="true" />
+        )}
+      </Button>
+      {copyStatus ? (
+        <span className="text-xs text-muted-foreground" role="status">
+          {copyStatus}
+        </span>
+      ) : null}
+    </div>
   )
 }
 
@@ -389,9 +453,7 @@ export function AdminPage() {
                         <td className="px-6 py-4">
                           <p className="font-medium">{account.name}</p>
                           <p className="mt-0.5 text-xs text-muted-foreground">{account.email}</p>
-                          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                            {account.id}
-                          </p>
+                          <AccountId id={account.id} />
                           {isSelf ? (
                             <p className="mt-1 text-xs font-medium text-primary">Current account</p>
                           ) : null}

@@ -518,6 +518,21 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 
 ---
 
+## 2026-10-23 — Administrator Audit Dashboard and Metadata Correction
+
+- **Date and phase:** 2026-10-23 — Administrator dashboard correction (follow-up to Phase 11)
+- **Objective:** Move audit request/document diagnostics into the event metadata panel, set global administrator audit pagination to 15, add copyable account IDs, remove the document-library Owner ID filter, and align administrator navigation/documentation without weakening authorization or integrity controls.
+- **Prompt / instruction summary:** The human requested corrections to the existing TrustVault administrator dashboard, audit metadata layout and ID placement, 15-record backend pagination, copyable administrator account IDs, removal of the document library Owner ID filter, navigation review, signed-checkpoint honesty, regression coverage, docs, and final tests. Preserve existing uncommitted work. Commit/push is requested only after all work and verification; this entry will not invent a commit link.
+- **Files or code produced:** `frontend/src/pages/AuditPage.jsx` and its tests now use 15 records and place request/document/event/actor/target IDs in the metadata panel rather than table columns. `frontend/src/components/AuditEventDetails.jsx` preserves dedicated API event fields, provides readable/copyable technical values, keeps the portal viewport-constrained, and continues safe text rendering. `frontend/src/pages/AdminPage.jsx` adds account ID copy with confirmation/fallback. `frontend/src/pages/DocumentsPage.jsx` removes the Owner ID filter while retaining the backend query capability. `frontend/src/components/AppLayout.jsx` labels the admin destination User management. Requirements, README, architecture, implementation plan, threat model, and this activity log were updated.
+- **Tests and verification performed:** `backend/.venv/Scripts/python.exe -m pytest -q` passed the complete backend suite, including authorization, audit integrity, and isolated migration tests. `npm test -- --reporter=dot` passed 31 tests across 11 frontend files. `npm run build` passed with the existing chunk-size warning. `npm run lint` completed with no errors; five React effect warnings remain. `git diff --check` passed. The frontend `dist` scan found none of the checked credential patterns. A live database/checkpoint verification was not run.
+- **Issues discovered:** The event model already stores `request_id` and `document_id` as dedicated fields; the audit table was rendering them as separate columns and `AuditEventDetails` received only `details`, so the metadata panel could not show those authoritative fields. The local environment does not configure `AUDIT_CHECKPOINT_SIGNING_KEY` or `AUDIT_CHECKPOINT_PATH`; therefore live signed-checkpoint status cannot be confirmed here. No Trust Templates, separate authentication-history, or standalone integrity route exists in the current frontend router.
+- **Corrections made:** Passed the full event into the metadata component without changing API/database representation; removed redundant ID columns; kept integrity verification in the audit workflow; kept owner filtering available only to administrators and removed it from normal-user browsing; added account-ID copy controls; did not generate checkpoints, rewrite history, or claim the live chain is verified. Existing unrelated package, document-preview, and document helper edits were preserved.
+- **Commit hash:** pending verification and user-approved commit step
+- **GitHub link:** pending; no commit or push has been performed
+- **Human review and decision:** Tests/build passed locally. Live signed-checkpoint status remains unverified because this environment has neither checkpoint signing-key nor checkpoint-path configuration. The final commit hash/link are reported after the single commit and push; this log entry does not fabricate a self-referential hash.
+
+---
+
 ## 2026-10-22 — Phase 10: PDF Preview, In-Browser Annotation Editing, Version Control, and Audit Integrity
 
 - **Date and phase:** 2026-10-22 — Phase 10 (PDF Preview, In-Browser Annotation Editing, Version Control, and Audit Integrity)

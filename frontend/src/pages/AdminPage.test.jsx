@@ -99,6 +99,25 @@ describe('AdminPage', () => {
     expect(disableButtons[1]).toBeEnabled()
     expect(screen.getByLabelText('Role for Avery Admin')).toBeDisabled()
     expect(screen.getByLabelText('Role for Morgan User')).toBeEnabled()
+    expect(screen.getByText(account.email)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: `Copy account ID for ${account.id}` })).toBeInTheDocument()
+  })
+
+  it('copies an account ID and confirms the action', async () => {
+    const interaction = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    renderAdminPage()
+
+    await screen.findByText('Morgan User')
+    await interaction.click(
+      screen.getByRole('button', { name: `Copy account ID for ${account.id}` }),
+    )
+    expect(writeText).toHaveBeenCalledWith(account.id)
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied')
   })
 
   it('disables an account through the admin API', async () => {

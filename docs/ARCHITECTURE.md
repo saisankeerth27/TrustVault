@@ -413,8 +413,9 @@ Successful protected mutations append the audit event in the same transaction; a
 
 - `GET /api/v1/admin/audit-events` filters by actor ID, document ID, action, outcome, and inclusive UTC date range, with newest-first pagination.
 - `GET /api/v1/admin/audit-integrity` returns chain and checkpoint status.
+- The administrator UI requests 15 audit events per page. The main table displays a document name when available; request/document/event IDs and authorized actor/target identifiers remain in the portaled structured metadata dialog. `request_id` and `document_id` are dedicated audit columns; historical values are not reconstructed from guesses.
 - Both endpoints require a global `ADMINISTRATOR`. Non-admin access returns 403 and appends `AUDIT_ACCESS_DENIED` best-effort.
-- `/admin/audit` provides filters, event detail expansion, pagination, and an integrity panel. There is no owner-scoped audit view, audit export, or audit mutation endpoint.
+- `/admin/audit` provides automatic filters, 15-record backend pagination, portaled event details, and an integrity panel. The portal is constrained to the viewport, supports internal scrolling and copy actions for diagnostic IDs, and renders metadata as text. There is no owner-scoped audit view, audit export, or audit mutation endpoint.
 - Audit reads and integrity checks are not themselves audited.
 
 ### Signed Checkpoints
@@ -680,7 +681,7 @@ Planned policies:
 - **Session effects:** disabling an account or changing its role revokes the target's active refresh-token families. Login updates `last_login_at`.
 - **Admin oversight:** document metadata and permission history are visible without bypassing document authorization or downloading private content.
 - **Audit:** account changes record `USER_STATUS_CHANGED`/`USER_ROLE_CHANGED`, with `target_user_id` and `resource_type` in sanitized details. The hash payload schema is unchanged. Audit queries expose target-user and resource-type filters.
-- **Frontend:** normal users can upload; `/admin` provides summaries, account search/pagination, role/status controls, last login, owned-document counts, permission-history links, and audit links. `/admin/audit` accepts target/resource filters and displays target/resource columns.
+- **Frontend:** normal users can upload; `/admin` provides summaries, account search/pagination, role/status controls, last login, owned-document counts, permission-history links, and audit links. `/admin/audit` accepts target/resource filters. The account list includes copyable account IDs; audit IDs remain in metadata details rather than redundant table columns. The document-library UI hides owner-ID filtering from normal users and retains the filter for administrator oversight; backend results remain authorization-scoped.
 - **Verification:** the business-model commit `77af2dc` passed 233 backend tests with 90% statement coverage and 10 frontend tests; frontend lint/build passed. Manual admin login remains unverified because credentials were not changed.
 
 ---

@@ -71,7 +71,7 @@ Organizations need a secure, auditable document management system that enforces 
 - Permission revocations
 - Denied access attempts
 
-Each record includes: timestamp, acting user, target document, action type, outcome (success or denied), and client metadata (IP address, user agent). Audit records must be tamper-evident with hash-chain integrity and independently verifiable checkpoints.
+Each record includes: timestamp, acting user, target document, action type, outcome (success or denied), and client metadata (IP address, user agent). The administrator audit API retains dedicated request/correlation and document IDs for authorized investigation; the table emphasizes human-readable names and the metadata panel exposes diagnostic IDs with copy controls. Audit records must be tamper-evident with hash-chain integrity and independently verifiable checkpoints.
 
 **Phase:** 7 (Audit Trail and Administrator Activity)
 **Verification:** Integration tests confirming audit records are created for all listed events; hash chain integrity tests; tests confirming audit records cannot be modified through the API.
@@ -118,10 +118,12 @@ Search results must be filtered by the requesting user's permissions — a user 
 - Permission change history per document
 - User activity summaries
 
-Administrators can also search accounts, inspect last-login/owned-document counts, change account roles or status with session revocation, and inspect each document's permission history. Administrators cannot modify or delete audit records through the application and do not receive private content automatically.
+Administrators can also search accounts, inspect last-login/owned-document counts, copy account IDs from the account list, change account roles or status with session revocation, and inspect each document's permission history. Global audit results use backend pagination at 15 records per page. Administrators cannot modify or delete audit records through the application and do not receive private content automatically.
 
 **Phase:** 7 (Audit Trail and Administrator Activity)
 **Verification:** Phase 7 integration tests confirm administrator access to logs and integrity status, filtering/pagination, non-admin denial, and the absence of audit mutation endpoints. Aggregate document/user activity summaries and export are not implemented.
+
+**Administrator audit acceptance:** The `/admin/audit` table requests 15 records per page from the backend. Request IDs, document IDs, event IDs/sequences, and authorized actor/target IDs are available in the structured metadata dialog, not as redundant table columns. Integrity status is the backend verification response; a missing or invalid signing/checkpoint configuration is not reported as verified.
 
 ---
 
@@ -204,7 +206,7 @@ Administrators can also search accounts, inspect last-login/owned-document count
 - **FA-15 / FA-16:** Implemented for the checkpoint-covered prefix; verification detects modified, reordered, and removed events at or before the latest checkpoint, and no API exposes audit mutation. Tail deletions after the latest checkpoint require independent checkpoint publication.
 - **FA-17:** Partially met. Querying, filtering, and pagination are implemented; CSV/JSON export is not.
 - **MR-9 summaries:** Aggregate document/user activity summaries are not implemented. Administrators can derive detail views through filters and the existing permission history.
-- **Administrator UI:** `/admin/audit` provides filters, pagination, event details, and an integrity panel. Owner-scoped audit views are intentionally not part of the Phase 7 policy.
+- **Administrator UI:** `/admin/audit` provides automatic filters, backend pagination (15 per page), event details including dedicated request/document IDs, and an integrity panel. Owner-scoped audit views are intentionally not part of the Phase 7 policy.
 - **Not yet met / unverified:** independent immutable checkpoint storage and scheduled publication, audit export and aggregate summaries, deployment, RLS, and malware scanning. Live private-bucket storage passed its smoke test, and the Supabase database is at migration `0005` with no Alembic drift.
 
 ### Phase 8 Implementation Status (Verified Locally)

@@ -531,6 +531,7 @@ def get_audit_integrity(
 
     return AuditIntegrityResponse(
         status=verification.status,
+        verified_at=datetime.now(timezone.utc),
         chain=ChainIntegrityResponse(
             status=verification.chain.status,
             event_count=verification.chain.event_count,

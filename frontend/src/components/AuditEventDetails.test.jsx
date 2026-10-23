@@ -61,4 +61,33 @@ describe('AuditEventDetails', () => {
       'Reason: insufficient access',
     ])
   })
+
+  it('shows dedicated event IDs and request ID in details, not as table fields', async () => {
+    const interaction = userEvent.setup()
+    render(
+      <AuditEventDetails
+        event={{
+          id: 'event-123',
+          chain_index: 17,
+          actor_id: 'actor-uuid',
+          target_user_id: 'target-uuid',
+          document_id: 'document-uuid',
+          request_id: 'correlation-token-123',
+          details: {},
+        }}
+      />,
+    )
+
+    await interaction.click(screen.getByText('View metadata'))
+    expect(screen.getByText('Audit event ID')).toBeInTheDocument()
+    expect(screen.getByText('Audit sequence')).toBeInTheDocument()
+    expect(screen.getByText('Document ID')).toBeInTheDocument()
+    expect(screen.getByText('Request ID / correlation ID')).toBeInTheDocument()
+    expect(screen.getByText('document-uuid')).toBeInTheDocument()
+    expect(screen.getByText('correlation-token-123')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy Document ID' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Copy Request ID / correlation ID' }),
+    ).toBeInTheDocument()
+  })
 })

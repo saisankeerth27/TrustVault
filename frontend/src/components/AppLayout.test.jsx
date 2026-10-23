@@ -43,6 +43,7 @@ describe('AppLayout', () => {
 
     expect(screen.getByRole('heading', { name: 'Dashboard content' })).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: 'Audit trail' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('link', { name: 'System oversight' }).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('link', { name: 'Upload document' }).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('link', { name: 'Shared with me' }).length).toBeGreaterThan(0)
   })

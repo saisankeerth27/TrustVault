@@ -5,7 +5,6 @@ import {
   Download,
   FileText,
   FileUp,
-  Fingerprint,
   HardDrive,
   KeyRound,
   LoaderCircle,
@@ -18,7 +17,6 @@ import {
   X,
 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useAuth } from '@/auth/useAuth'
 import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
 import { DocumentActivityHistory } from '@/components/documents/DocumentActivityHistory'
 import { DocumentPreview } from '@/components/documents/DocumentPreview'
@@ -78,7 +76,6 @@ export function DocumentDetailsPage() {
 }
 
 function DocumentDetailsView({ documentId }) {
-  const { user } = useAuth()
   const navigate = useNavigate()
   const [documentRecord, setDocumentRecord] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -620,7 +617,7 @@ function DocumentDetailsView({ documentId }) {
           </CardHeader>
           <CardContent>
             <DocumentPreview
-              key={`${documentRecord.id}-${documentRecord.checksum}`}
+              key={`${documentRecord.id}-${documentRecord.updated_at}`}
               documentRecord={documentRecord}
             />
           </CardContent>
@@ -636,12 +633,9 @@ function DocumentDetailsView({ documentId }) {
             <dl className="grid gap-6 sm:grid-cols-2">
               <MetadataItem icon={UserRound} label="Owner">
                 {documentRecord.owner_name}
-                {documentRecord.owner_id === user?.id ? (
+                {documentRecord.access_level === 'OWNER' ? (
                   <span className="ml-2 text-xs text-muted-foreground">(you)</span>
                 ) : null}
-                <span className="mt-1 block font-mono text-xs text-muted-foreground break-all">
-                  {documentRecord.owner_id}
-                </span>
               </MetadataItem>
               <MetadataItem icon={FileText} label="Category">
                 {documentRecord.category || 'Uncategorized'}
@@ -657,9 +651,6 @@ function DocumentDetailsView({ documentId }) {
               </MetadataItem>
               <MetadataItem icon={CalendarDays} label="Last updated">
                 {formatDateTime(documentRecord.updated_at)}
-              </MetadataItem>
-              <MetadataItem icon={Fingerprint} label="SHA-256 checksum" className="sm:col-span-2">
-                <span className="font-mono text-xs break-all">{documentRecord.checksum}</span>
               </MetadataItem>
               <MetadataItem icon={FileText} label="Description" className="sm:col-span-2">
                 <span className="whitespace-pre-wrap">

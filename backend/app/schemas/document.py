@@ -13,14 +13,12 @@ class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    owner_id: UUID
     owner_name: str
     name: str
     category: str | None
     description: str | None
     mime_type: str
     file_size: int
-    checksum: str
     access_level: DocumentAccessLevel
     created_at: datetime
     updated_at: datetime
@@ -39,14 +37,10 @@ class DocumentListResponse(BaseModel):
 class DocumentVersionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
-    document_id: UUID
     version_number: int
     original_filename: str
     mime_type: str
     file_size: int
-    checksum: str
-    uploaded_by: UUID | None
     uploader_name: str
     change_summary: str | None
     is_current: bool

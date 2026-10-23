@@ -30,7 +30,7 @@ const uploadNavItem = {
 }
 
 const adminNavItems = [
-  { to: '/admin', label: 'Administrator', icon: ShieldCheck, end: true },
+  { to: '/admin', label: 'System oversight', icon: ShieldCheck, end: true },
   { to: '/admin/audit', label: 'Audit trail', icon: ScrollText, shortLabel: 'Audit' },
 ]
 

@@ -32,14 +32,12 @@ from tests.auth_helpers import DEFAULT_PASSWORD, bearer, login, register, unique
 PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 DOCUMENT_FIELDS = {
     "id",
-    "owner_id",
     "owner_name",
     "name",
     "category",
     "description",
     "mime_type",
     "file_size",
-    "checksum",
     "access_level",
     "created_at",
     "updated_at",
@@ -160,14 +158,14 @@ def test_authorized_roles_upload_with_server_metadata(
     payload = response.json()
     assert set(payload) == DOCUMENT_FIELDS
     assert "storage_key" not in payload
-    assert payload["owner_id"] == str(user.id)
+    assert "owner_id" not in payload
     assert payload["owner_name"] == user.name
     assert payload["name"] == "report.pdf"
     assert payload["category"] == "Finance"
     assert payload["description"] == "Quarterly report"
     assert payload["mime_type"] == "application/pdf"
     assert payload["file_size"] == len(PDF_BYTES)
-    assert payload["checksum"] == hashlib.sha256(PDF_BYTES).hexdigest()
+    expected_checksum = hashlib.sha256(PDF_BYTES).hexdigest()
     assert payload["access_level"] == "OWNER"
 
     assert len(fake_storage.uploads) == 1
@@ -185,7 +183,7 @@ def test_authorized_roles_upload_with_server_metadata(
     assert stored is not None
     assert stored.owner_id == user.id
     assert stored.storage_key == key
-    assert stored.checksum == payload["checksum"]
+    assert stored.checksum == expected_checksum
     assert stored.file_size == len(PDF_BYTES)
 
 
@@ -200,7 +198,7 @@ def test_normal_user_can_upload_and_becomes_owner(
     response = _upload(api_client, token)
 
     assert response.status_code == 201
-    assert response.json()["owner_id"] == registration.json()["user"]["id"]
+    assert "owner_id" not in response.json()
     assert response.json()["access_level"] == "OWNER"
     assert len(fake_storage.uploads) == 1
 
@@ -529,7 +527,7 @@ def test_document_listing_scopes_search_filters_and_pagination(
     )
     assert other_list.status_code == 200
     assert other_list.json()["total"] == 1
-    assert other_list.json()["items"][0]["owner_id"] == str(other.id)
+    assert "owner_id" not in other_list.json()["items"][0]
 
     viewer_registration = register(api_client, email=unique_email("viewer"))
     viewer_token = viewer_registration.json()["access_token"]
@@ -620,7 +618,7 @@ def test_document_metadata_visibility_and_management_boundaries(
         headers=bearer(admin_token),
     )
     assert admin_detail.status_code == 200
-    assert admin_detail.json()["owner_id"] == document["owner_id"]
+    assert "owner_id" not in admin_detail.json()
     assert admin_detail.json()["access_level"] == "ADMINISTRATOR"
 
     assert api_client.get(

@@ -29,14 +29,10 @@ TEXT_V1 = b"Initial notes\n"
 TEXT_V2 = "Updated notes with unicode \u2713\n"
 
 VERSION_FIELDS = {
-    "id",
-    "document_id",
     "version_number",
     "original_filename",
     "mime_type",
     "file_size",
-    "checksum",
-    "uploaded_by",
     "uploader_name",
     "change_summary",
     "is_current",
@@ -177,11 +173,11 @@ def test_upload_creates_initial_version_and_enforces_history_access(
     version = payload["items"][0]
     assert set(version) == VERSION_FIELDS
     assert "storage_key" not in version
-    assert version["document_id"] == document["id"]
+    assert "document_id" not in version
     assert version["version_number"] == 1
     assert version["original_filename"] == "report.pdf"
     assert version["uploader_name"] == owner.name
-    assert version["uploaded_by"] == str(owner.id)
+    assert "uploaded_by" not in version
     assert version["is_current"] is True
     assert version["change_summary"] == "Initial upload"
 
@@ -278,11 +274,11 @@ def test_edit_replaces_file_preserves_history_and_rejects_stale_writes(
     assert replacement.status_code == 201
     payload = replacement.json()
     assert payload["document"]["file_size"] == len(PDF_V2)
-    assert payload["document"]["checksum"] != document["checksum"]
+    assert "checksum" not in payload["document"]
     assert payload["document"]["access_level"] == "EDIT"
     assert payload["version"]["version_number"] == 2
     assert payload["version"]["is_current"] is True
-    assert payload["version"]["uploaded_by"] == str(editor.id)
+    assert "uploaded_by" not in payload["version"]
     assert payload["version"]["change_summary"] == "Updated contract terms"
     assert "storage_key" not in payload["version"]
 
@@ -863,8 +859,8 @@ def test_current_version_deletion_rolls_back_to_highest_remaining_version(
     assert "at least one document version" in (
         last_version.json()["error"]["message"].lower()
     )
-    assert version_one["id"] in {
-        version["id"]
+    assert version_one["version_number"] in {
+        version["version_number"]
         for version in _versions(api_client, owner_token, document["id"]).json()[
             "items"
         ]
@@ -888,13 +884,13 @@ def test_current_version_deletion_rolls_back_to_highest_remaining_version(
     assert body["deleted_version_number"] == 2
     assert body["rolled_back"] is True
     assert body["current_version"]["version_number"] == 1
-    assert body["document"]["checksum"] == version_one["checksum"]
+    assert "checksum" not in body["document"]
     assert body["document"]["file_size"] == version_one["file_size"]
 
     after = _versions(api_client, owner_token, document["id"]).json()
     assert after["total"] == 1
     assert after["current_version_number"] == 1
-    assert after["items"][0]["id"] == version_one["id"]
+    assert after["items"][0]["version_number"] == version_one["version_number"]
     assert after["items"][0]["is_current"] is True
 
     preview = api_client.get(
@@ -1157,6 +1153,13 @@ def test_document_activity_is_filtered_and_paginated_for_owner(
     assert first_payload["has_next"] is True
     assert first_payload["has_previous"] is False
     assert len(first_payload["items"]) == 5
+    first_activity = first_payload["items"][0]
+    assert "id" not in first_activity
+    assert "actor_id" not in first_activity
+    assert "document_id" not in first_activity
+    assert "request_id" not in first_activity
+    assert "hash_schema" not in first_activity
+    assert "actor_user_id" not in first_activity["details"]
 
     second_page = api_client.get(
         f"/api/v1/documents/{document['id']}/activity",
@@ -1169,7 +1172,7 @@ def test_document_activity_is_filtered_and_paginated_for_owner(
     assert second_payload["has_next"] is False
     assert second_payload["has_previous"] is True
     items = first_payload["items"] + second_payload["items"]
-    assert len(items) == len({item["id"] for item in items}) == 7
+    assert len(items) == 7
 
     owner_routine_actions = {
         "DOCUMENT_PREVIEW",
@@ -1177,7 +1180,7 @@ def test_document_activity_is_filtered_and_paginated_for_owner(
         "DOCUMENT_VERSION_DOWNLOAD",
     }
     assert not any(
-        item["actor_id"] == str(owner.id)
+        item["actor_name"] == owner.name
         and item["action"] in owner_routine_actions
         for item in items
     )
@@ -1195,7 +1198,6 @@ def test_document_activity_is_filtered_and_paginated_for_owner(
     metadata_event = next(
         item for item in items if item["action"] == "DOCUMENT_METADATA_UPDATE"
     )
-    assert metadata_event["actor_id"] == str(editor.id)
     assert metadata_event["actor_name"] == "Akash Editor"
     assert "description" in metadata_event["details"]["field_changes"]
     assert (
@@ -1209,6 +1211,10 @@ def test_document_activity_is_filtered_and_paginated_for_owner(
         if item["action"] == "DOCUMENT_VERSION_DELETE"
     )
     assert denied_delete["outcome"] == "DENIED"
+    permission_event = next(
+        item for item in items if item["action"] == "PERMISSION_GRANT"
+    )
+    assert "recipient_id" not in permission_event["details"]
 
     admin_events = api_client.get(
         "/api/v1/admin/audit-events",

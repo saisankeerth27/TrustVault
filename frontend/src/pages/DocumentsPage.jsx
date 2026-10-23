@@ -27,7 +27,7 @@ import { cn } from '@/lib/utils'
 import { getApiErrorMessage } from '@/services/api'
 import { listDocuments } from '@/services/documents'
 
-const PAGE_SIZE = 10
+const PAGE_SIZE = 5
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const EMPTY_RESULT = {
   items: [],
@@ -50,10 +50,10 @@ export function DocumentsPage() {
   const { user } = useAuth()
   const location = useLocation()
   const canUpload = canUploadDocuments(user)
+  const isAdministrator = user?.role === 'ADMINISTRATOR'
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [category, setCategory] = useState('')
-  const [ownerId, setOwnerId] = useState('')
   const [ownerFilter, setOwnerFilter] = useState('')
   const [ownerError, setOwnerError] = useState(null)
   const [sort, setSort] = useState(SORT_OPTIONS[0].value)
@@ -69,7 +69,7 @@ export function DocumentsPage() {
   const hasFilters = Boolean(
     query.trim() ||
       category.trim() ||
-      ownerId.trim() ||
+    (isAdministrator && ownerFilter.trim()) ||
       dateFrom ||
       dateTo ||
       sort !== SORT_OPTIONS[0].value,
@@ -98,7 +98,7 @@ export function DocumentsPage() {
     if (category.trim()) {
       params.category = category.trim()
     }
-    if (ownerFilter) {
+    if (isAdministrator && ownerFilter) {
       params.owner_id = ownerFilter
     }
     if (dateFrom) {
@@ -110,6 +110,10 @@ export function DocumentsPage() {
 
     listDocuments(params, controller.signal)
       .then((payload) => {
+        if (page > payload.pages && page > 1) {
+          setPage(payload.pages > 0 ? payload.pages : 1)
+          return
+        }
         setResult(payload)
       })
       .catch((requestError) => {
@@ -125,7 +129,7 @@ export function DocumentsPage() {
       })
 
     return () => controller.abort()
-  }, [category, dateFrom, dateTo, debouncedQuery, ownerFilter, page, refreshKey, sort])
+  }, [category, dateFrom, dateTo, debouncedQuery, isAdministrator, ownerFilter, page, refreshKey, sort])
 
   const rangeLabel = useMemo(() => {
     if (result.total === 0) {
@@ -149,8 +153,6 @@ export function DocumentsPage() {
 
   function updateOwner(value) {
     const next = value.trim()
-    setOwnerId(value)
-
     if (next && !UUID_PATTERN.test(next)) {
       setOwnerError('Owner ID must be a valid UUID.')
       if (ownerFilter) {
@@ -174,7 +176,6 @@ export function DocumentsPage() {
     setQuery('')
     setDebouncedQuery('')
     setCategory('')
-    setOwnerId('')
     setOwnerFilter('')
     setOwnerError(null)
     setSort(SORT_OPTIONS[0].value)
@@ -264,6 +265,30 @@ export function DocumentsPage() {
               </div>
             </div>
 
+            {isAdministrator ? (
+              <div className="space-y-2">
+                <label htmlFor="document-owner-filter" className="text-sm font-medium">
+                  Owner account ID
+                </label>
+                <input
+                  id="document-owner-filter"
+                  type="text"
+                  value={ownerFilter}
+                  spellCheck={false}
+                  placeholder="Optional owner UUID"
+                  onChange={(event) => updateOwner(event.target.value)}
+                  aria-invalid={ownerError ? true : undefined}
+                  aria-describedby={ownerError ? 'document-owner-filter-error' : undefined}
+                  className={cn(fieldClassName, 'font-mono text-xs')}
+                />
+                {ownerError ? (
+                  <p id="document-owner-filter-error" className="text-xs text-destructive">
+                    {ownerError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="space-y-2">
               <label htmlFor="document-category-filter" className="text-sm font-medium">
                 Category
@@ -287,34 +312,6 @@ export function DocumentsPage() {
                   <option key={option} value={option} />
                 ))}
               </datalist>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="document-owner-filter" className="text-sm font-medium">
-                Owner ID
-              </label>
-              <input
-                id="document-owner-filter"
-                type="text"
-                value={ownerId}
-                spellCheck={false}
-                placeholder="Exact owner UUID"
-                onChange={(event) => updateOwner(event.target.value)}
-                aria-invalid={ownerError ? true : undefined}
-                aria-describedby={
-                  ownerError ? 'document-owner-filter-error' : 'document-owner-filter-help'
-                }
-                className={cn(fieldClassName, 'font-mono text-xs')}
-              />
-              <p
-                id={ownerError ? 'document-owner-filter-error' : 'document-owner-filter-help'}
-                className={cn(
-                  'text-xs',
-                  ownerError ? 'text-destructive' : 'text-muted-foreground',
-                )}
-              >
-                {ownerError || 'Paste an owner account UUID. It is shown on document details.'}
-              </p>
             </div>
 
             <div className="space-y-2">
@@ -498,11 +495,10 @@ export function DocumentsPage() {
                       <td className="px-4 py-4">
                         <span
                           className="block max-w-40 truncate"
-                          title={`Owner ID: ${documentRecord.owner_id}`}
                         >
                           {documentRecord.owner_name}
                         </span>
-                        {documentRecord.owner_id === user?.id ? (
+                        {documentRecord.access_level === 'OWNER' ? (
                           <span className="text-xs text-muted-foreground">You</span>
                         ) : null}
                       </td>

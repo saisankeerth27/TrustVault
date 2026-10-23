@@ -106,6 +106,7 @@ export function checkpointMeta(value) {
 }
 
 const AUDIT_FIELD_LABELS = {
+  actor_id: 'Actor ID',
   access_level: 'Access level',
   actor_name: 'Actor',
   change_summary: 'Change summary',
@@ -113,6 +114,11 @@ const AUDIT_FIELD_LABELS = {
   client_ip: 'Client IP',
   current_version_number: 'Resulting current version',
   file_size: 'File size',
+  hash_schema: 'Hash schema',
+  document_id: 'Document ID',
+  event_id: 'Audit event ID',
+  chain_index: 'Audit sequence',
+  request_id: 'Request ID / correlation ID',
   mime_type: 'MIME type',
   previous_current_version_number: 'Previous current version',
   previous_permission: 'Previous permission',
@@ -126,7 +132,7 @@ const AUDIT_FIELD_LABELS = {
   source: 'Source',
   status: 'Status',
   storage_deleted: 'Storage object deleted',
-  target_user_id: 'Target user',
+  target_user_id: 'Target user ID',
   user_agent: 'User agent',
   version_number: 'Version',
   was_current: 'Was current version',

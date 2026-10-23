@@ -420,6 +420,43 @@ def test_admin_audit_listing_filters_pagination_and_authorization(
     assert by_document.status_code == 200
     assert by_document.json()["total"] == 1
 
+    target_email, target_user = _create_role_user(db_session, UserRole.USER)
+    changed_status = api_client.patch(
+        f"/api/v1/admin/users/{target_user.id}/status",
+        headers=bearer(admin_token),
+        json={"status": "DISABLED"},
+    )
+    assert changed_status.status_code == 200
+
+    by_target = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+        params={"target_user_id": str(target_user.id)},
+    )
+    assert by_target.status_code == 200
+    assert by_target.json()["total"] == 1
+    assert by_target.json()["items"][0]["target_user_id"] == str(target_user.id)
+
+    combined = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+        params={
+            "actor_id": str(admin.id),
+            "target_user_id": str(target_user.id),
+            "action": "USER_STATUS_CHANGED",
+            "outcome": "SUCCESS",
+        },
+    )
+    assert combined.status_code == 200
+    assert combined.json()["total"] == 1
+
+    invalid_id = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+        params={"document_id": "not-a-uuid"},
+    )
+    assert invalid_id.status_code == 422
+
     by_outcome = api_client.get(
         "/api/v1/admin/audit-events",
         headers=bearer(admin_token),
@@ -437,7 +474,7 @@ def test_admin_audit_listing_filters_pagination_and_authorization(
         params={"occurred_from": today, "occurred_to": today},
     )
     assert by_date.status_code == 200
-    assert by_date.json()["total"] == payload["total"]
+    assert by_date.json()["total"] == payload["total"] + 1
 
     paged = api_client.get(
         "/api/v1/admin/audit-events",
@@ -485,6 +522,7 @@ def test_admin_audit_listing_filters_pagination_and_authorization(
     assert integrity.json()["chain"]["status"] == "VALID"
     assert integrity.json()["checkpoint"]["status"] == "UNCONFIGURED"
     assert integrity.json()["status"] == "CHAIN_VALID_CHECKPOINT_MISSING"
+    assert integrity.json()["verified_at"]
     after_integrity = int(
         db_session.scalar(select(func.count()).select_from(AuditEvent)) or 0
     )

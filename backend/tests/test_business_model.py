@@ -108,8 +108,8 @@ def test_normal_users_upload_and_only_see_their_own_documents(
     first_document = _upload(api_client, first_token, name="First.pdf")
     second_document = _upload(api_client, second_token, name="Second.pdf")
 
-    assert first_document["owner_id"] == str(first.id)
-    assert second_document["owner_id"] == str(second.id)
+    assert "owner_id" not in first_document
+    assert "owner_id" not in second_document
     assert first_document["access_level"] == "OWNER"
     assert second_document["access_level"] == "OWNER"
 
@@ -129,7 +129,7 @@ def test_read_and_edit_grants_enforce_document_level_capabilities(
     db_session: Session,
     fake_storage: FakeStorage,
 ) -> None:
-    owner_email, _ = _create_account(db_session, name="Document Owner")
+    owner_email, owner = _create_account(db_session, name="Document Owner")
     recipient_email, recipient = _create_account(db_session, name="Recipient")
     owner_token = _token_for(api_client, owner_email)
     recipient_token = _token_for(api_client, recipient_email)
@@ -184,7 +184,7 @@ def test_read_and_edit_grants_enforce_document_level_capabilities(
         api_client, recipient_token, document["id"], owner_email, "READ"
     ).status_code == 403
     assert fake_storage.deletions == []
-    assert recipient.id != UUID(document["owner_id"])
+    assert recipient.id != owner.id
 
 
 def test_permission_revocation_is_immediate_and_audited(
@@ -512,7 +512,8 @@ def test_admin_can_review_metadata_and_grants_but_not_content(
     ).json()
     assert [item["id"] for item in all_documents["items"]] == [document["id"]]
     assert all_documents["items"][0]["access_level"] == "ADMINISTRATOR"
-    assert all_documents["items"][0]["owner_id"] == str(owner.id)
+    assert "owner_id" not in all_documents["items"][0]
+    assert all_documents["items"][0]["owner_name"] == owner.name
 
     permissions = api_client.get(
         f"/api/v1/admin/documents/{document['id']}/permissions",

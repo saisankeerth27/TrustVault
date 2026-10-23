@@ -34,7 +34,7 @@ from app.models.document_permission import DocumentPermission
 from app.models.document_version import DocumentVersion
 from app.models.enums import AuditAction, AuditOutcome, DocumentAccessLevel
 from app.models.user import User
-from app.schemas.audit import AuditEventListResponse
+from app.schemas.audit import DocumentActivityListResponse
 from app.schemas.document import (
     DocumentContentUpdate,
     DocumentListResponse,
@@ -50,7 +50,7 @@ from app.schemas.document import (
     PermissionUpdateRequest,
 )
 from app.services.audit import record_best_effort, record_event
-from app.services.audit_presenter import audit_event_response
+from app.services.audit_presenter import audit_event_response, document_activity_response
 from app.services.document_access import (
     DocumentAccessDeniedError,
     DocumentCapability,
@@ -679,7 +679,7 @@ def delete_document_version(
 
 @router.get(
     "/{document_id}/activity",
-    response_model=AuditEventListResponse,
+    response_model=DocumentActivityListResponse,
 )
 def list_document_activity(
     document_id: UUID,
@@ -688,7 +688,7 @@ def list_document_activity(
     page_size: Annotated[int, Query(ge=1, le=100)] = 5,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
-) -> AuditEventListResponse:
+) -> DocumentActivityListResponse:
     try:
         authorized = authorize_document(
             session,
@@ -735,8 +735,8 @@ def list_document_activity(
     )
     pages = (total + page_size - 1) // page_size
     response.headers["Cache-Control"] = "no-store"
-    return AuditEventListResponse(
-        items=[audit_event_response(event) for event in events],
+    return DocumentActivityListResponse(
+        items=[document_activity_response(event) for event in events],
         total=total,
         page=page,
         page_size=page_size,

@@ -231,7 +231,7 @@ export function DocumentActivityHistory({ documentId, refreshKey = 0 }) {
           </p>
         ) : (
           <ol className="relative space-y-4 border-l border-muted pl-4 ml-2">
-            {events.map((event) => {
+            {events.map((event, index) => {
               const outcome = outcomeMeta(event.outcome)
               const details = event.details || {}
               const isMetadataEdit = event.action === 'DOCUMENT_METADATA_UPDATE'
@@ -239,7 +239,7 @@ export function DocumentActivityHistory({ documentId, refreshKey = 0 }) {
               const isVersionDeleted = event.action === 'DOCUMENT_VERSION_DELETE'
 
               return (
-                <li key={event.id} className="space-y-1.5">
+                <li key={`${event.occurred_at}-${event.action}-${index}`} className="space-y-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <ActionIcon action={event.action} outcome={event.outcome} />
@@ -303,7 +303,6 @@ export function DocumentActivityHistory({ documentId, refreshKey = 0 }) {
                   {event.action.startsWith('PERMISSION_') ? (
                     <p className="text-xs text-muted-foreground">
                       {details.permission ? `Level: ${details.permission}. ` : ''}
-                      {details.recipient_id ? `Target recipient: ${details.recipient_id}` : ''}
                     </p>
                   ) : null}
 
