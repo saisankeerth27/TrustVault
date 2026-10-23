@@ -45,8 +45,19 @@ def _client_address(request: Request) -> str:
 
 
 def _enforce_allowed_origin(request: Request) -> None:
+    sec_fetch_site = request.headers.get("sec-fetch-site")
     origin = request.headers.get("origin")
-    if origin and origin not in get_settings().cors_origins:
+    cors_origins = get_settings().cors_origins
+
+    if sec_fetch_site == "cross-site":
+        if not origin or origin not in cors_origins:
+            logger.warning("Rejected cross-site auth request.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Request origin is not allowed.",
+            )
+
+    if origin and origin not in cors_origins:
         logger.warning("Rejected auth request from untrusted origin.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

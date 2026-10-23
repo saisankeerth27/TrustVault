@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -131,5 +131,52 @@ describe('AdminPage', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(
       'Session revocation and the audit record were applied',
     )
+  })
+
+  it('auto-applies search with debounce and without an Apply button', async () => {
+    const interaction = userEvent.setup()
+    renderAdminPage()
+
+    await screen.findByText('Morgan User')
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull()
+
+    const searchInput = screen.getByLabelText('Search')
+    await interaction.type(searchInput, 'Morgan')
+
+    await waitFor(
+      () => {
+        expect(listAdminUsers).toHaveBeenLastCalledWith(
+          expect.objectContaining({ q: 'Morgan', page: 1 }),
+          expect.any(AbortSignal),
+        )
+      },
+      { timeout: 1500 },
+    )
+  })
+
+  it('immediately applies dropdown filters and resets with Clear button', async () => {
+    const interaction = userEvent.setup()
+    renderAdminPage()
+
+    await screen.findByText('Morgan User')
+    const statusSelect = screen.getByLabelText('Status')
+    await interaction.selectOptions(statusSelect, 'DISABLED')
+
+    await waitFor(() => {
+      expect(listAdminUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'DISABLED', page: 1 }),
+        expect.any(AbortSignal),
+      )
+    })
+
+    const clearButton = await screen.findByRole('button', { name: /clear/i })
+    await interaction.click(clearButton)
+
+    await waitFor(() => {
+      expect(listAdminUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1, page_size: 25 }),
+        expect.any(AbortSignal),
+      )
+    })
   })
 })

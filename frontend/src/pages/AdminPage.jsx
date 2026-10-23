@@ -150,8 +150,8 @@ function AccountId({ id }) {
 
 export function AdminPage() {
   const { user } = useAuth()
-  const [draftFilters, setDraftFilters] = useState({ ...EMPTY_FILTERS })
-  const [appliedFilters, setAppliedFilters] = useState({ ...EMPTY_FILTERS })
+  const [filters, setFilters] = useState({ ...EMPTY_FILTERS })
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [page, setPage] = useState(1)
   const [result, setResult] = useState(EMPTY_RESULT)
   const [summary, setSummary] = useState(null)
@@ -163,16 +163,31 @@ export function AdminPage() {
   const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const trimmed = filters.q.trim()
+      setDebouncedQuery((prev) => {
+        if (prev !== trimmed) {
+          setPage(1)
+          return trimmed
+        }
+        return prev
+      })
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [filters.q])
+
+  useEffect(() => {
     const controller = new AbortController()
+    setIsLoading(true)
     const params = { page, page_size: PAGE_SIZE }
-    if (appliedFilters.q.trim()) {
-      params.q = appliedFilters.q.trim()
+    if (debouncedQuery) {
+      params.q = debouncedQuery
     }
-    if (appliedFilters.status) {
-      params.status = appliedFilters.status
+    if (filters.status) {
+      params.status = filters.status
     }
-    if (appliedFilters.role) {
-      params.role = appliedFilters.role
+    if (filters.role) {
+      params.role = filters.role
     }
 
     Promise.all([
@@ -199,19 +214,22 @@ export function AdminPage() {
       })
 
     return () => controller.abort()
-  }, [appliedFilters, page, refreshKey])
+  }, [debouncedQuery, filters.role, filters.status, page, refreshKey])
 
-  function applyFilters(event) {
-    event.preventDefault()
-    setIsLoading(true)
+  function handleStatusChange(value) {
+    setFilters((current) => ({ ...current, status: value }))
     setPage(1)
-    setAppliedFilters({ ...draftFilters })
+  }
+
+  function handleRoleChange(value) {
+    setFilters((current) => ({ ...current, role: value }))
+    setPage(1)
   }
 
   function clearFilters() {
     setIsLoading(true)
-    setDraftFilters({ ...EMPTY_FILTERS })
-    setAppliedFilters({ ...EMPTY_FILTERS })
+    setFilters({ ...EMPTY_FILTERS })
+    setDebouncedQuery('')
     setPage(1)
   }
 
@@ -266,7 +284,7 @@ export function AdminPage() {
     }
   }
 
-  const hasFilters = Object.values(appliedFilters).some(Boolean)
+  const hasFilters = Boolean(filters.q.trim() || filters.status || filters.role)
   const rangeStart =
     result.total === 0 ? 0 : (result.page - 1) * result.page_size + 1
   const rangeEnd = Math.min(result.page * result.page_size, result.total)
@@ -345,21 +363,27 @@ export function AdminPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_12rem_auto]" onSubmit={applyFilters}>
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_12rem_auto]">
             <div className="space-y-2">
               <label htmlFor="admin-user-search" className="text-sm font-medium">
                 Search
               </label>
-              <input
-                id="admin-user-search"
-                type="search"
-                value={draftFilters.q}
-                onChange={(event) =>
-                  setDraftFilters((current) => ({ ...current, q: event.target.value }))
-                }
-                placeholder="Name or email"
-                className={fieldClassName}
-              />
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <input
+                  id="admin-user-search"
+                  type="search"
+                  value={filters.q}
+                  onChange={(event) =>
+                    setFilters((current) => ({ ...current, q: event.target.value }))
+                  }
+                  placeholder="Name or email"
+                  className={cn(fieldClassName, 'pl-9')}
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <label htmlFor="admin-user-status" className="text-sm font-medium">
@@ -367,10 +391,8 @@ export function AdminPage() {
               </label>
               <select
                 id="admin-user-status"
-                value={draftFilters.status}
-                onChange={(event) =>
-                  setDraftFilters((current) => ({ ...current, status: event.target.value }))
-                }
+                value={filters.status}
+                onChange={(event) => handleStatusChange(event.target.value)}
                 className={fieldClassName}
               >
                 <option value="">All statuses</option>
@@ -384,10 +406,8 @@ export function AdminPage() {
               </label>
               <select
                 id="admin-user-role"
-                value={draftFilters.role}
-                onChange={(event) =>
-                  setDraftFilters((current) => ({ ...current, role: event.target.value }))
-                }
+                value={filters.role}
+                onChange={(event) => handleRoleChange(event.target.value)}
                 className={fieldClassName}
               >
                 <option value="">All roles</option>
@@ -395,19 +415,15 @@ export function AdminPage() {
                 <option value="USER">User</option>
               </select>
             </div>
-            <div className="flex items-end gap-2">
-              <Button type="submit">
-                <Search className="size-4" aria-hidden="true" />
-                Apply
-              </Button>
-              {hasFilters || Object.values(draftFilters).some(Boolean) ? (
+            <div className="flex items-end">
+              {hasFilters ? (
                 <Button type="button" variant="ghost" onClick={clearFilters}>
                   <X className="size-4" aria-hidden="true" />
                   Clear
                 </Button>
               ) : null}
             </div>
-          </form>
+          </div>
 
           <p className="mt-4 text-sm text-muted-foreground" aria-live="polite">
             {isLoading

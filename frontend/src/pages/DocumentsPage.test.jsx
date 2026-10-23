@@ -91,10 +91,10 @@ describe('DocumentsPage pagination', () => {
     expect(screen.getByText('Page 2 of 2')).toBeInTheDocument()
   })
 
-  it('keeps the owner filter available only in administrator oversight', async () => {
+  it('does not display owner account ID filter for administrators', async () => {
     renderDocumentsPage('ADMINISTRATOR')
 
-    expect(await screen.findByLabelText('Owner account ID')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Owner account ID')).toBeNull()
     expect(listDocuments).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1, page_size: 5 }),
       expect.any(AbortSignal),

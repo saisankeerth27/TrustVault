@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { ArrowRight, CheckCircle2, LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { ArrowRight, History, LoaderCircle, LockKeyhole, Share2, ShieldCheck } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 import { useAuth } from '@/auth/useAuth'
@@ -137,20 +137,27 @@ export function RegisterPage() {
             Public registration
           </p>
           <h1 className="text-3xl font-semibold leading-tight tracking-tight">
-            Create an account, upload your documents, and share on your terms.
+            Your Documents. Your Control.
           </h1>
           <p className="text-sm leading-6 text-white/80">
-            New accounts are normal users. You can upload and own documents immediately, and
-            documents appear when another owner grants you READ or EDIT access.
+            Securely manage your documents, share access with trusted people, and stay in control of who can view or edit your files.
           </p>
           <ul className="space-y-3 text-sm text-white/85">
             <li className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Own your uploads and share them with named users using READ or EDIT grants.
+              <Share2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Secure Document Sharing
             </li>
             <li className="flex items-start gap-3">
               <LockKeyhole className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Passwords are hashed server-side and refresh credentials stay in an HttpOnly cookie.
+              Controlled Read and Edit Access
+            </li>
+            <li className="flex items-start gap-3">
+              <History className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Document Version History
+            </li>
+            <li className="flex items-start gap-3">
+              <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Activity and Access Tracking
             </li>
           </ul>
         </div>

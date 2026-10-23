@@ -11,8 +11,8 @@ export function UploadPage() {
     <div className="space-y-8">
       <PageHeader
         eyebrow="Upload"
-        title="Upload a document"
-        description="Add a document to the private vault. The backend validates the file content, computes its checksum, stores it under a generated key, and records the upload in the audit trail."
+        title="Upload a Document"
+        description="Upload your document securely and manage who can access it. You can share it with specific users and control whether they can view or edit it."
         actions={
           <Link to="/documents" className={buttonVariants({ variant: 'outline' })}>
             <ArrowLeft className="size-4" aria-hidden="true" />

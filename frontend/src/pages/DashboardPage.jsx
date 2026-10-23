@@ -19,7 +19,7 @@ import { canUploadDocuments, formatBytes, formatDate } from '@/lib/documents'
 import { getApiErrorMessage } from '@/services/api'
 import { listDocuments, listSharedDocuments } from '@/services/documents'
 
-const RECENT_PAGE_SIZE = 4
+const RECENT_PAGE_SIZE = 3
 const EMPTY_SUMMARY = {
   items: [],
   total: 0,
@@ -97,7 +97,7 @@ function RecentDocuments({ title, description, documents, isLoading, emptyMessag
           </div>
         ) : (
           <ul className="divide-y border-t">
-            {documents.map((documentRecord) => (
+            {documents.slice(0, 3).map((documentRecord) => (
               <li key={documentRecord.id}>
                 <Link
                   to={`/documents/${documentRecord.id}`}
@@ -291,61 +291,59 @@ export function DashboardPage() {
         />
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
-        <div className="grid gap-5">
-          <RecentDocuments
-            title="Recently updated"
-            description="The latest documents visible to your account, ordered by update time."
-            documents={documents.items}
-            isLoading={isLoading}
-            emptyMessage={
-              canUpload
-                ? 'No accessible documents yet. Upload your first document to get started.'
-                : 'No documents are visible to your account yet.'
-            }
-          />
-          <RecentDocuments
-            title="Recently shared with you"
-            description="Documents with an active grant from another owner."
-            documents={shared.items}
-            isLoading={isLoading}
-            emptyMessage="No active shares are available to your account."
-          />
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick actions</CardTitle>
-            <CardDescription>Common tasks for your current role.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {quickLinks.map((link) => (
-              <Link
-                key={link.to}
-                to={link.to}
-                className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                <span>{link.label}</span>
-                <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
-              </Link>
-            ))}
-            <div className="mt-2 rounded-lg bg-muted/50 px-4 py-3 text-xs leading-5 text-muted-foreground">
-              <p className="flex items-center gap-2 font-medium text-foreground">
-                {isLoading ? (
-                  <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
-                ) : (
-                  <ShieldCheck className="size-3.5" aria-hidden="true" />
-                )}
-                {isLoading ? 'Refreshing access summary' : 'Backend-enforced access'}
-              </p>
-              <p className="mt-1">
-                This dashboard only shows documents the backend returns for your active session.
-                Access changes apply on the next request.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <RecentDocuments
+          title="Recently updated"
+          description="The latest documents visible to your account, ordered by update time."
+          documents={documents.items}
+          isLoading={isLoading}
+          emptyMessage={
+            canUpload
+              ? 'No accessible documents yet. Upload your first document to get started.'
+              : 'No documents are visible to your account yet.'
+          }
+        />
+        <RecentDocuments
+          title="Recently shared with you"
+          description="Documents with an active grant from another owner."
+          documents={shared.items}
+          isLoading={isLoading}
+          emptyMessage="No active shares are available to your account."
+        />
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Quick actions</CardTitle>
+          <CardDescription>Common tasks for your current role.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {quickLinks.map((link) => (
+            <Link
+              key={link.to}
+              to={link.to}
+              className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <span>{link.label}</span>
+              <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
+            </Link>
+          ))}
+          <div className="rounded-lg bg-muted/50 px-4 py-3 text-xs leading-5 text-muted-foreground sm:col-span-2 lg:col-span-3">
+            <p className="flex items-center gap-2 font-medium text-foreground">
+              {isLoading ? (
+                <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <ShieldCheck className="size-3.5" aria-hidden="true" />
+              )}
+              {isLoading ? 'Refreshing access summary' : 'Backend-enforced access'}
+            </p>
+            <p className="mt-1">
+              This dashboard only shows documents the backend returns for your active session.
+              Access changes apply on the next request.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

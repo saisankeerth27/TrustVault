@@ -97,7 +97,7 @@ function IntegrityPanel({
         <div className="space-y-1.5">
           <CardTitle className="flex items-center gap-2">
             <Fingerprint className="size-4 text-primary" aria-hidden="true" />
-            Integrity verification
+            Integrity Check
           </CardTitle>
           <CardDescription>
             Chain hashes are recomputed from stored events and compared with the signed external
@@ -115,7 +115,7 @@ function IntegrityPanel({
             className={cn('size-4', isLoading && 'animate-spin')}
             aria-hidden="true"
           />
-          Refresh
+          Verify Integrity
         </Button>
       </CardHeader>
       <CardContent className="space-y-5">

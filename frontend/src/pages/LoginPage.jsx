@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { ArrowRight, LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { ArrowRight, History, LoaderCircle, LockKeyhole, Share2, ShieldCheck } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 import { useAuth } from '@/auth/useAuth'
@@ -103,20 +103,27 @@ export function LoginPage() {
             Secure access
           </p>
           <h1 className="text-3xl font-semibold leading-tight tracking-tight">
-            Share documents with confidence, not hope.
+            Your Documents. Your Control.
           </h1>
           <p className="text-sm leading-6 text-white/80">
-            TrustVault uses short-lived access tokens and rotating, server-side sessions. Named-user
-            roles are checked by the backend on every protected request.
+            Securely manage your documents, share access with trusted people, and stay in control of who can view or edit your files.
           </p>
           <ul className="space-y-3 text-sm text-white/85">
             <li className="flex items-start gap-3">
+              <Share2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Secure Document Sharing
+            </li>
+            <li className="flex items-start gap-3">
               <LockKeyhole className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Refresh credentials stay in an HttpOnly cookie and never enter browser storage.
+              Controlled Read and Edit Access
+            </li>
+            <li className="flex items-start gap-3">
+              <History className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Document Version History
             </li>
             <li className="flex items-start gap-3">
               <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Disabling an account or signing out invalidates existing sessions.
+              Activity and Access Tracking
             </li>
           </ul>
         </div>

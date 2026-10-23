@@ -127,8 +127,16 @@ export function canReplaceDocumentFile(documentRecord) {
 
 export function previewKindOf(documentRecord) {
   const mimeType = documentRecord?.mime_type || ''
+  const filename = documentRecord?.name || ''
   if (mimeType === 'application/pdf') {
     return 'pdf'
+  }
+  if (
+    mimeType ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    filename.toLowerCase().endsWith('.docx')
+  ) {
+    return 'docx'
   }
   if (mimeType === 'image/png' || mimeType === 'image/jpeg') {
     return 'image'

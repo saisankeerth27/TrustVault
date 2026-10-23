@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { CheckCircle2, FileUp, LoaderCircle, LockKeyhole, Upload, X } from 'lucide-react'
+import { CheckCircle2, FileUp, LoaderCircle, Upload, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
@@ -113,9 +113,9 @@ export function UploadDocumentPanel({ onUploaded, onCancel }) {
       <CardContent className="space-y-6 px-6 py-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold tracking-tight">Upload a document</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Upload a Document</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Files are validated by the backend and stored in a private bucket.
+              Select a file from your device and choose its category.
             </p>
           </div>
           <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
@@ -132,7 +132,7 @@ export function UploadDocumentPanel({ onUploaded, onCancel }) {
             <div className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-600" aria-hidden="true" />
               <div>
-                <p className="font-medium">Upload completed</p>
+                <p className="font-medium">Document uploaded successfully.</p>
                 <p className="text-sm text-muted-foreground">
                   {uploaded.name} is now available in your document library.
                 </p>
@@ -156,7 +156,7 @@ export function UploadDocumentPanel({ onUploaded, onCancel }) {
           </div>
         ) : null}
 
-        <form className="grid gap-6 lg:grid-cols-[1.5fr_1fr]" onSubmit={handleSubmit(onSubmit)}>
+        <form className="space-y-5" onSubmit={handleSubmit(onSubmit)}>
           <div className="space-y-5">
             <div className="space-y-2">
               <label htmlFor="document-file" className="text-sm font-medium">
@@ -176,6 +176,13 @@ export function UploadDocumentPanel({ onUploaded, onCancel }) {
               <p id="document-file-help" className="text-xs leading-5 text-muted-foreground">
                 PDF, TXT, DOCX, PNG, JPG, or JPEG. Maximum 10 MB.
               </p>
+              {file ? (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                  <FileUp className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="truncate font-medium">{file.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">({formatBytes(file.size)})</span>
+                </div>
+              ) : null}
               {fileError ? (
                 <p id="document-file-error" className="text-sm text-destructive">
                   {fileError}
@@ -264,32 +271,7 @@ export function UploadDocumentPanel({ onUploaded, onCancel }) {
                   </>
                 )}
               </Button>
-              <span className="text-xs text-muted-foreground">
-                The backend validates the file again.
-              </span>
             </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <LockKeyhole className="size-4 text-primary" aria-hidden="true" />
-              Private by default
-            </div>
-            <p className="text-sm leading-6 text-muted-foreground">
-              The server generates the storage key and records the owner, size, MIME type, and
-              SHA-256 checksum. Object keys are never sent to the browser.
-            </p>
-
-            {file ? (
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <FileUp className="size-4 text-primary" aria-hidden="true" />
-                  Selected file
-                </div>
-                <p className="mt-2 truncate text-sm">{file.name}</p>
-                <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
-              </div>
-            ) : null}
           </div>
         </form>
       </CardContent>

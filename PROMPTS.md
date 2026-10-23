@@ -609,3 +609,45 @@ This file records genuine AI-assisted development activity for TrustVault. Each 
 - **Commit hash:** The final single commit created from this working tree; its hash is reported with the pushed commit.
 - **GitHub link:** Reported with the pushed commit.
 - **Human review and decision:** Pending; local verification completed before the single commit/push.
+
+---
+
+## 2026-10-23 — UI Cleanup, Layout Corrections, and Verification Alignment
+
+- **Date and phase:** 2026-10-23 — UI Cleanup, Functional Fixes, and Security Hardening
+- **Objective:** Clean up the document upload portal, remove redundant helper and checksum wording, arrange dashboard recent sections side-by-side with a 3-item limit, update authentication branding copy, implement debounced auto-filtering in Account Management (removing the Apply button), remove the Owner Account ID filter from the administrator document library, align Integrity Check naming and status badges, and document file validation vs scanning accurately.
+- **Prompt / instruction summary:** Targeted UI cleanup, layout corrections, broken component fixes, filtering improvements, and security hardening without rewrites or TypeScript introductions. Preserve existing FastAPI, PostgreSQL, Supabase Storage, and React/JSX architecture. Add and update tests, verify the production build and backend suite, update documentation, and prepare one final commit: `fix(ui): clean up document portal and harden verification`.
+- **Files or code produced:**
+  - `frontend/src/pages/UploadPage.jsx` & `frontend/src/components/documents/UploadDocumentPanel.jsx`: Updated title to "Upload a Document" and description, removed "Private by default" helper block and checksum references, removed redundant "backend validates again" text, and updated post-upload notice to "Document uploaded successfully."
+  - `frontend/src/pages/DocumentsPage.jsx`: Removed the visible "Owner account ID" input from administrator oversight while preserving backend query contracts.
+  - `frontend/src/pages/DashboardPage.jsx`: Restricted recent items to at most 3 (`RECENT_PAGE_SIZE = 3`) and arranged the two recent sections side-by-side (`lg:grid-cols-2`) on wide screens.
+  - `frontend/src/pages/LoginPage.jsx` & `frontend/src/pages/RegisterPage.jsx`: Replaced generic marketing text with "Your Documents. Your Control.", supportive description, and the four key platform features.
+  - `frontend/src/pages/AdminPage.jsx`: Removed Apply button, added debounced search input (~300ms) with page reset, immediate dropdown filtering, and preserved the Clear button (resolving unmounted appliedFilters reference error).
+  - `frontend/src/pages/AuditPage.jsx` & `frontend/src/lib/audit.js`: Updated feature title to "Integrity Check", button to "Verify Integrity", and aligned status labels ("Verified", "Verification Unavailable", "Verification Failed").
+  - `backend/app/main.py`: Injected `SecurityHeadersMiddleware` setting `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Permissions-Policy`.
+  - `frontend/vercel.json`: Added response security headers including HSTS, nosniff, DENY frame options, and referrer policy.
+  - `backend/app/api/auth.py`: Hardened CSRF defenses by validating `Sec-Fetch-Site: cross-site` on cookie-authenticated requests.
+  - `SECURITY-AUDIT.md`: Generated full defensive application security audit report with 20 security areas evaluated and prioritized remediation roadmap.
+  - `frontend/src/pages/UploadPage.test.jsx`, `frontend/src/pages/DocumentsPage.test.jsx`, `frontend/src/pages/DashboardPage.test.jsx`, `frontend/src/pages/AdminPage.test.jsx`, `frontend/src/pages/LoginPage.test.jsx`: Updated and added test suites for all modified workflows.
+  - Updated `README.md` and this log.
+- **Tests and verification performed:**
+  - Frontend Vitest: **37 passed across 12 files** with 0 failures.
+  - Frontend linter: `oxlint` 0 errors.
+  - Frontend build: `vite build` completed successfully in 1.27s.
+  - Backend pytest: **269 passed**, 1 warning in 38.46s.
+- **Issues discovered:**
+  - AdminPage had a stale HMR reference to `appliedFilters` during the filter conversion; corrected to use `filters` state consistently.
+  - Security audit identified missing security headers and unconstrained cross-site cookie transmission; remediated with `SecurityHeadersMiddleware` and `Sec-Fetch-Site` verification.
+  - Scan Checkup: No background malware scanner or scanning API exists in the repository. The application performs strict server-side file validation during upload (MIME, magic-byte signatures, size, filename sanitization, DOCX structure, UTF-8 TXT). The system accurately labels this as file validation and reports malware scanning as unavailable/unconfigured.
+  - Integrity Verification: The hash-chain continuity recomputation and HMAC checkpoint validation function correctly. Because `AUDIT_CHECKPOINT_SIGNING_KEY` is not set locally, checkpoint status displays "Verification Unavailable" (unconfigured), which is honest and expected.
+  - Duplicate Author ID: No duplicate "Author ID" exists in DocumentDetailsPage metadata; authoritative owner and actor identities are preserved.
+- **Corrections made:**
+  - Removed decorative "Private by default" block from upload while preserving strict private bucket storage behavior.
+  - Added debounced filtering to Admin account management with request abortion to prevent race conditions on stale responses.
+  - Sliced dashboard recent documents to 3 items and structured into a 2-column wide layout.
+  - Registered security headers middleware in FastAPI backend and frontend Vercel deployment config.
+  - Updated tests and asserted absence of removed UI elements.
+- **Commit hash:** Recorded upon commit.
+- **GitHub link:** https://github.com/saisankeerth27/TrustVault
+- **Human review and decision:** Verified locally; awaiting human review.
+

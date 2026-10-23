@@ -118,4 +118,27 @@ describe('DashboardPage', () => {
     expect(await screen.findByText('Quarterly report')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+
+  it('limits displayed recent documents to at most 3 items even if more exist', async () => {
+    const docs = [1, 2, 3, 4, 5].map((num) => ({
+      ...recentDocument,
+      id: `doc-${num}`,
+      name: `Report ${num}.pdf`,
+    }))
+
+    listDocuments.mockImplementation((params) => {
+      if (params.owner_id) {
+        return Promise.resolve(summary([], 2))
+      }
+      return Promise.resolve(summary(docs, 5))
+    })
+
+    renderDashboard()
+
+    expect(await screen.findByText('Report 1.pdf')).toBeInTheDocument()
+    expect(screen.getByText('Report 2.pdf')).toBeInTheDocument()
+    expect(screen.getByText('Report 3.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('Report 4.pdf')).toBeNull()
+    expect(screen.queryByText('Report 5.pdf')).toBeNull()
+  })
 })

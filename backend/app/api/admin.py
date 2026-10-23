@@ -539,6 +539,7 @@ def get_audit_integrity(
             last_event_hash=verification.chain.last_event_hash,
             failure_chain_index=verification.chain.failure_chain_index,
             message=verification.chain.message,
+            legacy_skipped=verification.chain.legacy_skipped,
         ),
         checkpoint=CheckpointIntegrityResponse(
             status=verification.checkpoint.status,

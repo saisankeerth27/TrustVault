@@ -38,10 +38,21 @@ describe('UploadPage', () => {
     renderUploadPage('USER')
 
     expect(
-      screen.getByRole('heading', { level: 1, name: 'Upload a document' }),
+      screen.getByRole('heading', { level: 1, name: /upload a document/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Upload your document securely and manage who can access it/i),
     ).toBeInTheDocument()
     expect(screen.getByLabelText('Document file')).toBeInTheDocument()
     expect(screen.getByLabelText('Category')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Upload document' })).toBeInTheDocument()
+  })
+
+  it('does not display Private by default helper text or redundant validation copy', () => {
+    renderUploadPage('USER')
+
+    expect(screen.queryByText(/Private by default/i)).toBeNull()
+    expect(screen.queryByText(/The backend validates the file again/i)).toBeNull()
+    expect(screen.queryByText(/SHA-256 checksum/i)).toBeNull()
   })
 })

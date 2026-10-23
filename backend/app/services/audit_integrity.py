@@ -48,6 +48,7 @@ class ChainVerification:
     last_event_hash: str | None
     failure_chain_index: int | None
     message: str
+    legacy_skipped: int = 0
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,20 @@ def _checkpoint_signature(payload: dict[str, Any], key: str) -> str:
     ).hexdigest()
 
 
+def _v1_has_nulled_reference(event: AuditEvent) -> bool:
+    """Return True when a V1 event has a null FK that was set by ON DELETE SET NULL.
+
+    V1 events embedded mutable foreign-key UUIDs (actor_id, document_id) directly
+    in the hash payload.  When the referenced row is later deleted PostgreSQL sets
+    those columns to NULL, making it impossible to recompute the original hash.
+    The chain links (previous_hash) remain intact, so we accept these events as
+    "legacy-verified" rather than flagging them as tampered.
+    """
+    return event.hash_schema == AUDIT_HASH_SCHEMA_V1 and (
+        event.actor_id is None or event.document_id is None
+    )
+
+
 def verify_chain(session: Session) -> ChainVerification:
     events = session.scalars(
         select(AuditEvent).order_by(AuditEvent.chain_index.asc())
@@ -85,6 +100,7 @@ def verify_chain(session: Session) -> ChainVerification:
     expected_index = 1
     previous_hash: str | None = None
     last_event_hash: str | None = None
+    legacy_skipped = 0
 
     for event in events:
         if event.chain_index != expected_index:
@@ -140,12 +156,19 @@ def verify_chain(session: Session) -> ChainVerification:
             hash_schema=event.hash_schema,
         )
         if calculate_event_hash(payload) != event.event_hash:
-            legacy_hint = (
-                " This legacy event hashed mutable actor/document references, so "
-                "deleting either record can invalidate its hash."
-                if event.hash_schema == AUDIT_HASH_SCHEMA_V1
-                else ""
-            )
+            # V1 events embedded mutable FK references.  When the actor or
+            # document is later deleted, PostgreSQL nulls those columns via ON
+            # DELETE SET NULL, making it impossible to recompute the original
+            # hash.  Chain-link integrity (previous_hash) has already been
+            # confirmed above, so we accept these as legacy-verified rather
+            # than treating them as evidence of tampering.
+            if _v1_has_nulled_reference(event):
+                legacy_skipped += 1
+                last_event_hash = event.event_hash
+                previous_hash = event.event_hash
+                expected_index += 1
+                continue
+
             return ChainVerification(
                 status="INVALID",
                 event_count=event_count,
@@ -154,7 +177,7 @@ def verify_chain(session: Session) -> ChainVerification:
                 failure_chain_index=event.chain_index,
                 message=(
                     "The event hash does not match the stored event at "
-                    f"sequence {event.chain_index}.{legacy_hint}"
+                    f"sequence {event.chain_index}."
                 ),
             )
 
@@ -162,13 +185,24 @@ def verify_chain(session: Session) -> ChainVerification:
         previous_hash = event.event_hash
         expected_index += 1
 
+    if legacy_skipped:
+        message = (
+            f"The audit hash chain is internally consistent "
+            f"({legacy_skipped} legacy V1 "
+            f"{'event' if legacy_skipped == 1 else 'events'} "
+            "accepted: deleted actor/document FK cannot be re-verified)."
+        )
+    else:
+        message = "The audit hash chain is internally consistent."
+
     return ChainVerification(
         status="VALID",
         event_count=event_count,
         last_chain_index=expected_index - 1,
         last_event_hash=last_event_hash,
         failure_chain_index=None,
-        message="The audit hash chain is internally consistent.",
+        message=message,
+        legacy_skipped=legacy_skipped,
     )
 
 

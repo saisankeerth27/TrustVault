@@ -54,6 +54,7 @@ class DocumentActivityListResponse(BaseModel):
     has_previous: bool
 
 
+
 class ChainIntegrityResponse(BaseModel):
     status: str
     event_count: int
@@ -61,6 +62,8 @@ class ChainIntegrityResponse(BaseModel):
     last_event_hash: str | None
     failure_chain_index: int | None
     message: str
+    legacy_skipped: int = 0
+
 
 
 class CheckpointIntegrityResponse(BaseModel):

@@ -57,13 +57,13 @@ export const INTEGRITY_META = {
       'The hash chain is consistent, but the signed checkpoint does not yet cover the latest events.',
   },
   CHAIN_VALID_CHECKPOINT_MISSING: {
-    label: 'Checkpoint missing',
+    label: 'Verification Unavailable',
     tone: 'bg-amber-50 text-amber-900 ring-amber-200',
     description:
       'The hash chain is consistent, but no usable signed checkpoint is configured or available.',
   },
   INVALID: {
-    label: 'Integrity failure',
+    label: 'Verification Failed',
     tone: 'bg-red-50 text-red-800 ring-red-200',
     description: 'The audit chain or checkpoint failed verification. Investigate immediately.',
   },
