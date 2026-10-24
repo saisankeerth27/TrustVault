@@ -53,6 +53,40 @@ class LoginRequest(BaseModel):
         return str(value).strip().lower()
 
 
+class PasswordRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+
+class PasswordRecoveryVerifyRequest(PasswordRecoveryRequest):
+    token: str
+
+    @field_validator("token")
+    @classmethod
+    def validate_recovery_token(cls, value: str) -> str:
+        if len(value) != 6 or not value.isascii() or not value.isdigit():
+            raise ValueError("Enter the six-digit verification code.")
+        return value
+
+
+class PasswordRecoveryUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: SecretStr
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: SecretStr) -> SecretStr:
+        validate_password_strength(value.get_secret_value())
+        return value
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

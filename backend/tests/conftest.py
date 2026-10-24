@@ -6,6 +6,8 @@ from uuid import uuid4
 import embedded_postgres
 import pytest
 from alembic import command
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -13,13 +15,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
+from app.core.security import TokenValidationError, decode_access_token
 from app.core.rate_limit import (
     audit_integrity_rate_limiter,
     auth_rate_limiter,
     document_write_rate_limiter,
 )
+from app.api.deps import bearer_scheme, get_supabase_identity
 from app.db.session import get_db
 from app.main import app
+from app.models.user import User
+from app.services.auth import session_is_active
 from tests.db_helpers import alembic_config
 
 TEST_JWT_SECRET = "test-jwt-secret-for-trustvault-phase-three-0123456789"
@@ -28,6 +34,7 @@ TEST_JWT_SECRET = "test-jwt-secret-for-trustvault-phase-three-0123456789"
 @pytest.fixture(autouse=True)
 def auth_test_settings(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setenv("JWT_SECRET", TEST_JWT_SECRET)
+    monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("BCRYPT_ROUNDS", "4")
     monkeypatch.setenv("AUTH_RATE_LIMIT_ATTEMPTS", "10")
     monkeypatch.setenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "60")
@@ -106,9 +113,49 @@ def api_client(db_session: Session) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
         yield db_session
 
+    def override_supabase_identity(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+        session: Session = Depends(get_db),
+    ) -> dict[str, object]:
+        if credentials is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            claims = decode_access_token(credentials.credentials)
+        except TokenValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+        user = session.get(User, claims.user_id)
+        if (
+            user is None
+            or not session_is_active(
+                session,
+                user_id=user.id,
+                family_id=claims.session_id,
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session is no longer active.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user.supabase_auth_id = user.id
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "email_confirmed_at": "test",
+            "user_metadata": {"name": user.name},
+        }
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_supabase_identity] = override_supabase_identity
     try:
         with TestClient(app) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_supabase_identity, None)

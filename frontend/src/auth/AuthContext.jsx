@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { setAccessToken, subscribeToAccessToken } from '@/auth/tokenStore'
+import { isSupabaseConfigured, supabase } from '@/auth/supabase'
 import { AuthContext } from '@/auth/useAuth'
-import { refreshAccessToken } from '@/services/api'
 import {
   getCurrentUser,
   login as loginRequest,
@@ -10,23 +10,40 @@ import {
 } from '@/services/auth'
 
 export function AuthProvider({ children }) {
-  const [status, setStatus] = useState('loading')
+  const [status, setStatus] = useState(
+    isSupabaseConfigured ? 'loading' : 'unauthenticated',
+  )
   const [user, setUser] = useState(null)
-  const bootstrapStarted = useRef(false)
 
   useEffect(() => {
-    if (bootstrapStarted.current) {
-      return
+    if (!isSupabaseConfigured || !supabase) {
+      return undefined
     }
-    bootstrapStarted.current = true
+
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      setAccessToken(session?.access_token ?? null)
+      if (event === 'SIGNED_OUT') {
+        setUser(null)
+        setStatus('unauthenticated')
+      }
+    })
 
     async function bootstrap() {
       try {
-        await refreshAccessToken()
+        const { data: sessionData, error } = await supabase.auth.getSession()
+        if (error) throw error
+        if (!sessionData.session) {
+          setAccessToken(null)
+          setUser(null)
+          setStatus('unauthenticated')
+          return
+        }
+        setAccessToken(sessionData.session.access_token)
         const currentUser = await getCurrentUser()
         setUser(currentUser)
         setStatus('authenticated')
       } catch {
+        await supabase.auth.signOut()
         setAccessToken(null)
         setUser(null)
         setStatus('unauthenticated')
@@ -34,6 +51,7 @@ export function AuthProvider({ children }) {
     }
 
     void bootstrap()
+    return () => data.subscription.unsubscribe()
   }, [])
 
   useEffect(
@@ -48,19 +66,22 @@ export function AuthProvider({ children }) {
   )
 
   const login = useCallback(async (credentials) => {
-    const session = await loginRequest(credentials)
-    setAccessToken(session.access_token)
-    setUser(session.user)
+    const account = await loginRequest(credentials)
+    setUser(account)
     setStatus('authenticated')
-    return session.user
+    return account
   }, [])
 
   const register = useCallback(async (details) => {
-    const session = await registerRequest(details)
-    setAccessToken(session.access_token)
-    setUser(session.user)
+    const result = await registerRequest(details)
+    if (result.requiresEmailConfirmation) {
+      setUser(null)
+      setStatus('unauthenticated')
+      return result
+    }
+    setUser(result)
     setStatus('authenticated')
-    return session.user
+    return { user: result, requiresEmailConfirmation: false }
   }, [])
 
   const logout = useCallback(async () => {

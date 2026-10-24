@@ -1,8 +1,8 @@
 # TrustVault — Database Design
 
-This document describes the PostgreSQL schema implemented across Phases 2–7 plus the business-model correction and content-versioning work and used by the authentication, upload, document-management, permission, administrator, audit, preview, and version-history pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations through `0007_version_sequence.py`.
+This document describes the PostgreSQL schema used by the authentication, upload, document-management, permission, administrator, audit, preview, and version-history pipelines: tables, columns, constraints, indexes, design trade-offs, connection handling, and the Row-Level Security strategy. It is the reference for `backend/app/models/` and the Alembic migrations through `0009_supabase_auth_identity.py`.
 
-> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Authentication/roles, validated upload metadata writes, document list/update/soft-delete operations, owner-managed READ/EDIT grants, administrator account management, document content versions with safe owner rollback, persistent version numbering, and the append-only hash-chained audit writer exist. The repository migration head is `0007`; live Supabase migration state and drift were not re-verified in this local run.
+> **Status:** schema implemented and verified against an isolated PostgreSQL instance. Supabase Auth identities are linked separately from database-authoritative roles. Migration `0009` clears legacy local password hashes and revokes old refresh sessions. The repository migration head is `0009`; live Supabase migration state and drift were not re-verified in this local run.
 
 ## Entity Relationships
 
@@ -22,7 +22,8 @@ erDiagram
         uuid id PK
         varchar name
         varchar email UK
-        varchar password_hash
+        varchar password_hash "nullable legacy, cleared by 0009"
+        uuid supabase_auth_id UK
         varchar role
         varchar status
         timestamptz last_login_at
@@ -103,7 +104,8 @@ erDiagram
 | `id` | UUID | Primary key, default `gen_random_uuid()` |
 | `name` | VARCHAR(255) | Not null, `length(btrim(name)) > 0` |
 | `email` | VARCHAR(320) | Not null, unique (`uq_users_email`), `email = lower(btrim(email))` |
-| `password_hash` | VARCHAR(255) | Not null |
+| `password_hash` | VARCHAR(255) | Nullable legacy field; cleared by migration `0009` |
+| `supabase_auth_id` | UUID | Nullable, unique provider identity ID |
 | `role` | VARCHAR(32) | Not null, `IN ('ADMINISTRATOR', 'USER')` |
 | `status` | VARCHAR(16) | Not null, default `'ACTIVE'`, `IN ('ACTIVE', 'DISABLED')` |
 | `last_login_at` | TIMESTAMPTZ | Nullable; updated only after successful login |
@@ -114,7 +116,7 @@ erDiagram
 
 **Role migration and indexes.** Migration `0004` drops the legacy role constraint, maps `DOCUMENT_OWNER` and `VIEWER` to `USER`, preserves `ADMINISTRATOR`, and installs `ck_users_role` with only the two current roles. It adds `ix_users_role`, `ix_users_status`, and `ix_users_created_at` for administrator filtering/sorting. Downgrade maps every `USER` to `DOCUMENT_OWNER`, restores the legacy constraint, and drops `last_login_at` and the new indexes.
 
-**Why require `password_hash`?** The column is `NOT NULL`, and Phase 3 always stores a bcrypt hash. An account can never exist without a credential, even after a future bug or manual insert.
+**Credential ownership.** Supabase Auth stores credentials. `password_hash` is nullable for legacy compatibility and is cleared by migration `0009`; `supabase_auth_id` binds the provider identity to the TrustVault user. Roles and status remain local and are never derived from provider metadata.
 
 **Last login.** `last_login_at` is nullable for existing accounts and is updated only after successful credential validation. Failed logins do not advance it.
 
@@ -133,7 +135,7 @@ erDiagram
 | `revoked_at` | TIMESTAMPTZ | Nullable; set on rotation, logout, or reuse detection |
 | `replaced_by_id` | UUID | Nullable, self-FK `ON DELETE SET NULL` |
 
-**Hashed, rotating sessions.** The raw refresh token is returned only to the browser in an HttpOnly cookie. PostgreSQL stores `sha256:<hex>`; a database leak does not directly yield usable refresh tokens. Every refresh rotates the token, marks the old row revoked, and links it to the replacement. Reuse of an already-rotated token revokes every active token in the same family.
+**Legacy sessions.** Before migration `0009`, raw refresh tokens were returned only in an HttpOnly cookie while PostgreSQL stored `sha256:<hex>`. Migration `0009` revokes all unrevoked rows. The table remains for historical compatibility and test-only coverage; Supabase Auth manages current browser sessions.
 
 **Indexes:** `ix_refresh_tokens_user_id`, `ix_refresh_tokens_family_id`, `ix_refresh_tokens_expires_at`, a partial `ix_refresh_tokens_active_family` on `family_id` `WHERE revoked_at IS NULL`, and a unique constraint on `token_hash`.
 
@@ -281,6 +283,7 @@ grants separately before claiming the deployed instance is protected.
 - Business-model migration: `backend/alembic/versions/0004_user_roles_and_login_tracking.py` (revision `0004`) adds nullable `last_login_at`, migrates legacy roles, rebuilds `ck_users_role`, and adds role/status/created-at indexes.
 - Content-version migration: `backend/alembic/versions/0005_document_versions.py` (revision `0005`) creates `document_versions`, its checks, unique constraints, and indexes, then backfills every existing document as version 1/current.
 - `backend/alembic/versions/0008_enable_rls.py` (revision `0008`) enables default-deny RLS on all application tables and revokes direct table/sequence access from `PUBLIC` and Supabase PostgREST client roles when present.
+- `backend/alembic/versions/0009_supabase_auth_identity.py` (revision `0009`) adds the unique optional `users.supabase_auth_id`, clears retired local password hashes, and revokes active custom refresh sessions. Existing accounts are imported as Supabase Auth identities by the protected `backend/scripts/import_users_to_supabase_auth.py` script; TrustVault roles remain solely in `users.role`.
 - `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`; `0003.downgrade()` drops the chain index, check, and column; `0004.downgrade()` maps users to `DOCUMENT_OWNER`, restores the legacy role constraint, drops the new indexes, and removes `last_login_at`; `0005.downgrade()` drops the version indexes and table while retaining current-file metadata on `documents`.
 
 Common commands (run from `backend/` with `DATABASE_URL` set):
@@ -326,4 +329,4 @@ pytest
 
 ## Applying to Supabase
 
-The repository migration head is `0007`; live Supabase migration state and `alembic check` were not re-verified in this local run. To apply pending migrations, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.
+The repository migration head is `0009`; live Supabase migration state and `alembic check` were not re-verified in this local run. To apply pending migrations, set `DATABASE_URL` to the direct (port 5432) connection string in a trusted shell and run `alembic upgrade head` from `backend/`. The connection string is a secret: provide it through the environment, never in a committed file or command history where it could leak.

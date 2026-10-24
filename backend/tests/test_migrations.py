@@ -1,4 +1,5 @@
 from alembic import command
+import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
 
@@ -92,7 +93,7 @@ def test_0004_migrates_legacy_roles_explicitly(migration_database_url: str) -> N
     assert downgraded["legacy-viewer@example.com"] == "DOCUMENT_OWNER"
     assert downgraded["legacy-admin@example.com"] == "ADMINISTRATOR"
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0008")
 
 
 def test_0005_backfills_existing_documents_and_downgrades_cleanly(
@@ -165,7 +166,7 @@ def test_0005_backfills_existing_documents_and_downgrades_cleanly(
     finally:
         engine.dispose()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0008")
 
 
 def test_0007_backfills_next_version_number(
@@ -222,7 +223,7 @@ def test_0007_backfills_next_version_number(
     finally:
         engine.dispose()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0007")
 
     engine = create_engine(migration_database_url, poolclass=NullPool)
     try:
@@ -238,6 +239,58 @@ def test_0007_backfills_next_version_number(
         engine.dispose()
 
     assert next_version_number == 4
+    command.upgrade(config, "0008")
+
+
+def test_0009_links_supabase_identity_and_removes_legacy_password_hashes(
+    migration_database_url: str,
+) -> None:
+    config = alembic_config(migration_database_url)
+    command.upgrade(config, "0008")
+
+    engine = create_engine(migration_database_url, poolclass=NullPool)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(name, email, password_hash, role, status) "
+                    "VALUES ('Supabase User', 'supabase-link@example.com', "
+                    "'legacy-bcrypt-hash', 'USER', 'ACTIVE')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "0009")
+
+    engine = create_engine(migration_database_url, poolclass=NullPool)
+    try:
+        with engine.connect() as connection:
+            password_hash = connection.execute(
+                text(
+                    "SELECT password_hash FROM users "
+                    "WHERE email = 'supabase-link@example.com'"
+                )
+            ).scalar_one()
+            columns = {
+                column["name"]: column
+                for column in inspect(engine).get_columns("users")
+            }
+        unique_constraints = {
+            constraint["name"]
+            for constraint in inspect(engine).get_unique_constraints("users")
+        }
+    finally:
+        engine.dispose()
+
+    assert password_hash is None
+    assert columns["password_hash"]["nullable"] is True
+    assert columns["supabase_auth_id"]["nullable"] is True
+    assert "uq_users_supabase_auth_id" in unique_constraints
+
+    with pytest.raises(RuntimeError, match="Migration 0009 is irreversible"):
+        command.downgrade(config, "0008")
 
 
 def test_migration_upgrade_check_and_downgrade(migration_database_url: str) -> None:
@@ -276,16 +329,8 @@ def test_migration_upgrade_check_and_downgrade(migration_database_url: str) -> N
     # Fails if the migration and SQLAlchemy metadata have drifted.
     command.check(config)
 
-    command.downgrade(config, "base")
-
-    engine = create_engine(migration_database_url, poolclass=NullPool)
-    try:
-        remaining_tables = set(inspect(engine).get_table_names())
-        assert CORE_TABLES.isdisjoint(remaining_tables)
-    finally:
-        engine.dispose()
-
-    command.upgrade(config, "head")
+    with pytest.raises(RuntimeError, match="Migration 0009 is irreversible"):
+        command.downgrade(config, "base")
 
     engine = create_engine(migration_database_url, poolclass=NullPool)
     try:

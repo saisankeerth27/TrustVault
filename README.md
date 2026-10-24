@@ -2,8 +2,8 @@
 
 TrustVault is a secure, multi-tenant document vault that lets organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
-> **Status: Phase 11 — History Pagination, Safe Version Rollback, and Stale-Editor Protection Implemented.**
-> All 269 backend tests and 23 frontend tests pass with Vite production build verified. The implementation adds:
+> **Status:** the document and version-history features below were implemented previously. A Supabase Auth migration and six-digit recovery flow are currently in source but have **not yet been fully validated or deployed**. Current validation is listed in [Testing and Checks](#testing-and-checks).
+> The existing implementation includes:
 > - **Secure PDF Preview**: Client-side rendering via Mozilla PDF.js (`pdfjs-dist`) with Vite web worker bundling. Documents are streamed through authenticated FastAPI endpoints with `Cache-Control: private, no-store` without exposing private object URLs or service secrets.
 > - **In-Browser PDF Editing**: Authorized EDIT recipients can annotate PDFs with sticky text notes, typewriter free text, area highlights, and typed signatures. Annotations are embedded directly into the PDF binary via `pdf-lib` and saved as a new version with optimistic concurrency (`expected_version_number`).
 > - **Owner-Only Version Deletion and Safe Rollback**: Owners can delete any version while at least one remains (`DELETE /api/v1/documents/{id}/versions/{version_number}`). Deleting the current version rolls the document back to the highest remaining version, updates the active storage pointer, cleans up private storage, and records rollback audit details; deleting the last version returns HTTP 400. A persistent version sequence prevents deleted numbers from being reused.
@@ -28,7 +28,7 @@ Provide a document management system where authorization is guaranteed by the ba
 | Backend | Python, FastAPI |
 | Database | Supabase PostgreSQL |
 | ORM / migrations | SQLAlchemy 2.x (psycopg 3), Alembic |
-| Authentication | bcrypt, PyJWT (HS256), rotating refresh tokens |
+| Authentication | Supabase Auth, FastAPI identity binding, database-authoritative roles |
 | Object storage | Supabase Storage private bucket (`httpx`) |
 | Frontend hosting | Vercel |
 | Backend hosting | Render |
@@ -42,12 +42,8 @@ TrustVault/
 │   ├── alembic/
 │   │   ├── versions/
 │   │   │   ├── 0001_initial_schema.py
-│   │   │   ├── 0002_add_refresh_tokens.py
-│   │   │   ├── 0003_add_audit_chain_index.py
-│   │   │   ├── 0004_user_roles_and_login_tracking.py
-│   │   │   └── 0005_document_versions.py
-    0006_audit_hash_schema.py
-    0007_version_sequence.py
+│   │   │   ├── 0002–0008_*.py
+│   │   │   └── 0009_supabase_auth_identity.py
 │   │   ├── env.py
 │   │   └── script.py.mako
 │   ├── app/
@@ -113,7 +109,7 @@ python -m pip install -r requirements-dev.txt
 Copy-Item .env.example .env
 ```
 
-Set `DATABASE_URL` to your Supabase connection string and generate a real `JWT_SECRET`. The direct database host (port 5432) is IPv6-only on some networks; if it is unreachable, use the **session pooler** on port 5432 with username `postgres.YOUR_PROJECT_REF`:
+Set `DATABASE_URL` to your Supabase connection string. The direct database host (port 5432) is IPv6-only on some networks; if it is unreachable, use the **session pooler** on port 5432 with username `postgres.YOUR_PROJECT_REF`:
 
 ```env
 DATABASE_URL=postgresql://postgres.YOUR_PROJECT_REF:YOUR_PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres
@@ -124,12 +120,14 @@ DATABASE_URL=postgresql://postgres.YOUR_PROJECT_REF:YOUR_PASSWORD@aws-0-REGION.p
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Use the generated value for `JWT_SECRET` in `backend/.env`. Configure `DATABASE_URL` and a private Supabase Storage bucket in `backend/.env`:
+Configure `DATABASE_URL`, Supabase Auth, and a private Storage bucket in `backend/.env`:
 
 ```env
 SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
 SUPABASE_STORAGE_BUCKET=trustvault-documents
 SUPABASE_SERVICE_ROLE_KEY=your-server-side-secret-key
+PASSWORD_RECOVERY_REDIRECT_URL=http://localhost:5173/recover-password
 MAX_UPLOAD_SIZE_BYTES=10485760
 ALLOWED_UPLOAD_EXTENSIONS=pdf,txt,docx,png,jpg,jpeg
 ```
@@ -176,6 +174,28 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 The health endpoint reports **process health only**. It does not check the database or object storage; use `python -m scripts.check_storage` for a server-side Supabase Storage connectivity and private-bucket check.
 
+#### Supabase Auth setup and account cutover
+
+Configure Supabase before enabling the new authentication code:
+
+1. In **Authentication → Providers → Email**, enable email/password sign-in and set your email-confirmation policy.
+2. In **Authentication → Email Templates → Reset Password**, use the six-digit `{{ .Token }}` template. Do not put the OTP in a URL or log it.
+3. In **Project Settings → Authentication → SMTP Settings**, configure a trusted SMTP provider. Keep SMTP credentials in the protected Supabase dashboard only; never put them in source or `VITE_*` variables.
+4. In **Authentication → URL Configuration**, allow the exact frontend `/login` and `/recover-password` redirect URLs for local and deployed environments.
+5. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the matching `PASSWORD_RECOVERY_REDIRECT_URL` on the backend. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend to the same project. Keep the service-role key server-side.
+6. Back up the database and schedule a maintenance window. Stop the old backend before applying migration `0009`: it clears legacy password hashes and revokes old refresh sessions, and it cannot be rolled back to restore credentials.
+7. With the new backend code and migration available, run `alembic upgrade head`, then import existing users:
+
+   ```powershell
+   python -m scripts.import_users_to_supabase_auth
+   ```
+
+   The import creates confirmed, passwordless provider identities. Users must use password recovery to set their Supabase Auth password. Resolve any import failure before enabling sign-in.
+8. Provision an initial administrator with `python -m scripts.create_user --email admin@example.com --name "Admin User" --role ADMINISTRATOR`. It creates both the Supabase Auth identity and the TrustVault database row; never grant roles through Supabase user metadata.
+9. Enable the new frontend/backend only after migration, import, provider settings, exact CORS origin, HTTPS cookie settings, and a tested administrator identity are ready.
+
+Recovery request responses intentionally do not reveal whether an email is registered. A successful response means Supabase accepted the request, not that SMTP delivered it. Live email delivery and production browser-cookie behavior still require verification.
+
 ### 3. Provision an account
 
 Public registration creates a normal **User** account. Create administrator accounts explicitly from `backend/`:
@@ -195,14 +215,14 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-The Vite development server is available at <http://localhost:5173>. `VITE_API_BASE_URL` must point at the running FastAPI backend (default `http://localhost:8000`). The browser sends the HttpOnly refresh cookie with credentialed API requests.
+The Vite development server is available at <http://localhost:5173>. `VITE_API_BASE_URL` must point at the running FastAPI backend (default `http://localhost:8000`). Supabase Auth maintains its session through the SDK; the TrustVault access token is kept in memory. Only the short-lived password-recovery token is proxied in a narrowly scoped HttpOnly cookie.
 
 ### Frontend routes
 
 | Route | Purpose | Access |
 |-------|---------|--------|
 | `/login` | Login form and session bootstrap | Public |
-| `/register` | User account registration with validation and automatic sign-in | Public |
+| `/register` | Supabase Auth user registration; may require email confirmation | Public |
 | `/dashboard` | Live document, owned, and shared counts with recent permitted documents | Any signed-in user |
 | `/documents` | Searchable library with name/category/date filters for users and owner filtering for administrator oversight | Any signed-in user; includes owned and directly shared documents |
 | `/upload` | Dedicated validated upload page with progress feedback | Any signed-in active user |
@@ -218,18 +238,16 @@ Protected routes redirect unauthenticated visitors to `/login`. An authenticated
 
 ## Authentication and Authorization
 
-Phase 3 implements:
+The current source uses Supabase Auth for registration, password login, session refresh, and logout. FastAPI verifies provider access tokens with Supabase Auth and binds the verified provider UUID and email to the TrustVault user record. TrustVault's database remains the sole authority for account status, administrator role, and document permissions; Supabase user metadata and token role claims never grant privileges.
 
-- **Access tokens:** HS256 JWTs, 15-minute default lifetime, with issuer/audience validation and `sub`, `role`, `sid`, `type`, `jti`, `iat`, `nbf`, and `exp` claims.
-- **Refresh tokens:** random opaque values stored only as SHA-256 hashes in `refresh_tokens`. Rotation preserves a family identifier; reuse of a rotated token revokes the entire family.
-- **Refresh cookie:** `trustvault_refresh`, `HttpOnly`, scoped to `/api/v1/auth`, with `SameSite`/`Secure` controlled by environment settings. The access token is kept in frontend memory only.
-- **Active-session checks:** every protected request verifies the token signature, issuer/audience, account status, and an active refresh-token family. Logout, account disablement, and reuse detection therefore invalidate existing access tokens immediately.
-- **Passwords:** bcrypt with a configurable work factor (default 12), a 12-character minimum, a 72-byte maximum, and generic login errors with dummy-hash timing work for unknown accounts.
-- **RBAC:** `ADMINISTRATOR` and `USER`; document-level `OWNER`/`READ`/`EDIT` capabilities are contextual, and authorization reads the current database role rather than trusting a token claim.
-- **CSRF mitigation:** Origin allow-list checks on auth POSTs, no wildcard CORS with credentials, and cookie scoping. This is an origin-based control, not a per-session CSRF token.
-- **Rate limiting:** process-local sliding window, default 10 attempts per 60 seconds, keyed by client IP plus normalized email for login and by IP for registration. Multi-instance production deployments need a shared limiter.
+- **Password policy:** registration and recovery require at least 12 characters and at most 72 UTF-8 bytes. Supabase Auth stores and verifies credentials.
+- **Verified identities:** protected requests require a provider-verified email, a matching `supabase_auth_id` and normalized email, and an active TrustVault account.
+- **Recovery:** the backend sends generic six-digit OTP requests, rate-limits requests and verification, verifies with `type: recovery`, and stores the resulting access token only in a 10-minute HttpOnly cookie scoped to the password-update endpoint.
+- **CSRF and cookies:** recovery POSTs enforce exact configured Origin checks. Production requires HTTPS, `AUTH_COOKIE_SECURE=true`, and a recovery redirect matching an allow-listed CORS origin. Cross-site deployments use `AUTH_COOKIE_SAMESITE=none`.
+- **Rate limiting:** recovery uses process-local per-email and per-IP limits; the general auth limiter is also process-local. Multi-instance deployments need a shared limiter before relying on these as global controls.
+- **Audit:** provider-accepted requests, verification failures/successes, password changes, and update failures use dedicated audit actions. OTPs and passwords are never written to event details.
 
-Public registration always creates a `USER`. Use the CLI for `ADMINISTRATOR` accounts. Disabling an account or changing its role revokes its active refresh sessions immediately; successful logins record `last_login_at`.
+Migration `0009` is an irreversible credential cutover: it clears legacy local password hashes and revokes old refresh sessions. Existing accounts need a provider identity import and must set a provider password through recovery. Do not apply it without a database backup, a maintenance/deployment plan, and tested Supabase Auth configuration.
 
 ## Document Management, Permissions, and Downloads
 
@@ -346,7 +364,7 @@ Storage behavior is covered by a mocked adapter, and a **live private-bucket con
 
 ## Database
 
-The schema has six tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, `document_versions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Migration `0003` adds the audit chain sequence; `0004` adds `users.last_login_at`, migrates legacy roles, and adds role/status index support; `0005` adds content versions and backfills existing documents as version 1; `0006` versions the audit hash schema; `0007` adds `documents.next_version_number` and backfills it from the highest retained version. Highlighted decisions:
+The schema has six tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, `document_versions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Migration `0003` adds the audit chain sequence; `0004` adds `users.last_login_at`, migrates legacy roles, and adds role/status index support; `0005` adds content versions and backfills existing documents as version 1; `0006` versions the audit hash schema; `0007` adds `documents.next_version_number`; `0009` links Supabase Auth identities and clears obsolete local password hashes. Highlighted decisions:
 
 - Roles and statuses are constrained strings; no native PostgreSQL enums. The current role constraint allows only `ADMINISTRATOR` and `USER`.
 - Emails are stored lowercased and uniquely constrained.
@@ -385,21 +403,18 @@ Templates are committed; real values are not.
 | `DATABASE_URL` | PostgreSQL/Supabase connection string; direct or session pooler (5432) for migrations, transaction pooler (6543) for runtime | Yes for database work |
 | `DB_POOL_SIZE` | SQLAlchemy pool size | No (default `5`) |
 | `DB_MAX_OVERFLOW` | SQLAlchemy overflow allowance | No (default `10`) |
-| `JWT_SECRET` | HS256 signing secret; production requires at least 32 characters | Yes |
-| `JWT_ALGORITHM` | JWT algorithm; only `HS256` is accepted | No (default `HS256`) |
-| `JWT_ISSUER` / `JWT_AUDIENCE` | JWT issuer/audience validation values | No (defaults provided) |
-| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access-token lifetime | No (default `15`) |
-| `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | Refresh-token lifetime | No (default `7`) |
-| `BCRYPT_ROUNDS` | bcrypt cost factor (4–16; production default `12`) | No (default `12`) |
-| `AUTH_COOKIE_SECURE` | Require HTTPS for the refresh cookie | No (default `false`; must be `true` in production) |
+| `JWT_*` / `BCRYPT_ROUNDS` | Legacy custom-auth settings; retained only for test-only route coverage | No (not used for production auth) |
+| `AUTH_COOKIE_SECURE` | Require HTTPS for the recovery cookie | No (default `false`; must be `true` in production) |
 | `AUTH_COOKIE_SAMESITE` | `lax`, `strict`, or `none` (`none` requires Secure) | No (default `lax`) |
 | `AUTH_RATE_LIMIT_ATTEMPTS` | Attempts per sliding window | No (default `10`) |
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Sliding-window length | No (default `60`) |
 | `AUDIT_CHECKPOINT_SIGNING_KEY` | HMAC key for signed audit checkpoints; at least 32 characters, set with the path | No (both checkpoint settings optional) |
 | `AUDIT_CHECKPOINT_PATH` | Absolute path for the signed checkpoint file; configure both or neither | No (both checkpoint settings optional) |
-| `SUPABASE_URL` | HTTPS Supabase project URL without a path | Yes for uploads |
+| `SUPABASE_URL` | HTTPS Supabase project URL without a path | Yes for Auth and uploads |
+| `SUPABASE_ANON_KEY` | Public Supabase Auth client key used server-side for verified Auth API calls | Yes for authentication |
 | `SUPABASE_STORAGE_BUCKET` | Private Supabase Storage bucket name | Yes for uploads |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-side secret or legacy service-role key | Yes for uploads |
+| `PASSWORD_RECOVERY_REDIRECT_URL` | Allow-listed callback URL used by password recovery | Yes for recovery |
 | `MAX_UPLOAD_SIZE_BYTES` | Upload limit, 1–104,857,600 bytes | No (default `10485760`) |
 | `ALLOWED_UPLOAD_EXTENSIONS` | Comma-separated extension allow-list | No (default `pdf,txt,docx,png,jpg,jpeg`) |
 
@@ -410,8 +425,26 @@ Templates are committed; real values are not.
 | Variable | Purpose |
 |----------|---------|
 | `VITE_API_BASE_URL` | Base URL for the FastAPI backend |
+| `VITE_SUPABASE_URL` | Public Supabase project URL for Supabase Auth |
+| `VITE_SUPABASE_ANON_KEY` | Public Supabase publishable/anon key; never use the service-role key |
 
 Only non-secret configuration belongs in `VITE_*` variables, because Vite embeds them in the browser bundle. Never place database passwords, service-role keys, storage secrets, or JWT secrets in frontend environment variables.
+
+## Supabase Auth and Password Recovery
+
+The source migration uses Supabase Auth for passwords and browser sessions; TrustVault's database remains authoritative for account roles, disabled status, ownership, and document permissions. The cutover is not complete until deployment configuration, migration `0009`, SMTP/template setup, and the existing-user import are complete. After an approved maintenance window and database backup, apply `alembic upgrade head`, then run `python -m scripts.import_users_to_supabase_auth` from `backend/` using the protected `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`. The import sends existing account emails and display names to Supabase Auth, does not send password hashes or roles, and prints aggregate counts only. It creates confirmed users without passwords; existing users must set a password using recovery. Migration `0009` clears local password hashes and revokes legacy refresh sessions, and downgrade cannot restore them.
+
+Configure these public frontend values in Vercel or `frontend/.env`: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL`. Configure `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `PASSWORD_RECOVERY_REDIRECT_URL` on the backend. The service-role key stays only in protected backend configuration and is needed for the one-off identity import as well as the existing Storage integration. Never place SMTP credentials or service-role keys in frontend environment variables.
+
+In Supabase Dashboard:
+
+1. Under **Project Settings → Authentication → SMTP Settings**, configure and verify the SMTP provider, sender, TLS, and rate limits. Rotate any SMTP App Password previously exposed outside Supabase; do not enter it in this repository.
+2. Under **Authentication → Email Templates → Reset Password**, configure the message to contain the six-digit OTP using `{{ .Token }}`; do not rely on a link-only reset template.
+3. Verify the email OTP length is six digits and the provider's expiry/rate limits are appropriate.
+4. Under **Authentication → URL Configuration**, add the deployed `/recover-password` URL and `/login` confirmation redirect to Redirect URLs. Set `PASSWORD_RECOVERY_REDIRECT_URL` to the exact allowed recovery URL and `CORS_ALLOWED_ORIGINS` to the frontend origin.
+5. Ensure the frontend and backend reference the same Supabase project and that the public key is the anon/publishable key, not a service-role key.
+
+The recovery audit records provider acceptance, not confirmed email delivery. Invalid OTP failures remain unattributed; verified OTP and password-change events are linked to the TrustVault account only after the identity is verified. The repository's automated tests do not verify access to the Supabase dashboard, SMTP delivery, or the live OTP template.
 
 ## Testing and Checks
 
@@ -423,12 +456,12 @@ cd backend
 pytest
 ```
 
-The suite currently has **270 tests**, including **46 threat-mapped security cases** in `backend/tests/test_security.py`, the business-model acceptance suite in `backend/tests/test_business_model.py`, the document-content/version suite in `backend/tests/test_document_versions.py`, and focused request-limit tests in `backend/tests/test_request_limits.py`. It verifies:
+The suite has **287 tests**, including threat-mapped security cases in `backend/tests/test_security.py`, the business-model acceptance suite in `backend/tests/test_business_model.py`, the document-content/version suite in `backend/tests/test_document_versions.py`, and focused request-limit tests in `backend/tests/test_request_limits.py`. The current local run passed all **287 tests**. It verifies:
 
 - Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
 - Database URL normalization and Supabase pooler/SSL detection.
 - Models, tables, columns, indexes, and constraints for all six tables, including immutable version history and one-current/version uniqueness constraints.
-- Migrations `0001`–`0007`: `upgrade head`, `alembic check` for drift, legacy-role data migration, version backfill/downgrade, persistent version-sequence backfill, `downgrade base`, and re-`upgrade`.
+- Migrations `0001`–`0009`: schema upgrades/drift checks, legacy-role data migration, version backfills, Supabase identity linkage, legacy credential clearing, and refusal to downgrade the irreversible auth cutover.
 - Registration, login, refresh rotation, reuse detection, logout, and current-user behavior.
 - Expired, tampered, wrong-issuer/audience/type, disabled-account, and revoked-session rejection.
 - Role authorization helpers and fail-closed unknown-role handling.
@@ -461,7 +494,7 @@ Coverage is generated separately from test success:
 pytest --cov=app --cov-report=term-missing
 ```
 
-The verified local full-suite run passed **270 tests**. Coverage is a diagnostic, not proof of security.
+The verified local full-suite run passed **287 tests**. Coverage is a diagnostic, not proof of security.
 
 The GitHub Actions workflow `.github/workflows/backend-tests.yml` runs the full backend suite with coverage on pushes and pull requests that change `backend/**`. Remote CI execution is not verified until the workflow runs on GitHub.
 
@@ -474,15 +507,16 @@ npm test
 npm run build
 ```
 
-All three commands pass, except `npm run lint` when the machine's Application Control policy blocks oxlint's native binding; in that case the build and Vitest suite are the authoritative checks. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The **54 automated tests across 16 files** cover safe API error extraction, role-aware navigation, dashboard API-backed counts and failure handling, upload access for normal users, administrator account oversight/actions, structured audit metadata, READ-only previews/history, plain-text version edits, paginated DOCX preview (single page, 12 pages, corrupt/retry), DOCX editing and conflict handling, image editing with undo/redo/text/preview/save, PDF 90% initial zoom with manual zoom and page navigation, replacement uploads, version/activity pagination, current-version rollback, stale-editor protection, and that READ-only recipients never see DOCX or image edit actions. A browser-based walkthrough with live accounts and deployment remain unverified.
+`npm run lint`, `npm test`, and `npm run build` pass; lint reports existing warnings and the build reports large-chunk advisories. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The **61 automated tests across 19 files** cover safe API errors, role-aware UI, the Supabase auth service, password recovery, document previews/editing, and document history behavior. A browser-based walkthrough with live accounts and deployment remain unverified.
 
 ## API Baseline
 
 - **Health:** `GET /health` → `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`
-- **Register:** `POST /api/v1/auth/register` → creates a User and returns an access token
-- **Login:** `POST /api/v1/auth/login` → returns an access token and sets the refresh cookie
-- **Refresh:** `POST /api/v1/auth/refresh` → rotates the refresh session and returns a new access token
-- **Logout:** `POST /api/v1/auth/logout` → revokes the current refresh session and returns 204
+- **Register/login/logout/refresh:** handled by Supabase Auth in the frontend SDK; legacy backend endpoints return 410 outside tests.
+- **Identity sync:** `POST /api/v1/auth/session` → validates the Supabase identity and returns the matching TrustVault user/role.
+- **Recovery request:** `POST /api/v1/auth/recovery/request` → generic six-digit OTP request response.
+- **Recovery verification:** `POST /api/v1/auth/recovery/verify` → verifies an OTP with recovery type and sets the scoped HttpOnly recovery cookie.
+- **Password update:** `POST /api/v1/auth/recovery/update-password` → changes the provider password using the verified recovery session.
 - **Current user:** `GET /api/v1/auth/me` → returns the authenticated user
 - **Upload:** `POST /api/v1/documents/upload` → validates and stores a document owned by the authenticated user and returns safe metadata (no storage key)
 - **List/search:** `GET /api/v1/documents` → scoped, filtered, sorted, paginated metadata (`items`, `total`, `page`, `page_size`, `pages`, `has_next`, `has_previous`)
@@ -514,7 +548,7 @@ There are no audit mutation endpoints.
 
 ## Deployment Preparation
 
-No deployment has been performed or verified. The repository migration head is `0007`; the live Supabase migration state and drift were not re-verified during this local run.
+No deployment has been performed or verified. The repository migration head is `0009`; the live Supabase migration state and drift were not re-verified during this local run.
 
 ### Vercel (frontend)
 
@@ -522,7 +556,7 @@ No deployment has been performed or verified. The repository migration head is `
 - Build command: `npm run build`
 - Output directory: `dist`
 - SPA rewrite: configured in `frontend/vercel.json` so deep links serve `index.html`
-- Environment: set `VITE_API_BASE_URL` to the Render backend URL
+- Environment: set `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, and `VITE_SUPABASE_ANON_KEY`
 
 ### Render (backend)
 
@@ -531,7 +565,7 @@ No deployment has been performed or verified. The repository migration head is `
 - Build command: `pip install -r requirements.txt`
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - Health check path: `/health`
-- Environment: `APP_ENV=production`, `LOG_LEVEL=INFO`, `DATABASE_URL`, `JWT_SECRET`, a real `CORS_ALLOWED_ORIGINS`, the auth cookie/rate-limit settings, the Supabase Storage/upload settings, and optional `AUDIT_CHECKPOINT_SIGNING_KEY`/`AUDIT_CHECKPOINT_PATH` in `render.yaml`. Render supplies `PORT`.
+- Environment: `APP_ENV=production`, `LOG_LEVEL=INFO`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `PASSWORD_RECOVERY_REDIRECT_URL`, a real `CORS_ALLOWED_ORIGINS`, the secure cookie/rate-limit settings, the Supabase Storage/upload settings, and optional `AUDIT_CHECKPOINT_SIGNING_KEY`/`AUDIT_CHECKPOINT_PATH` in `render.yaml`. Render supplies `PORT`.
 - The checkpoint path must be on persistent, access-controlled storage. A Render ephemeral filesystem is not suitable for durable checkpoint retention; use a persistent volume or external checkpoint store and run the CLI after deployment changes.
 - Storage variables are marked `sync: false` in `render.yaml`; set them in the Render dashboard as secrets. Keep the bucket private and grant only the operations the API needs (`PutObject`, `GetObject`, `HeadBucket`, `DeleteObject`; listing only if you use the connectivity check).
 - Migrations are **not** run automatically. Run `alembic upgrade head` from a trusted shell with the production `DATABASE_URL` before or after deploying schema changes.
@@ -544,7 +578,7 @@ Deployment requires access to the Vercel, Render, and Supabase accounts and has 
 
 - **Backend is authoritative.** Hiding a UI control is not authorization; every request is verified server-side.
 - **Deny by default.** Access requires explicit ownership, role, or permission grant.
-- **Defense in depth.** Application checks, Supabase RLS (planned), private storage, and append-only hash-chained audit events layer together.
+- **Defense in depth.** Application checks, default-deny Supabase RLS, private storage, and append-only hash-chained audit events layer together.
 - **Tamper evidence.** Audit records are append-only through the application, hash-chained, and compared with an HMAC-signed checkpoint. An independent immutable checkpoint store is still required to fully address a privileged same-host attacker.
 - **Secrets never touch source control.** Only `.env.example` templates with placeholders are committed.
 - **Fail closed.** Production authentication settings reject missing secrets, insecure cookies, and wildcard CORS.
@@ -565,12 +599,13 @@ See [THREATS.md](THREATS.md) for the full threat model.
 - Both editors depend on modern browser APIs (`contenteditable`, canvas, `File`, dynamic `import()`); older or restricted browsers may refuse to save and will show an error instead.
 - Upload-to-database consistency is compensating, not transactional: a failed metadata commit triggers best-effort object deletion, which could itself fail.
 - Soft deletion excludes metadata from normal reads but object cleanup occurs after commit; a cleanup failure can leave a private orphan object for later reconciliation.
-- RLS is not enabled; the backend uses a single privileged database role.
-- The repository migration head is `0007`; live Supabase migration state and `alembic check` were not re-verified, and no deployment has been verified.
+- Migration `0008` enables default-deny RLS, but it has not been applied to a deployed database; the backend uses a privileged database role.
+- Supabase Auth SMTP delivery and the recovery template have not been verified against the live project. Apply migration `0009` and run the protected account-import script before existing TrustVault users rely on password recovery.
+- The repository migration head is `0009`; live Supabase migration state and `alembic check` were not re-verified, and no deployment has been verified.
 - Version objects are immutable in normal application flows, but the backend has no object-lock or retention policy; a privileged storage operator could still alter or delete private content.
 - Authentication rate limiting is in-memory and per process; a multi-instance deployment needs a shared store.
 - There is no MFA, account-lockout policy, or idle-timeout mechanism.
-- Cross-site refresh cookies require Secure/SameSite=None and may be affected by browser third-party cookie policies; this is untested in production.
+- Cross-site recovery cookies require Secure/SameSite=None and may be affected by browser third-party cookie policies; this is untested in production.
 - Auth CSRF protection is origin-based; a per-session CSRF token is not implemented.
 - The backend health check is process-only.
 - No production CSP or HSTS configuration yet (planned for Phase 10).
@@ -582,7 +617,7 @@ See [THREATS.md](THREATS.md) for the full threat model.
 | 0 — Requirements and Repository Foundation | Complete |
 | 1 — Project Scaffold and Early Deployment | Partial — local scaffold complete; live deployment deferred to Phase 10 |
 | 2 — Database Schema and Migrations | Complete |
-| 3 — Authentication and Roles | Complete |
+| 3 — Supabase Authentication and Roles | In progress — source cutover implemented; deployment pending |
 | 4 — Private Storage and Validated Uploads | Complete |
 | 5 — Document Management and Search | Complete |
 | 6 — Document Permissions and Revocation | Complete |
@@ -591,7 +626,7 @@ See [THREATS.md](THREATS.md) for the full threat model.
 | 9 — Complete Frontend | Complete — awaiting review |
 | 9.1 — Business-Model Correction | Complete — committed as `77af2dc` |
 | 9.2 — Document Content, Previews, and Version History | Complete — pending review |
-| 10 — Deployment Hardening and End-to-End Verification | Not started |
+| 10 — Deployment Hardening and End-to-End Verification | In progress — provider setup and production verification pending |
 | 11 — Final Submission and Demo | Not started |
 
 ## Planning Documents

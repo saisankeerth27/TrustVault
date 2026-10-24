@@ -2,6 +2,8 @@
 
 This threat model documents the assets TrustVault protects, the trust boundaries it enforces, the actors who may attempt to compromise it, the attack scenarios it must resist, and the mitigations and residual risks associated with each.
 
+> **Current authentication status:** Supabase Auth is implemented in source but has not been deployed or verified against live SMTP/provider settings. TrustVault roles remain database-authoritative. Authenticated sessions are managed by Supabase; the SPA stores the SDK session in tab-scoped `sessionStorage`, and the recovery access token is held in a short-lived, scoped HttpOnly cookie. Migration `0009` irreversibly clears legacy password hashes and revokes old refresh tokens. Treat historical phase notes below as contemporaneous reports where they conflict with this current status.
+
 ---
 
 ## 1. Assets
@@ -11,8 +13,8 @@ This threat model documents the assets TrustVault protects, the trust boundaries
 | Document contents | Files stored in a private Supabase Storage bucket | Critical |
 | Document metadata | Names, owners, categories, timestamps | High |
 | Permission grants | Which users may read or edit which documents | High |
-| User credentials | Password hashes, refresh tokens | Critical |
-| JWT signing secret | Secret used to sign and verify access tokens | Critical |
+| User credentials and sessions | Credentials managed by Supabase Auth; browser session/access tokens | Critical |
+| Supabase project signing keys | Provider-managed signing keys used for Auth tokens | Critical |
 | Audit records | Tamper-evident history of all actions | High |
 | Audit checkpoint signing key | HMAC key used to sign the audit chain head | Critical |
 | Service credentials | Supabase service role key, Supabase Storage keys, database URL | Critical |
@@ -92,11 +94,11 @@ graph TB
 
 **Scenario:** A normal user attempts to act as a document owner or administrator by tampering with JWT claims, role fields in requests, or permission endpoints.
 
-**Mitigation:** Roles are stored server-side and derived from the authenticated identity, never trusted from client-supplied body or header fields. JWT signature validation prevents claim tampering. Permission-management endpoints require document ownership; administrator status does not grant sharing or content access. Admin account endpoints reject self role/status changes and protection of the last active administrator.
+**Mitigation:** FastAPI verifies the bearer token with Supabase Auth, then binds the verified provider UUID/email to the TrustVault user row. Roles are read from the database and never trusted from provider metadata or client-supplied fields. Permission-management endpoints require document ownership; administrator status does not grant sharing or content access. Admin account endpoints reject self role/status changes and protect the last active administrator.
 
 **Verification:** Tests attempt role manipulation via JWT tampering and request body injection and assert denial. Phase 7 tests confirm authorization denials append best-effort denial audit events.
 
-**Residual Risk:** Low, provided the signing secret remains confidential.
+**Residual Risk:** Low, provided provider credentials remain protected and the database role store is not compromised.
 
 ---
 
@@ -152,7 +154,7 @@ graph TB
 
 **Scenario:** An attacker or privileged insider modifies or deletes audit records to hide unauthorized activity.
 
-**Mitigation:** Audit writes are append-only at the application layer, with no UPDATE/DELETE endpoints. Events have a contiguous `chain_index`, previous-event hash, and canonical SHA-256 `event_hash`; verification detects modified, reordered, and removed events at or before the latest checkpoint. An HMAC-SHA256 signed checkpoint binds the chain head, and `scripts/audit_integrity.py` verifies or creates it. Checkpoint creation refuses to replace an invalid checkpoint or move backward to an older chain head. RLS is not enabled, so the database role is not restricted from direct modification.
+**Mitigation:** Audit writes are append-only at the application layer, with no UPDATE/DELETE endpoints. Events have a contiguous `chain_index`, previous-event hash, and canonical SHA-256 `event_hash`; verification detects modified, reordered, and removed events at or before the latest checkpoint. An HMAC-SHA256 signed checkpoint binds the chain head, and `scripts/audit_integrity.py` verifies or creates it. Checkpoint creation refuses to replace an invalid checkpoint or move backward to an older chain head. Migration `0008` enables RLS and revokes table/sequence access from `PUBLIC`, `anon`, and `authenticated`; the backend's privileged database connection remains within the application trust boundary.
 
 **Limitation and Residual Risk:** **A hash chain and same-host checkpoint do not fully protect against a privileged attacker.** An attacker with direct database access can rewrite records and subsequent hashes, and an attacker with host filesystem access can delete or replace the checkpoint. Events appended after the latest checkpoint and then deleted are not detectable by that checkpoint, so checkpoint cadence determines the exposure window. Detection depends on retaining a trusted checkpoint outside the attacker's control. TrustVault still needs independently controlled, scheduled checkpoint publication to an append-only external store before this risk is adequately mitigated.
 
@@ -176,7 +178,7 @@ Administrator diagnostic identifiers are intentionally confined to administrator
 
 ### 4.10 Exposed Credentials
 
-**Scenario:** Secrets (database URL, service role key, Supabase Storage keys, JWT secret) are committed, logged, or exposed in client bundles.
+**Scenario:** Secrets (database URL, service-role key, SMTP credentials, provider signing keys, or Auth sessions) are committed, logged, or exposed in client bundles.
 
 **Mitigation:** Secrets live only in environment variables. `.env` files are gitignored; `.env.example` contains placeholders only. Supabase Storage credentials are server-side settings returned by the backend configuration, never `VITE_*` values. Storage errors and logs omit credentials and keys. Secret scanning is required before each commit. Credentials are rotated if exposure is suspected.
 
@@ -188,11 +190,11 @@ Administrator diagnostic identifiers are intentionally confined to administrator
 
 ### 4.11 Weak RLS Policies
 
-**Scenario:** Misconfigured Row-Level Security policies allow cross-tenant reads or writes, or the service role is used from the client.
+**Scenario:** Misconfigured Row-Level Security policies allow cross-tenant reads or writes, or privileged service credentials are used from the client.
 
-**Mitigation:** RLS is defense-in-depth, not the primary control. The service role key is used only server-side. Policies are reviewed and tested. Application-level authorization is authoritative.
+**Mitigation:** Migration `0008` enables RLS without permissive policies (default deny) and revokes direct PostgREST table/sequence privileges for `PUBLIC`, `anon`, and `authenticated`. The backend uses a privileged database connection, so application-level authorization remains the primary control. Supabase service-role credentials remain server-side only.
 
-**Verification:** RLS is not enabled, so no database RLS policy tests exist. Phase 8 verifies that application-level authorization remains authoritative even when the database role can read all rows, and existing tests confirm the client never receives the service role key. This is a documented residual risk, not RLS coverage.
+**Verification:** Migration tests confirm RLS is enabled on application tables; the threat suite confirms application authorization and that the browser does not receive service-role credentials. Supabase dashboard role/grant state still requires deployment verification.
 
 **Residual Risk:** Low–Medium. RLS mistakes are caught by application-level checks, but policy drift must be reviewed.
 
@@ -200,13 +202,13 @@ Administrator diagnostic identifiers are intentionally confined to administrator
 
 ### 4.12 Session and Token Theft
 
-**Scenario:** An attacker steals an access or refresh token via XSS, insecure storage, or network interception.
+**Scenario:** An attacker steals a Supabase Auth session via XSS, insecure browser storage, or network interception.
 
-**Mitigation:** HTTPS in production. Phase 3 keeps the access token in memory and the refresh token in an HttpOnly, path-scoped cookie with configurable Secure/SameSite flags. Access tokens are short-lived; refresh tokens rotate and are stored only as SHA-256 hashes. Reuse detection revokes the session family, and logout/disablement invalidates access through per-request session checks. A strong CSP remains planned for Phase 10.
+**Mitigation:** HTTPS in production. The Supabase SDK stores its session in tab-scoped `sessionStorage`; this reduces persistence across browser restarts but remains JavaScript-accessible and does not prevent XSS token theft. FastAPI verifies each access token with Supabase Auth and checks active status and current database roles. Recovery access tokens are isolated in an HttpOnly cookie scoped only to password update, with a ten-minute lifetime. A strong CSP remains planned.
 
-**Verification:** Token expiry, refresh rotation, and reuse-detection tests; disabled-account and logout session invalidation tests across document and administrator audit endpoints. CSP header checks are not present because CSP remains planned for Phase 10.
+**Verification:** Automated tests cover provider token verification behavior, verified-email requirements, disabled-account denial, recovery OTP/type and cookie scoping, expiration clearing, rate limits, and safe audit details. Live provider revocation behavior, browser storage behavior, SMTP, and deployed cookie policy are unverified.
 
-**Residual Risk:** Medium. Stolen access tokens remain valid until expiry; short TTLs limit the window.
+**Residual Risk:** Medium. A stolen SDK session is JavaScript-readable until revoked or expired; use a restrictive CSP, review all DOM sinks, and verify provider session expiry/revocation settings.
 
 ---
 
@@ -214,7 +216,7 @@ Administrator diagnostic identifiers are intentionally confined to administrator
 
 **Scenario:** Automated attempts to guess passwords or replay leaked credentials.
 
-**Mitigation:** Phase 3 applies an in-memory sliding-window limit to login and registration (default 10 attempts per 60 seconds), uses bcrypt with a strong work factor, and returns generic errors to reduce user enumeration. Account lockout, shared multi-instance limiting, and MFA remain future work.
+**Mitigation:** Supabase Auth owns password verification and provider-side abuse limits. The recovery API also applies generic responses and process-local per-email/per-IP limits; multi-instance deployments need a shared limiter. Account lockout and MFA remain future work.
 
 **Verification:** Rate-limit tests; generic error message tests; timing considerations reviewed.
 

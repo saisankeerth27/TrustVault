@@ -59,6 +59,7 @@ export function RegisterPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState(null)
+  const [registrationMessage, setRegistrationMessage] = useState(null)
   const {
     register,
     handleSubmit,
@@ -100,11 +101,17 @@ export function RegisterPage() {
     }
 
     try {
-      await registerAccount({
+      const registration = await registerAccount({
         name: result.data.name,
         email: result.data.email.toLowerCase(),
         password: result.data.password,
       })
+      if (registration.requiresEmailConfirmation) {
+        setRegistrationMessage(
+          'Check your email to confirm your account, then sign in to continue.',
+        )
+        return
+      }
       navigate(destination, { replace: true })
     } catch (error) {
       setServerError(getApiErrorMessage(error))
@@ -192,6 +199,11 @@ export function RegisterPage() {
                 className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
               >
                 {serverError}
+              </div>
+            ) : null}
+            {registrationMessage ? (
+              <div role="status" className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
+                {registrationMessage}
               </div>
             ) : null}
 

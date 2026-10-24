@@ -151,6 +151,12 @@ export function LoginPage() {
             </p>
           </div>
 
+          {typeof location.state?.recoveryMessage === 'string' ? (
+            <div role="status" className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
+              {location.state.recoveryMessage}
+            </div>
+          ) : null}
+
           <form className="space-y-5" onSubmit={handleSubmit(onSubmit)} noValidate>
             {serverError ? (
               <div
@@ -203,6 +209,15 @@ export function LoginPage() {
                   {errors.password.message}
                 </p>
               ) : null}
+            </div>
+
+            <div className="-mt-2 text-right">
+              <Link
+                to="/recover-password"
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Forgot Password?
+              </Link>
             </div>
 
             <Button type="submit" className="w-full" size="lg" disabled={isSubmitting}>

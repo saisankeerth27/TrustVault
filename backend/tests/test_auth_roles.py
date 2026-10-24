@@ -3,15 +3,17 @@ from __future__ import annotations
 from collections.abc import Generator
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_roles
+from app.api.deps import bearer_scheme, get_supabase_identity, require_roles
+from app.core.security import TokenValidationError, decode_access_token
 from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.user import User
-from app.services.auth import create_account
+from app.services.auth import create_account, session_is_active
 from tests.auth_helpers import DEFAULT_PASSWORD, bearer, login, register, unique_email
 
 
@@ -58,7 +60,40 @@ def test_role_dependency_returns_403_for_insufficient_privileges(
     def override_get_db() -> Generator[Session, None, None]:
         yield db_session
 
+    def override_identity(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    ) -> dict[str, str]:
+        if credentials is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            claims = decode_access_token(credentials.credentials)
+        except TokenValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+        user = db_session.get(User, claims.user_id)
+        if user is None or not session_is_active(
+            db_session,
+            user_id=user.id,
+            family_id=claims.session_id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user.supabase_auth_id = user.id
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "email_confirmed_at": "test",
+        }
+
     admin_app.dependency_overrides[get_db] = override_get_db
+    admin_app.dependency_overrides[get_supabase_identity] = override_identity
 
     with TestClient(admin_app) as role_client:
         assert role_client.get("/admin-only").status_code == 401

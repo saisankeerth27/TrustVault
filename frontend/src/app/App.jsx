@@ -11,6 +11,7 @@ import { DocumentPermissionsPage } from '@/pages/DocumentPermissionsPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+import { PasswordRecoveryPage } from '@/pages/PasswordRecoveryPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { SharedDocumentsPage } from '@/pages/SharedDocumentsPage'
 import { UploadPage } from '@/pages/UploadPage'
@@ -22,6 +23,7 @@ export function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/recover-password" element={<PasswordRecoveryPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
               <Route index element={<Navigate to="/dashboard" replace />} />

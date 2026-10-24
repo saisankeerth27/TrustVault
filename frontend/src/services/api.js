@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getAccessToken, setAccessToken } from '@/auth/tokenStore'
+import { supabase } from '@/auth/supabase'
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? ''
 
@@ -7,15 +8,6 @@ export const apiBaseUrl = configuredBaseUrl.replace(/\/+$/, '')
 export const isApiConfigured = apiBaseUrl.length > 0
 
 export const apiClient = axios.create({
-  baseURL: apiBaseUrl || undefined,
-  timeout: 10_000,
-  withCredentials: true,
-  headers: {
-    Accept: 'application/json',
-  },
-})
-
-const refreshClient = axios.create({
   baseURL: apiBaseUrl || undefined,
   timeout: 10_000,
   withCredentials: true,
@@ -32,27 +24,24 @@ if (!isApiConfigured && import.meta.env.DEV && import.meta.env.MODE !== 'test') 
 
 let refreshPromise = null
 
-function withRefreshLock(task) {
-  if (typeof navigator !== 'undefined' && navigator.locks) {
-    return navigator.locks.request('trustvault-refresh', task)
-  }
-  return task()
-}
-
 export function refreshAccessToken() {
+  if (!supabase) {
+    return Promise.reject(new Error('Supabase Auth is not configured.'))
+  }
   if (!refreshPromise) {
-    refreshPromise = withRefreshLock(() =>
-      refreshClient.post('/api/v1/auth/refresh'),
-    )
-      .then(({ data }) => {
-        setAccessToken(data.access_token)
-        return data
+    refreshPromise = supabase.auth
+      .refreshSession()
+      .then(({ data, error }) => {
+        if (error || !data.session) {
+          throw error || new Error('The Supabase session has expired.')
+        }
+        setAccessToken(data.session.access_token)
+        return data.session
       })
       .finally(() => {
         refreshPromise = null
       })
   }
-
   return refreshPromise
 }
 

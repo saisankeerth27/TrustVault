@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import TokenValidationError, decode_access_token
 from app.db.session import get_db
 from app.models.enums import UserRole, UserStatus
 from app.models.user import User
-from app.services.auth import session_is_active
+from app.services.supabase_auth import SupabaseAuthError, get_user as get_supabase_user
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -25,28 +27,52 @@ def _unauthorized(message: str = "Not authenticated.") -> HTTPException:
     )
 
 
-def get_current_user(
+def get_supabase_identity(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    session: Session = Depends(get_db),
-) -> User:
+) -> dict[str, Any]:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise _unauthorized()
 
     try:
-        claims = decode_access_token(credentials.credentials)
-    except TokenValidationError as exc:
+        identity = get_supabase_user(credentials.credentials)
+    except SupabaseAuthError as exc:
+        if exc.status_code in (401, 403):
+            raise _unauthorized("Invalid or expired access token.") from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is temporarily unavailable.",
+        ) from exc
+
+    if (
+        not isinstance(identity.get("id"), str)
+        or not isinstance(identity.get("email"), str)
+        or not (identity.get("email_confirmed_at") or identity.get("email_verified"))
+    ):
+        raise _unauthorized("A verified email address is required.")
+    return identity
+
+
+def get_current_user(
+    identity: dict[str, Any] = Depends(get_supabase_identity),
+    session: Session = Depends(get_db),
+) -> User:
+    supabase_id = identity.get("id")
+    email = identity.get("email")
+    if not isinstance(supabase_id, str) or not isinstance(email, str):
+        raise _unauthorized("Invalid or expired access token.")
+    try:
+        provider_id = UUID(supabase_id)
+    except ValueError as exc:
         raise _unauthorized("Invalid or expired access token.") from exc
 
-    user = session.get(User, claims.user_id)
+    user = session.scalar(
+        select(User).where(
+            User.supabase_auth_id == provider_id,
+            User.email == email.strip().lower(),
+        )
+    )
     if user is None or user.status != UserStatus.ACTIVE.value:
         raise _unauthorized("Invalid or expired access token.")
-
-    if not session_is_active(
-        session,
-        user_id=user.id,
-        family_id=claims.session_id,
-    ):
-        raise _unauthorized("Session is no longer active.")
 
     return user
 

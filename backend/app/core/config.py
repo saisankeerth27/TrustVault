@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
 
     supabase_url: str | None = None
+    supabase_anon_key: SecretStr | None = None
     supabase_storage_bucket: str | None = None
     supabase_service_role_key: SecretStr | None = None
     max_upload_size_bytes: int = 10 * 1024 * 1024
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     bcrypt_rounds: int = 12
     auth_cookie_secure: bool = False
     auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    password_recovery_redirect_url: str = "http://localhost:5173/recover-password"
     auth_rate_limit_attempts: int = 10
     auth_rate_limit_window_seconds: int = 60
 
@@ -71,6 +73,14 @@ class Settings(BaseSettings):
     @field_validator("supabase_service_role_key", mode="before")
     @classmethod
     def empty_storage_secret_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("supabase_anon_key", mode="before")
+    @classmethod
+    def empty_supabase_anon_key_to_none(cls, value: object) -> object:
         if isinstance(value, str):
             stripped = value.strip()
             return stripped or None
@@ -181,6 +191,19 @@ class Settings(BaseSettings):
         if "*" in origins and self.app_env != "development":
             raise ValueError("Wildcard CORS origins are only allowed in development.")
 
+        recovery_url = urlsplit(self.password_recovery_redirect_url)
+        if (
+            recovery_url.scheme not in {"http", "https"}
+            or not recovery_url.netloc
+            or recovery_url.username
+            or recovery_url.password
+            or recovery_url.fragment
+            or f"{recovery_url.scheme}://{recovery_url.netloc}" not in origins
+        ):
+            raise ValueError(
+                "PASSWORD_RECOVERY_REDIRECT_URL must use an allowed CORS origin."
+            )
+
         if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
             raise ValueError("SameSite=None requires AUTH_COOKIE_SECURE=true.")
 
@@ -199,11 +222,16 @@ class Settings(BaseSettings):
             )
 
         if self.app_env == "production":
-            secret = self.jwt_secret.get_secret_value() if self.jwt_secret else ""
-            if len(secret) < 32:
-                raise ValueError("JWT_SECRET must be at least 32 characters in production.")
+            if not self.supabase_url or not self.supabase_anon_key:
+                raise ValueError(
+                    "SUPABASE_URL and SUPABASE_ANON_KEY are required in production."
+                )
             if not self.auth_cookie_secure:
                 raise ValueError("AUTH_COOKIE_SECURE must be true in production.")
+            if recovery_url.scheme != "https":
+                raise ValueError(
+                    "PASSWORD_RECOVERY_REDIRECT_URL must use HTTPS in production."
+                )
 
         return self
 
@@ -211,6 +239,11 @@ class Settings(BaseSettings):
         if not self.jwt_secret:
             raise RuntimeError("JWT_SECRET is not configured.")
         return self.jwt_secret.get_secret_value()
+
+    def require_supabase_auth(self) -> tuple[str, str]:
+        if not self.supabase_url or not self.supabase_anon_key:
+            raise RuntimeError("Supabase Auth is not configured.")
+        return self.supabase_url, self.supabase_anon_key.get_secret_value()
 
 
 @lru_cache

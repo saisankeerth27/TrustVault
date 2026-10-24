@@ -4,7 +4,7 @@
 
 TrustVault is a secure document vault consisting of four primary components: a React single-page application, a FastAPI backend API, a Supabase PostgreSQL database, and private Supabase Storage buckets. The backend API is intended to be the sole authorization enforcement point — all document access, permission checks, and audit logging will flow through it.
 
-> **Implementation status (Phase 11 — History Pagination, Safe Version Rollback, and Stale-Editor Protection):** authentication, database-backed roles, rotating refresh sessions, the complete JavaScript frontend, a private validated upload pipeline, an authenticated document library, named-user READ/EDIT grants with immediate revocation, an append-only hash-chained audit trail with signed checkpoints and versioned audit hash schemas (migration `0006`), administrator account management and audit dashboard, retained document-content versions, authorized previews (PDF with Mozilla PDF.js, plain-text, images), in-browser PDF annotation editing (`pdf-lib`), owner-only version deletion with current-version rollback, paginated history/activity, stale-editor protection, and a comprehensive security regression suite are implemented and verified locally. The model features two account roles, `ADMINISTRATOR` and `USER`; every active user can upload and owns their uploads, while other-document access requires a per-document grant. Storage tests use a mocked Supabase Storage adapter; a **live private-bucket connectivity/upload/download/delete smoke test passed** against Supabase Storage. The repository migration head is `0007`; live Supabase migration state and drift were not re-verified in this local run. Administrators remain metadata-only unless explicitly granted document access.
+> **Implementation status:** document, role, sharing, audit, preview, and version-history functionality is implemented. Supabase Auth and six-digit recovery changes are in source but not yet fully validated or deployed. TrustVault roles remain database-authoritative; migration `0009`, account import, Supabase SMTP/template configuration, and deployed verification are still pending. The repository migration head is `0009`; the live database has not been updated or re-verified. Administrators remain metadata-only unless explicitly granted document access.
 
 ### Architecture Diagram
 
@@ -17,7 +17,7 @@ graph TB
 
     subgraph "API Zone — Trust Boundary"
         API["FastAPI Backend<br/>Python 3.13<br/>SQLAlchemy 2.x (sync)<br/><i>Hosted on Render</i>"]
-        AuthMW["JWT Auth + Session Checks<br/>Phase 3"]
+        AuthMW["Supabase Auth User Verification<br/>database role lookup"]
         PermCheck["Centralized Access Checker<br/>Phase 6 — implemented"]
         AuditSvc["Audit Writer + Hash Chain<br/>Phase 7 — implemented"]
         FileVal["File Validator — Phase 4<br/>implemented"]
@@ -59,7 +59,7 @@ graph TB
 | 0 | Requirements, architecture, threat model, docs | Complete |
 | 1 | Frontend/backend scaffold, health endpoint, CORS, tests | Complete |
 | 2 | Database models, initial migration, connection module | Complete (verified locally) |
-| 3 | Authentication, roles, refresh tokens | Complete (verified locally) |
+| 3 | Authentication and roles | Supabase Auth cutover in source; not yet deployed |
 | 4 | Private Supabase Storage and validated uploads | Complete (mocked tests plus live storage smoke test) |
 | 5 | Document listing, download proxy, management, and search | Complete (mocked tests plus live storage smoke test) |
 | 6 | Named-user READ/EDIT permissions, sharing, immediate revocation | Complete (mocked tests plus live storage smoke test) |
@@ -68,7 +68,7 @@ graph TB
 | 9 | Complete frontend | Complete (verified locally; awaiting review) |
 | 9.1 | Two-role business-model correction | Complete (committed as `77af2dc`) |
 | 9.2 | Content previews, text editing, replacement, and version history | Complete (verified locally; awaiting review) |
-| 10 | Deployment hardening and end-to-end verification | Planned |
+| 10 | Supabase Auth cutover, deployment hardening, and end-to-end verification | In progress; live provider setup and deployment pending |
 | 11 | Final submission and demo | Planned |
 
 The implemented schema is documented in full in [DATABASE.md](DATABASE.md).
@@ -83,7 +83,7 @@ The React SPA runs entirely in the user's browser. It is responsible for:
 - **Client-side routing** — single-page navigation via React Router.
 - **Client-side form validation** — for user experience only. All validation is re-performed server-side.
 - **API communication** — all data interactions go through the FastAPI backend via HTTPS REST calls using a centralized Axios client.
-- **Token handling** — the access token is held in memory only; the rotating refresh token stays in an HttpOnly cookie. Axios sends credentials and retries an expired access token through one shared refresh request.
+- **Token handling** — Supabase Auth SDK manages the browser session; the TrustVault access token is held in memory only. A recovery-only provider token is confined to a short-lived, scoped HttpOnly cookie.
 - **UI state management** — loading states, error messages, and user feedback.
 
 **The frontend NEVER:**
@@ -98,14 +98,14 @@ The React SPA runs entirely in the user's browser. It is responsible for:
 
 The backend is the **intended sole enforcement point** for security. It is responsible for the following. Items marked *planned* are not implemented yet.
 
-### Authentication (implemented — Phase 3)
-- Public registration always creates a `USER`; administrator accounts are provisioned with `scripts/create_user.py` or changed by an authorized administrator.
-- Passwords are hashed with bcrypt (cost configurable; production default 12) with a 12-character minimum and 72-byte maximum. Unknown accounts perform dummy-hash work and return the same generic error.
-- Login returns a short-lived HS256 JWT access token and sets an opaque rotating refresh token in an HttpOnly cookie scoped to `/api/v1/auth`.
-- Refresh tokens are stored only as SHA-256 hashes and grouped by session family. Reuse of a rotated token revokes the whole family.
-- Every protected request validates the JWT signature, issuer, audience, account status, and an active refresh-token family. Logout, disablement, and reuse detection therefore invalidate access immediately.
-- Auth POSTs enforce an Origin allow-list, and login/registration use a bounded in-memory rate limiter (10 attempts per 60 seconds by default, client IP plus normalized email for login).
-- `GET /api/v1/auth/me` returns the trusted database user; authorization uses the current database role, not the token's role claim.
+### Authentication (Supabase Auth cutover in progress)
+- Public registration always creates a `USER`; the protected `scripts/create_user.py` command creates a provider identity and its TrustVault role row together.
+- Supabase Auth stores passwords and manages browser sessions. The backend verifies provider bearer tokens and binds each verified email/UUID to the local TrustVault user record.
+- Protected requests require a verified email, a matching provider UUID and normalized email, and an active database account. Roles and permissions always come from the TrustVault database, never provider metadata.
+- Recovery requests use generic six-digit OTP responses; verification explicitly uses `type: recovery`. The provider recovery token is held for at most ten minutes in an HttpOnly cookie scoped to the password-update endpoint.
+- Recovery POSTs enforce configured Origin allow-lists. Production requires HTTPS, secure cookies, and a recovery redirect matching the configured frontend origin.
+- Recovery uses process-local per-email and per-IP rate limits. The general auth limiter is process-local as well; multi-instance production needs a shared limiter.
+- Recovery and password-change audit events contain no OTP or password values. Existing account import and deployment verification are prerequisites; migration `0009` clears old password hashes irreversibly and revokes legacy sessions.
 
 ### Document Scoping (implemented — Phases 5–6)
 - Owners can list/read their active documents and manage their own metadata, preview, current/version downloads, deletion, and sharing.
@@ -158,12 +158,12 @@ The backend is the **intended sole enforcement point** for security. It is respo
 
 ## 5. Database Architecture (Implemented)
 
-The schema contains six tables. Migrations `0001`–`0007` establish the schema, audit chain sequence, current two-role model, login tracking/account indexes, content-version history with a backfilled version 1, versioned audit hash schema, and the persistent document version sequence. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
+The schema contains six tables. Migrations `0001`–`0009` establish the schema, audit chain sequence, current two-role model, login tracking/account indexes, content-version history, versioned audit hash schema, persistent document version sequence, and Supabase Auth identity mapping. Full column, constraint, and index detail lives in [DATABASE.md](DATABASE.md).
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Accounts, hashed passwords, role, status, timestamps |
-| `refresh_tokens` | Hashed opaque refresh tokens, rotation families, expiry, revocation |
+| `users` | Accounts, optional legacy password hash, Supabase Auth identity, database role/status, timestamps |
+| `refresh_tokens` | Retired legacy hashed refresh tokens; revoked by migration `0009` |
 | `documents` | Metadata: owner, name, category, description, current storage key, MIME type, size, checksum, next version number, soft-delete timestamp |
 | `document_permissions` | Per-user, per-document grant history (`READ`/`EDIT`) with revocation timestamps |
 | `document_versions` | Immutable content-version metadata: document, version number, storage key, original filename, MIME type, size, checksum, uploader, change summary, current flag |
@@ -174,7 +174,7 @@ The schema contains six tables. Migrations `0001`–`0007` establish the schema,
 - **UUID primary keys** generated by PostgreSQL `gen_random_uuid()`. UUIDs are not a security control; authorization never depends on ID secrecy.
 - **Roles and statuses as constrained strings.** `users.role` is checked against `ADMINISTRATOR`, `USER`; `users.status` against `ACTIVE`, `DISABLED`. Constrained strings avoid the migration friction of native PostgreSQL enums while still being validated at the database. Python-side `StrEnum` values live in `app/models/enums.py`.
 - **Email normalization.** `users.email` is stored lowercase and must already be lowercase (check constraint), with a unique constraint. Normalization happens before insert; the database guarantees no mixed-case duplicates.
-- **Required `password_hash`.** The column is `NOT NULL`; Phase 3 always stores a bcrypt hash, so an account can never exist without a credential.
+- **Supabase Auth identities.** Credentials are held by Supabase Auth. `users.supabase_auth_id` binds the verified provider identity to the existing TrustVault row; `users.role` and `users.status` remain backend-controlled. `password_hash` is nullable for the transition and legacy values are cleared by migration `0009`.
 - **Explicit owner FK.** `documents.owner_id` references `users.id` with `ON DELETE RESTRICT`; a user who owns documents cannot be deleted until ownership is transferred.
 - **Internal storage keys only.** `documents.storage_key` is unique, must start with `documents/`, and must not contain a URL scheme. Phase 4 generates keys as `documents/{owner_uuid}/{random_uuid}.{ext}`; the user filename is metadata only.
 - **Required checksum.** `documents.checksum` is a required SHA-256 hex string computed by the backend from the received bytes during upload.
@@ -226,7 +226,9 @@ The frontend **never** receives a direct or presigned Supabase Storage URL. `scr
 
 ---
 
-## 7. Authentication Flow (Implemented — Phase 3)
+## 7. Legacy Custom Authentication Flow (Superseded)
+
+The sequence and token details in this legacy section describe the retired FastAPI password/refresh-token implementation and are retained only for historical context and test coverage. Production authentication now follows the Supabase Auth cutover documented in section 4.
 
 ```mermaid
 sequenceDiagram
@@ -271,7 +273,7 @@ sequenceDiagram
 - **Password hashing:** bcrypt with configurable cost (default 12). Passwords must be 12–72 UTF-8 bytes.
 - **Revocation:** access tokens are tied to the refresh-token family and checked against current session state on every protected request.
 
-## 8. Per-Request Authentication and Authorization (Phase 3)
+## 8. Legacy Per-Request Authentication Flow (Superseded)
 
 ```mermaid
 flowchart TD
@@ -463,12 +465,12 @@ graph LR
 
 | Provider | Component | Configuration |
 |----------|-----------|---------------|
-| Vercel | Frontend | Build `npm run build`, output `dist/`, env `VITE_API_BASE_URL` |
+| Vercel | Frontend | Build `npm run build`, output `dist/`, env `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` |
 | Render | Backend | Start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, env below |
 | Supabase | Database | Connection via `DATABASE_URL`; migrations applied manually with Alembic |
 | Supabase Storage | Storage | Private bucket, server-side access only via `httpx` |
 
-No deployment or migration has been performed. Render does not run migrations automatically; `alembic upgrade head` is a deliberate manual step.
+No deployment or migration has been performed. Render does not run migrations automatically; `alembic upgrade head` is a deliberate manual step. Supabase Auth SMTP/template configuration and initial account import require owner action.
 
 ---
 
@@ -484,14 +486,15 @@ DATABASE_URL=postgresql://postgres.YOUR_PROJECT_REF:YOUR_PASSWORD@aws-0-REGION.p
 DB_POOL_SIZE=5
 DB_MAX_OVERFLOW=10
 
-# Authentication (Phase 3, implemented)
-JWT_SECRET=replace-me
-JWT_ALGORITHM=HS256
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES=15
-JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+# Authentication and recovery. Supabase Auth is authoritative for credentials;
+# TrustVault roles continue to come from the backend database.
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
+PASSWORD_RECOVERY_REDIRECT_URL=https://your-app.example/recover-password
+AUTH_COOKIE_SECURE=true
+AUTH_COOKIE_SAMESITE=none
 
 # Supabase Storage (private bucket, server-side credentials only)
-SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 SUPABASE_STORAGE_BUCKET=trustvault-documents
 SUPABASE_SERVICE_ROLE_KEY=your-server-side-secret-key
 MAX_UPLOAD_SIZE_BYTES=10485760
@@ -511,6 +514,8 @@ LOG_LEVEL=INFO
 
 ```env
 VITE_API_BASE_URL=https://your-backend.onrender.com
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
 ```
 
 Only non-secret configuration belongs in `VITE_*` variables, because Vite embeds them in the browser bundle.
@@ -701,3 +706,15 @@ Future per-user policies, if the backend moves to request-scoped database identi
 - **Audit:** `DOCUMENT_VERSION_CREATED`, `DOCUMENT_VERSION_DELETE`, `DOCUMENT_VERSION_DOWNLOAD`, and `DOCUMENT_PREVIEW` include version/size/MIME/source/rollback context and are sanitized. File contents, passwords, tokens, and secrets are never recorded. The administrator audit UI renders structured metadata without raw HTML and provides local copy/raw JSON views.
 - **Frontend:** previews, paginated version history, text editing, replacement uploads, current-version tracking, rollback-aware deletion, stale-editor handling, paginated owner activity, and version downloads are integrated into document details; READ remains read-only and administrators remain metadata-only. The metadata edit UI was removed so metadata is displayed read-only.
 - **Verification:** 269 backend tests pass with 88% statement coverage, including version constraints, `0007` sequence/backfill/downgrade, authorization, stale writes, last-version rejection, current-version rollback, storage failures, audit failures, and deletion cleanup. Frontend: 23 tests across 8 files, lint with warnings and no errors, production build successful. Manual browser preview of real PDFs/DOCX and deployment remain unverified.
+
+---
+
+## 26. Supabase Auth and Password Recovery
+
+- **Authentication cutover:** The frontend now uses `@supabase/supabase-js` for registration, password login, session persistence/refresh, and logout. The FastAPI API verifies each bearer token through the Supabase Auth `/user` endpoint and maps the verified email plus Supabase user UUID to `users.supabase_auth_id`. Application role/status decisions continue to use the TrustVault database; Supabase user/app metadata cannot grant an administrator role.
+- **Legacy account import:** Apply Alembic `0009` and run `python -m scripts.import_users_to_supabase_auth` from `backend/` with protected database and service-role configuration. It imports only account email and display name, creates provider identities without copying password hashes, and reports aggregate counts only. Do not expose the service-role key. Existing users can use password recovery after import; local bcrypt hashes and active legacy refresh sessions are cleared by migration `0009`.
+- **Recovery flow:** FastAPI proxies Supabase Auth recovery-request, OTP verification (`type: recovery`), and password-update endpoints. It places the verified provider access token only in a short-lived, HttpOnly recovery cookie and never returns that token to the browser. Password updates require the cookie created by successful Supabase recovery verification. Recovery cookies use the configured Secure/SameSite policy and the API enforces an exact configured Origin.
+- **Audit actions:** `PASSWORD_RESET_REQUESTED` means Supabase accepted a recovery request; it does not prove email delivery. `PASSWORD_RESET_REQUEST_FAILED` records a provider/configuration failure. `PASSWORD_RESET_VERIFICATION_FAILED` is anonymous because the identity is not established by a rejected OTP. `PASSWORD_RESET_VERIFICATION_SUCCEEDED`, `PASSWORD_CHANGED`, and `PASSWORD_UPDATE_FAILED` are linked to the matching verified TrustVault user when identity can be safely mapped. Details never include email, OTP, password, access/refresh token, recovery URL, or SMTP diagnostics. The administrator audit action filter includes all six actions.
+- **Throttle:** Recovery requests are limited to three attempts per email/IP key per 15 minutes; OTP verification is limited to five per email/IP key per 15 minutes. Supabase Auth limits also apply. The in-memory limiter is per process, so multi-instance deployments need a shared limiter.
+- **Owner configuration required:** In Supabase Dashboard, enable the existing SMTP provider and verify sender/host/port/TLS settings without copying SMTP credentials into this repository. Under **Authentication → Email Templates → Reset Password**, configure a six-digit OTP template using `{{ .Token }}` rather than a confirmation-link-only template. Verify that the email OTP length is six digits under the project's Auth settings. Under **Authentication → URL Configuration**, allow the deployed frontend's recovery callback and login confirmation redirect; configure `PASSWORD_RECOVERY_REDIRECT_URL` to an exact allowed URL and `CORS_ALLOWED_ORIGINS` to its exact origin. Configure matching `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` for Vercel and `SUPABASE_URL`/`SUPABASE_ANON_KEY` for Render. Never put service-role keys or SMTP secrets in `VITE_*`.
+- **Verification status:** Source tests exercise recovery request/verification/update contracts and the explicit recovery OTP type. No project dashboard access or real SMTP delivery test was available; the live template, SMTP settings, OTP delivery, account import, and production recovery flow remain unverified until an owner completes setup.

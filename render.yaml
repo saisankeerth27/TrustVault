@@ -22,23 +22,7 @@ services:
         value: "5"
       - key: DB_MAX_OVERFLOW
         value: "10"
-      # Set JWT_SECRET to a cryptographically random value of at least 32 characters
-      # in the Render dashboard. Never commit the real value.
-      - key: JWT_SECRET
-        sync: false
-      - key: JWT_ALGORITHM
-        value: HS256
-      - key: JWT_ISSUER
-        value: trustvault
-      - key: JWT_AUDIENCE
-        value: trustvault-api
-      - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
-        value: "15"
-      - key: JWT_REFRESH_TOKEN_EXPIRE_DAYS
-        value: "7"
-      - key: BCRYPT_ROUNDS
-        value: "12"
-      # Vercel and Render are cross-site by default, so the refresh cookie must be
+      # Vercel and Render are cross-site by default, so the recovery cookie must be
       # Secure and SameSite=None. The backend still enforces an Origin allow-list.
       - key: AUTH_COOKIE_SECURE
         value: "true"
@@ -51,6 +35,10 @@ services:
       # Private Supabase Storage configuration. Set these in the Render dashboard.
       # Keep the bucket private and never place these values in the frontend.
       - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: PASSWORD_RECOVERY_REDIRECT_URL
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         sync: false

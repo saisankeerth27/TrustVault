@@ -27,6 +27,7 @@ def test_users_columns_and_uniqueness() -> None:
         "name",
         "email",
         "password_hash",
+        "supabase_auth_id",
         "role",
         "status",
         "last_login_at",

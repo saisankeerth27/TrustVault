@@ -10,16 +10,23 @@ from app.core.config import Settings, get_settings
 from app.main import app
 
 
-def test_production_requires_a_jwt_secret(
+def test_production_does_not_require_legacy_jwt_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "true")
     monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "none")
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv(
+        "PASSWORD_RECOVERY_REDIRECT_URL",
+        "https://app.example.com/recover-password",
+    )
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "public-test-key")
     monkeypatch.delenv("JWT_SECRET", raising=False)
 
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None)
+    settings = Settings(_env_file=None)
+    assert settings.jwt_secret is None
 
 
 def test_same_site_none_requires_secure_cookie(
@@ -39,6 +46,13 @@ def test_production_cookie_flags(
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "true")
     monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "none")
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv(
+        "PASSWORD_RECOVERY_REDIRECT_URL",
+        "https://app.example.com/recover-password",
+    )
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "public-test-key")
     monkeypatch.setenv(
         "JWT_SECRET", "production-test-secret-with-at-least-32-characters"
     )
