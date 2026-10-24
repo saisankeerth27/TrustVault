@@ -77,6 +77,7 @@ class User(Base):
     documents: Mapped[list[Document]] = relationship(
         back_populates="owner",
         foreign_keys="Document.owner_id",
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:

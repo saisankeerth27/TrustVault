@@ -30,6 +30,13 @@ function recoveryError(error) {
   return getApiErrorMessage(error)
 }
 
+function recoveryRetryAfter(error) {
+  if (error?.response?.status !== 429) return 0
+
+  const retryAfter = Number.parseInt(error.response.headers?.['retry-after'], 10)
+  return Number.isSafeInteger(retryAfter) && retryAfter > 0 ? retryAfter : 60
+}
+
 export function PasswordRecoveryPage() {
   const { status } = useAuth()
   const navigate = useNavigate()
@@ -73,6 +80,8 @@ export function PasswordRecoveryPage() {
         'If an account exists for this email address, a verification code will be sent.',
       )
     } catch (requestError) {
+      const retryAfter = recoveryRetryAfter(requestError)
+      if (retryAfter) setCooldown(retryAfter)
       setError(recoveryError(requestError))
     } finally {
       setIsBusy(false)
@@ -91,6 +100,8 @@ export function PasswordRecoveryPage() {
         'If an account exists for this email address, a verification code will be sent.',
       )
     } catch (requestError) {
+      const retryAfter = recoveryRetryAfter(requestError)
+      if (retryAfter) setCooldown(retryAfter)
       setError(recoveryError(requestError))
     } finally {
       setIsBusy(false)
@@ -302,9 +313,14 @@ export function PasswordRecoveryPage() {
                   disabled={isBusy}
                 />
               </div>
-              <Button type="submit" className="w-full" size="lg" disabled={isBusy}>
+              <Button
+                type="submit"
+                className="w-full"
+                size="lg"
+                disabled={isBusy || cooldown > 0}
+              >
                 {isBusy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : null}
-                Send OTP
+                {cooldown > 0 ? `Try again in ${cooldown}s` : 'Send OTP'}
               </Button>
             </form>
           ) : null}

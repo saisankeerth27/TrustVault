@@ -83,6 +83,13 @@ export async function requestPasswordRecovery(email) {
   return data
 }
 
+export async function resendEmailConfirmation(email) {
+  const { data } = await apiClient.post('/api/v1/auth/supabase/resend-confirmation', {
+    email: email.trim().toLowerCase(),
+  })
+  return data
+}
+
 export async function verifyPasswordRecovery(email, token) {
   const { data } = await apiClient.post('/api/v1/auth/recovery/verify', {
     email,

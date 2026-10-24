@@ -1,6 +1,6 @@
 import { AxiosError } from 'axios'
 import { describe, expect, it } from 'vitest'
-import { getApiErrorMessage } from '@/services/api'
+import { apiClient, getApiErrorMessage } from '@/services/api'
 
 function axiosError({ status = 500, data = {}, code = 'ERR_BAD_REQUEST', response = true } = {}) {
   return new AxiosError(
@@ -21,6 +21,10 @@ function axiosError({ status = 500, data = {}, code = 'ERR_BAD_REQUEST', respons
 }
 
 describe('getApiErrorMessage', () => {
+  it('allows Supabase-backed email requests enough time to finish', () => {
+    expect(apiClient.defaults.timeout).toBe(20_000)
+  })
+
   it('includes safe validation field messages without raw input values', () => {
     const error = axiosError({
       status: 422,

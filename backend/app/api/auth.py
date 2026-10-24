@@ -44,6 +44,7 @@ from app.services.supabase_auth import (
     SupabaseAuthError,
     get_user as get_supabase_user,
     request_password_recovery,
+    resend_signup_confirmation,
     sign_in_with_password,
     sign_up as supabase_sign_up,
     update_recovery_password,
@@ -229,6 +230,24 @@ def _enforce_rate_limit(request: Request, keys: list[str]) -> None:
     except HTTPException:
         logger.warning("Authentication rate limit exceeded.")
         raise
+
+
+def _enforce_email_delivery_cooldown(email: str) -> None:
+    """Match Supabase's per-address email cooldown before calling its API.
+
+    Signup confirmation, confirmation resend, and password recovery all send
+    email. Keeping one shared key avoids immediately re-submitting a request
+    that Supabase would reject, without disclosing whether the address exists.
+    """
+
+    settings = get_settings()
+    enforce_rate_limit(
+        auth_rate_limiter,
+        [f"auth-email-delivery:{email}"],
+        limit=1,
+        window_seconds=settings.auth_email_cooldown_seconds,
+        detail="An email was already requested. Wait before requesting another one.",
+    )
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
@@ -424,15 +443,13 @@ def register_with_supabase(
         request,
         [f"register-ip:{_client_address(request)}", f"register-email:{payload.email}"],
     )
-    origin = request.headers.get("origin")
-    redirect_to = f"{origin.rstrip('/')}/login" if origin else None
-
+    _enforce_email_delivery_cooldown(str(payload.email))
     try:
         result = supabase_sign_up(
             str(payload.email),
             payload.password.get_secret_value(),
             payload.name,
-            redirect_to,
+            get_settings().confirmation_redirect_url,
         )
     except SupabaseAuthError as exc:
         _record_registration_failure(
@@ -565,6 +582,72 @@ def register_with_supabase(
     return {
         "account_created": False,
         "requires_email_confirmation": True,
+    }
+
+
+@router.post("/supabase/resend-confirmation")
+def resend_confirmation_with_supabase(
+    payload: PasswordRecoveryRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Ask Supabase to resend a signup email without disclosing account state."""
+
+    _enforce_allowed_origin(request)
+    _no_store(response)
+    _enforce_rate_limit(
+        request,
+        [
+            f"confirmation-resend-ip:{_client_address(request)}",
+            f"confirmation-resend-email:{payload.email}",
+        ],
+    )
+    _enforce_email_delivery_cooldown(str(payload.email))
+    try:
+        resend_signup_confirmation(
+            str(payload.email),
+            get_settings().confirmation_redirect_url,
+        )
+    except SupabaseAuthError as exc:
+        _record_registration_failure(
+            session,
+            reason="confirmation_resend_rejected_or_unavailable",
+            status_code=exc.status_code or 0,
+        )
+        if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many confirmation requests. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        if exc.status_code is None or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Confirmation email is temporarily unavailable. Try again later.",
+            ) from exc
+
+        # Supabase can reject requests for an already-confirmed or unknown
+        # address.  Return the same generic result so this endpoint cannot be
+        # used to discover which email addresses have TrustVault accounts.
+        return {
+            "message": (
+                "If an account is awaiting confirmation, a new email will be sent."
+            )
+        }
+
+    _commit_with_success_audit(
+        session,
+        action=AuditAction.USER_REGISTERED,
+        actor=None,
+        details={
+            "resource_type": "AUTH",
+            "request_status": "confirmation_resent",
+            "source": "supabase_auth",
+        },
+    )
+    return {
+        "message": "If an account is awaiting confirmation, a new email will be sent."
     }
 
 
@@ -983,10 +1066,24 @@ def verify_recovery(
             detail="The code is invalid or expired. Check it and try again.",
         )
 
+    try:
+        provider_id = UUID(identity_id)
+    except ValueError:
+        _record_recovery_event(
+            session,
+            action=AuditAction.PASSWORD_RESET_VERIFICATION_FAILED,
+            outcome=AuditOutcome.FAILURE,
+            details={"reason": "provider_response_invalid"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The code is invalid or expired. Check it and try again.",
+        )
+
     actor = _user_for_recovery_identity(session, identity)
     details: dict[str, object] = {"verification": "recovery_otp"}
     if actor is not None:
-        actor.supabase_auth_id = UUID(identity_id)
+        actor.supabase_auth_id = provider_id
         details["target_user_id"] = str(actor.id)
     _commit_with_success_audit(
         session,

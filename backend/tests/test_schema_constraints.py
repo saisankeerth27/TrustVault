@@ -43,6 +43,54 @@ def test_document_owner_must_exist(db_session: Session) -> None:
     db_session.rollback()
 
 
+def test_user_with_documents_cannot_be_deleted_due_to_restrict_foreign_key(
+    db_session: Session,
+) -> None:
+    owner = make_user()
+    db_session.add(owner)
+    db_session.flush()
+
+    doc = make_document(owner_id=owner.id)
+    db_session.add(doc)
+    db_session.flush()
+
+    # Attempting to delete the owner while documents exist must fail with IntegrityError (SQLSTATE 23503)
+    with db_session.begin_nested():
+        db_session.delete(owner)
+        with pytest.raises(IntegrityError) as exc_info:
+            db_session.flush()
+        assert "fk_documents_owner_id_users" in str(exc_info.value)
+
+    # Document ownership must remain intact
+    retained_owner = db_session.get(type(owner), owner.id)
+    retained_doc = db_session.get(type(doc), doc.id)
+    assert retained_owner is not None
+    assert retained_doc is not None
+    assert retained_doc.owner_id == retained_owner.id
+
+
+def test_user_deactivation_preserves_document_ownership_and_relationships(
+    db_session: Session,
+) -> None:
+    owner = make_user(status="ACTIVE")
+    db_session.add(owner)
+    db_session.flush()
+
+    doc = make_document(owner_id=owner.id)
+    db_session.add(doc)
+    db_session.flush()
+
+    # Safe deactivation workflow: change status to DISABLED without deleting row or cascade deleting documents
+    owner.status = "DISABLED"
+    db_session.flush()
+    db_session.refresh(owner)
+    db_session.refresh(doc)
+
+    assert owner.status == "DISABLED"
+    assert doc.owner_id == owner.id
+
+
+
 def test_negative_file_size_is_rejected(db_session: Session) -> None:
     owner = make_user()
     db_session.add(owner)

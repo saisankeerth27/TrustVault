@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { login, register } from '@/services/auth'
+import { login, register, resendEmailConfirmation } from '@/services/auth'
 import { supabase } from '@/auth/supabase'
 import { apiClient } from '@/services/api'
 
@@ -126,5 +126,20 @@ describe('Supabase-backed application authentication', () => {
     })
 
     expect(supabase.auth.setSession).not.toHaveBeenCalled()
+  })
+
+  it('requests a generic replacement email for a pending confirmation', async () => {
+    apiClient.post.mockResolvedValue({
+      data: { message: 'If an account is awaiting confirmation, a new email will be sent.' },
+    })
+
+    await expect(resendEmailConfirmation(' Person@Example.COM ')).resolves.toEqual({
+      message: 'If an account is awaiting confirmation, a new email will be sent.',
+    })
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/api/v1/auth/supabase/resend-confirmation',
+      { email: 'person@example.com' },
+    )
   })
 })

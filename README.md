@@ -128,6 +128,7 @@ SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
 SUPABASE_STORAGE_BUCKET=trustvault-documents
 SUPABASE_SERVICE_ROLE_KEY=your-server-side-secret-key
 PASSWORD_RECOVERY_REDIRECT_URL=http://localhost:5173/recover-password
+EMAIL_CONFIRMATION_REDIRECT_URL=http://localhost:5173/login
 MAX_UPLOAD_SIZE_BYTES=10485760
 ALLOWED_UPLOAD_EXTENSIONS=pdf,txt,docx,png,jpg,jpeg
 ```
@@ -178,12 +179,13 @@ The health endpoint reports **process health only**. It does not check the datab
 
 Configure Supabase before enabling the new authentication code:
 
-1. In **Authentication → Sign In / Providers → Email**, keep email/password sign-in enabled and set **Confirm email** according to the intended project policy. The application handles either result: a returned session is profile-synced and sent to Dashboard; no session leaves the user signed out and asks them to confirm before login. The current setting was not checked from this workspace. Do not manually mark existing users confirmed to compensate.
-2. Keep the **Confirm sign up** template for email confirmation. The app sends confirmation links back to the current frontend origin at `/login`; the Supabase client exchanges the callback and loads the verified session before protected routes are available. The callback path must be in the redirect allowlist.
+1. In **Authentication → Sign In / Providers → Email**, keep email/password sign-in enabled and turn on **Confirm email**. This is what makes Supabase send the initial account-confirmation email. Do not manually mark existing users confirmed to compensate.
+2. Keep the **Confirm sign up** template for email confirmation. TrustVault sends confirmation links to `EMAIL_CONFIRMATION_REDIRECT_URL`, normally the frontend `/login` route; the Supabase client exchanges the callback and loads the verified session before protected routes are available. The callback path must be in the redirect allowlist. The Register page also offers a rate-limited, non-enumerating resend action when a user misses that email.
 3. Password recovery calls Supabase's recovery endpoint (`/auth/v1/recover`) and verifies with recovery type. Supabase's **Reset password** authentication template is the one used for this flow; to show a six-digit code, its body should use `{{ .Token }}` instead of a confirmation link. The separate **Magic link or OTP** template is not used by this recovery request. Check the current template and Auth logs in the dashboard; neither is accessible from this workspace. See [Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates).
-4. The **Password changed** security notification is separate from the recovery template and is sent only when enabled in Supabase project settings. Verify its setting and existing wording in the dashboard. TrustVault does not send a duplicate notification.
-5. In **Authentication → URL Configuration**, set the intended Site URL and allow the exact frontend `/login` and `/recover-password` redirect URLs for local and deployed environments. Only the recovery URL is configured by the backend; production URLs and dashboard allowlist entries have not been verified here.
-6. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the matching `PASSWORD_RECOVERY_REDIRECT_URL` in `backend/.env`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `frontend/.env` to the same project. For local development, use the public anon/publishable key from **Project Settings → API Keys** in both places; never use the service-role/secret key for these settings. Restart both servers after changing environment files.
+4. The **Password changed** security notification is separate from the recovery template and is sent only when enabled in Supabase project settings. Enable the **Password changed** notification and verify its wording in the dashboard. TrustVault does not send a duplicate notification.
+5. Supabase's built-in mailer is intentionally limited to **two authentication emails per project per hour**. That limit is shared by signup confirmations, recovery codes, and security notifications, and produces HTTP 429 when exhausted. Configure custom SMTP or a Send Email hook before testing the complete email workflow or deploying it. TrustVault blocks repeat requests for the same address for 60 seconds, but it cannot raise Supabase's project-wide mail quota. See [Supabase Auth rate limits](https://supabase.com/docs/guides/auth/rate-limits).
+6. In **Authentication → URL Configuration**, set the intended Site URL and allow the exact frontend `/login` and `/recover-password` redirect URLs for local and deployed environments. Both backend redirect settings must exactly match their corresponding allow-list entries.
+6. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `PASSWORD_RECOVERY_REDIRECT_URL`, and `EMAIL_CONFIRMATION_REDIRECT_URL` in `backend/.env`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `frontend/.env` to the same project. For local development, use the public anon/publishable key from **Project Settings → API Keys** in both places; never use the service-role/secret key for these settings. Restart both servers after changing environment files.
 7. Back up the database and schedule a maintenance window. Stop the old backend before applying migration `0009`: it clears legacy password hashes and revokes old refresh sessions, and it cannot be rolled back to restore credentials.
 8. With the new backend code and migration available, run `alembic upgrade head`, then import existing users:
 
@@ -410,6 +412,7 @@ Templates are committed; real values are not.
 | `AUTH_COOKIE_SAMESITE` | `lax`, `strict`, or `none` (`none` requires Secure) | No (default `lax`) |
 | `AUTH_RATE_LIMIT_ATTEMPTS` | Attempts per sliding window | No (default `10`) |
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Sliding-window length | No (default `60`) |
+| `AUTH_EMAIL_COOLDOWN_SECONDS` | Per-address wait before another signup, resend, or recovery email is requested | No (default `60`) |
 | `AUDIT_CHECKPOINT_SIGNING_KEY` | HMAC key for signed audit checkpoints; at least 32 characters, set with the path | No (both checkpoint settings optional) |
 | `AUDIT_CHECKPOINT_PATH` | Absolute path for the signed checkpoint file; configure both or neither | No (both checkpoint settings optional) |
 | `SUPABASE_URL` | HTTPS Supabase project URL without a path | Yes for Auth and uploads |
@@ -417,6 +420,7 @@ Templates are committed; real values are not.
 | `SUPABASE_STORAGE_BUCKET` | Private Supabase Storage bucket name | Yes for uploads |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-side secret or legacy service-role key | Yes for uploads |
 | `PASSWORD_RECOVERY_REDIRECT_URL` | Allow-listed callback URL used by password recovery | Yes for recovery |
+| `EMAIL_CONFIRMATION_REDIRECT_URL` | Allow-listed frontend login URL used by sign-up and resend-confirmation emails; derived from the recovery URL when omitted | Recommended |
 | `MAX_UPLOAD_SIZE_BYTES` | Upload limit, 1–104,857,600 bytes | No (default `10485760`) |
 | `ALLOWED_UPLOAD_EXTENSIONS` | Comma-separated extension allow-list | No (default `pdf,txt,docx,png,jpg,jpeg`) |
 
@@ -436,15 +440,16 @@ Only non-secret configuration belongs in `VITE_*` variables, because Vite embeds
 
 The source migration uses Supabase Auth for passwords and browser sessions; TrustVault's database remains authoritative for account roles, disabled status, ownership, and document permissions. The cutover is not complete until deployment configuration, migration `0009`, SMTP/template setup, and the existing-user import are complete. After an approved maintenance window and database backup, apply `alembic upgrade head`, then run `python -m scripts.import_users_to_supabase_auth` from `backend/` using the protected `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`. The import sends existing account emails and display names to Supabase Auth, does not send password hashes or roles, and prints aggregate counts only. It creates confirmed users without passwords; existing users must set a password using recovery. Migration `0009` clears local password hashes and revokes legacy refresh sessions, and downgrade cannot restore them.
 
-Configure these public frontend values in Vercel or `frontend/.env`: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL`. Configure `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `PASSWORD_RECOVERY_REDIRECT_URL` on the backend. The service-role key stays only in protected backend configuration and is needed for the one-off identity import as well as the existing Storage integration. Never place SMTP credentials or service-role keys in frontend environment variables.
+Configure these public frontend values in Vercel or `frontend/.env`: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL`. Configure `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `PASSWORD_RECOVERY_REDIRECT_URL`, and `EMAIL_CONFIRMATION_REDIRECT_URL` on the backend. The service-role key stays only in protected backend configuration and is needed for the one-off identity import as well as the existing Storage integration. Never place SMTP credentials or service-role keys in frontend environment variables.
 
 In Supabase Dashboard:
 
 1. Under **Project Settings → Authentication → SMTP Settings**, configure and verify the SMTP provider, sender, TLS, and rate limits. Rotate any SMTP App Password previously exposed outside Supabase; do not enter it in this repository.
 2. Under **Authentication → Email Templates → Reset Password**, configure the message to contain the six-digit OTP using `{{ .Token }}`; do not rely on a link-only reset template.
 3. Verify the email OTP length is six digits and the provider's expiry/rate limits are appropriate.
-4. Under **Authentication → URL Configuration**, add the deployed `/recover-password` URL and `/login` confirmation redirect to Redirect URLs. Set `PASSWORD_RECOVERY_REDIRECT_URL` to the exact allowed recovery URL and `CORS_ALLOWED_ORIGINS` to the frontend origin.
-5. Ensure the frontend and backend reference the same Supabase project and that the public key is the anon/publishable key, not a service-role key.
+4. Under **Authentication → URL Configuration**, add the deployed `/recover-password` URL and `/login` confirmation redirect to Redirect URLs. Set `PASSWORD_RECOVERY_REDIRECT_URL` and `EMAIL_CONFIRMATION_REDIRECT_URL` to the exact allowed frontend URLs, and set `CORS_ALLOWED_ORIGINS` to the frontend origin.
+5. Under **Authentication → Email Templates → Password changed**, enable the security notification and use the supplied template (or equivalent wording). Supabase sends this email after TrustVault successfully updates the password; TrustVault intentionally does not send a duplicate message.
+6. Ensure the frontend and backend reference the same Supabase project and that the public key is the anon/publishable key, not a service-role key.
 
 The recovery audit records provider acceptance, not confirmed email delivery. Invalid OTP failures remain unattributed; verified OTP and password-change events are linked to the TrustVault account only after the identity is verified. The repository's automated tests do not verify access to the Supabase dashboard, SMTP delivery, or the live OTP template.
 
@@ -509,12 +514,13 @@ npm test
 npm run build
 ```
 
-`npm run lint`, `npm test`, and `npm run build` pass; lint reports existing warnings and the build reports large-chunk advisories. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The **68 frontend tests across 21 files** cover safe API errors, role-aware UI, Supabase authentication, password recovery, document previews/editing, and document history behavior. A browser-based walkthrough with live accounts and deployment remain unverified.
+`npm run lint`, `npm test`, and `npm run build` pass; lint reports existing warnings and the build reports large-chunk advisories. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The suite covers safe API errors, role-aware UI, Supabase authentication, password recovery, document previews/editing, and document history behavior. A browser-based walkthrough with live accounts and deployment remain unverified.
 
 ## API Baseline
 
 - **Health:** `GET /health` → `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`
 - **Register/login:** `POST /api/v1/auth/supabase/register` and `POST /api/v1/auth/supabase/login` proxy to Supabase Auth and record trusted outcomes; the frontend SDK persists returned sessions. Legacy local-auth endpoints return 410 outside tests.
+- **Confirmation resend:** `POST /api/v1/auth/supabase/resend-confirmation` asks Supabase to resend a pending sign-up email while returning a generic result for every address.
 - **Logout/refresh:** handled by Supabase Auth in the frontend SDK.
 - **Identity sync:** `POST /api/v1/auth/session` → validates the Supabase identity and returns the matching TrustVault user/role.
 - **Recovery request:** `POST /api/v1/auth/recovery/request` → generic six-digit OTP request response.

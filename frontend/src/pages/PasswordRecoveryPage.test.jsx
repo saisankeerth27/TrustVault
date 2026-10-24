@@ -132,6 +132,29 @@ describe('PasswordRecoveryPage', () => {
     expect(verifyPasswordRecovery).not.toHaveBeenCalled()
   })
 
+  it('honours the server retry delay when Supabase throttles a code request', async () => {
+    requestPasswordRecovery.mockRejectedValue(
+      Object.assign(new Error('Too many requests. Try again later.'), {
+        response: { status: 429, headers: { 'retry-after': '42' } },
+      }),
+    )
+    render(
+      <MemoryRouter>
+        <PasswordRecoveryPage />
+      </MemoryRouter>,
+    )
+
+    fireEvent.change(screen.getByLabelText('Email Address'), {
+      target: { value: 'person@example.com' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send OTP' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Too many requests. Try again later.',
+    )
+    expect(screen.getByRole('button', { name: 'Try again in 42s' })).toBeDisabled()
+  })
+
   it('distributes pasted OTP digits and supports keyboard navigation and deletion', async () => {
     render(
       <MemoryRouter initialEntries={['/recover-password']}>

@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.services.supabase_auth import (
     SupabaseAuthError,
     request_password_recovery,
+    resend_signup_confirmation,
     sign_in_with_password,
     sign_up,
     update_recovery_password,
@@ -31,6 +32,10 @@ def test_recovery_uses_supabase_auth_recovery_type_and_never_returns_tokens(
             "person@example.com",
             "https://app.example.com/recover-password",
         )
+        resend_signup_confirmation(
+            "person@example.com",
+            "https://app.example.com/login",
+        )
         result = verify_recovery_otp("person@example.com", "123456")
         update_recovery_password("recovery-session", "new password")
     finally:
@@ -46,18 +51,29 @@ def test_recovery_uses_supabase_auth_recovery_type_and_never_returns_tokens(
     }
     assert requests[1][0:2] == (
         "POST",
-        "https://example.supabase.co/auth/v1/verify",
+        "https://example.supabase.co/auth/v1/resend",
     )
     assert requests[1][2]["json"] == {
+        "type": "signup",
+        "email": "person@example.com",
+    }
+    assert requests[1][2]["params"] == {
+        "redirect_to": "https://app.example.com/login"
+    }
+    assert requests[2][0:2] == (
+        "POST",
+        "https://example.supabase.co/auth/v1/verify",
+    )
+    assert requests[2][2]["json"] == {
         "email": "person@example.com",
         "token": "123456",
         "type": "recovery",
     }
-    assert requests[2][0:2] == (
+    assert requests[3][0:2] == (
         "PUT",
         "https://example.supabase.co/auth/v1/user",
     )
-    assert requests[2][2]["json"] == {"password": "new password"}
+    assert requests[3][2]["json"] == {"password": "new password"}
     assert result["access_token"] == "recovery-session"
 
 

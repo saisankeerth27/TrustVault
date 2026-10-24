@@ -49,6 +49,11 @@ def create_app() -> FastAPI:
         max_body_bytes=settings.max_upload_size_bytes
         + UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES,
     )
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RequestIdMiddleware)
+    # Starlette applies the most recently added middleware outermost. Keep CORS
+    # outermost so browser clients receive CORS headers even when an inner
+    # middleware or the API returns an authentication error.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -57,8 +62,6 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
         expose_headers=["X-Request-ID"],
     )
-    app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(RequestIdMiddleware)
 
     register_exception_handlers(app)
     app.include_router(api_router)

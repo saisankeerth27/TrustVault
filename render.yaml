@@ -32,6 +32,8 @@ services:
         value: "10"
       - key: AUTH_RATE_LIMIT_WINDOW_SECONDS
         value: "60"
+      - key: AUTH_EMAIL_COOLDOWN_SECONDS
+        value: "60"
       # Private Supabase Storage configuration. Set these in the Render dashboard.
       # Keep the bucket private and never place these values in the frontend.
       - key: SUPABASE_URL
@@ -39,6 +41,8 @@ services:
       - key: SUPABASE_ANON_KEY
         sync: false
       - key: PASSWORD_RECOVERY_REDIRECT_URL
+        sync: false
+      - key: EMAIL_CONFIRMATION_REDIRECT_URL
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         sync: false

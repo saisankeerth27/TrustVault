@@ -44,8 +44,10 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     password_recovery_redirect_url: str = "http://localhost:5173/recover-password"
+    email_confirmation_redirect_url: str | None = None
     auth_rate_limit_attempts: int = 10
     auth_rate_limit_window_seconds: int = 60
+    auth_email_cooldown_seconds: int = 60
 
     audit_checkpoint_signing_key: SecretStr | None = None
     audit_checkpoint_path: str | None = None
@@ -107,6 +109,14 @@ class Settings(BaseSettings):
             raise ValueError("AUDIT_CHECKPOINT_PATH must be an absolute path.")
         return str(path)
 
+    @field_validator("email_confirmation_redirect_url", mode="before")
+    @classmethod
+    def empty_confirmation_redirect_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @field_validator("supabase_url")
     @classmethod
     def secure_supabase_url(cls, value: str | None) -> str | None:
@@ -162,7 +172,11 @@ class Settings(BaseSettings):
             raise ValueError("BCRYPT_ROUNDS must be between 4 and 16.")
         return value
 
-    @field_validator("auth_rate_limit_attempts", "auth_rate_limit_window_seconds")
+    @field_validator(
+        "auth_rate_limit_attempts",
+        "auth_rate_limit_window_seconds",
+        "auth_email_cooldown_seconds",
+    )
     @classmethod
     def positive_rate_limit(cls, value: int) -> int:
         if value <= 0:
@@ -204,6 +218,20 @@ class Settings(BaseSettings):
                 "PASSWORD_RECOVERY_REDIRECT_URL must use an allowed CORS origin."
             )
 
+        confirmation_redirect = urlsplit(self.confirmation_redirect_url)
+        if (
+            confirmation_redirect.scheme not in {"http", "https"}
+            or not confirmation_redirect.netloc
+            or confirmation_redirect.username
+            or confirmation_redirect.password
+            or confirmation_redirect.fragment
+            or f"{confirmation_redirect.scheme}://{confirmation_redirect.netloc}"
+            not in origins
+        ):
+            raise ValueError(
+                "EMAIL_CONFIRMATION_REDIRECT_URL must use an allowed CORS origin."
+            )
+
         if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
             raise ValueError("SameSite=None requires AUTH_COOKIE_SECURE=true.")
 
@@ -234,6 +262,20 @@ class Settings(BaseSettings):
                 )
 
         return self
+
+    @property
+    def confirmation_redirect_url(self) -> str:
+        """A stable, allow-listed destination for signup confirmation emails.
+
+        Older deployments only configured the recovery redirect.  In that case,
+        use its origin and the login route rather than trusting a request Origin
+        header (which browsers may omit and non-browser clients control).
+        """
+
+        if self.email_confirmation_redirect_url:
+            return self.email_confirmation_redirect_url
+        recovery_url = urlsplit(self.password_recovery_redirect_url)
+        return f"{recovery_url.scheme}://{recovery_url.netloc}/login"
 
     def require_jwt_secret(self) -> str:
         if not self.jwt_secret:

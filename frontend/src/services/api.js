@@ -9,7 +9,10 @@ export const isApiConfigured = apiBaseUrl.length > 0
 
 export const apiClient = axios.create({
   baseURL: apiBaseUrl || undefined,
-  timeout: 10_000,
+  // Supabase-backed signup and recovery calls may wait for email dispatch.
+  // Keep this above the backend provider timeout so the browser does not
+  // report a valid in-flight request as failed and invite a duplicate retry.
+  timeout: 20_000,
   withCredentials: true,
   headers: {
     Accept: 'application/json',

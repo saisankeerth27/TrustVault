@@ -8,7 +8,10 @@ import httpx
 
 from app.core.config import get_settings
 
-_TIMEOUT = httpx.Timeout(8.0, connect=3.0)
+# Email-backed sign-up and recovery calls can take longer than token validation.
+# Keep a bounded timeout, but avoid treating a healthy provider's slower mail
+# dispatch as an immediate service failure.
+_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 
 
 class SupabaseAuthError(Exception):
@@ -95,6 +98,17 @@ def sign_in_with_password(email: str, password: str) -> dict[str, Any]:
         "token",
         payload={"email": email, "password": password},
         params={"grant_type": "password"},
+    )
+
+
+def resend_signup_confirmation(email: str, redirect_to: str) -> None:
+    """Request a replacement confirmation email without exposing account state."""
+
+    _request(
+        "POST",
+        "resend",
+        payload={"type": "signup", "email": email},
+        params={"redirect_to": redirect_to},
     )
 
 

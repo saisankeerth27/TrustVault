@@ -167,6 +167,50 @@ def test_confirmation_pending_signup_is_audited_without_claiming_delivery(
     assert len(registered_events) == 1
 
 
+def test_confirmation_resend_uses_the_configured_redirect_and_is_generic(
+    api_client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    email = unique_email("supabase_confirmation_resend")
+    calls = []
+    monkeypatch.setattr(
+        "app.api.auth.resend_signup_confirmation",
+        lambda requested_email, redirect: calls.append((requested_email, redirect)),
+    )
+
+    response = api_client.post(
+        "/api/v1/auth/supabase/resend-confirmation",
+        json={"email": f" {email.upper()} "},
+        headers={"Origin": "http://localhost:5173"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "If an account is awaiting confirmation, a new email will be sent."
+    }
+    assert response.headers["cache-control"] == "no-store"
+    assert calls == [(email, "http://localhost:5173/login")]
+    event = db_session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == AuditAction.USER_REGISTERED.value,
+            AuditEvent.outcome == AuditOutcome.SUCCESS.value,
+        )
+    )
+    assert event is not None
+    assert event.actor_id is None
+    assert email not in str(event.details)
+
+    blocked = api_client.post(
+        "/api/v1/auth/supabase/resend-confirmation",
+        json={"email": email},
+        headers={"Origin": "http://localhost:5173"},
+    )
+    assert blocked.status_code == 429
+    assert int(blocked.headers["retry-after"]) >= 1
+    assert len(calls) == 1
+
+
 def test_immediate_supabase_signup_creates_normal_profile_and_audits(
     api_client: TestClient,
     db_session: Session,
