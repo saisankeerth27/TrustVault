@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
@@ -16,6 +16,7 @@ import { getApiErrorMessage } from '@/services/api'
 
 const PASSWORD_MIN_LENGTH = 12
 const PASSWORD_MAX_BYTES = 72
+const OTP_LENGTH = 6
 const emailSchema = z.string().trim().email('Enter a valid email address.')
 const passwordSchema = z
   .string()
@@ -34,13 +35,15 @@ export function PasswordRecoveryPage() {
   const navigate = useNavigate()
   const [step, setStep] = useState('email')
   const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
+  const [codeDigits, setCodeDigits] = useState(Array(OTP_LENGTH).fill(''))
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [isBusy, setIsBusy] = useState(false)
   const [cooldown, setCooldown] = useState(0)
+  const codeInputs = useRef([])
+  const code = codeDigits.join('')
 
   useEffect(() => {
     if (cooldown <= 0) return undefined
@@ -63,6 +66,7 @@ export function PasswordRecoveryPage() {
       const normalizedEmail = parsed.data.toLowerCase()
       await requestPasswordRecovery(normalizedEmail)
       setEmail(normalizedEmail)
+      setCodeDigits(Array(OTP_LENGTH).fill(''))
       setStep('code')
       setCooldown(60)
       setMessage(
@@ -104,13 +108,70 @@ export function PasswordRecoveryPage() {
     setIsBusy(true)
     try {
       await verifyPasswordRecovery(email, code)
-      setCode('')
+      setCodeDigits(Array(OTP_LENGTH).fill(''))
       setStep('password')
     } catch (verifyError) {
       setError(recoveryError(verifyError))
     } finally {
       setIsBusy(false)
     }
+  }
+
+  function updateCodeFromInput(index, value) {
+    const digits = value.replace(/[^0-9]/g, '')
+    if (!digits) {
+      if (!value) {
+        setCodeDigits((current) =>
+          current.map((digit, digitIndex) => (digitIndex === index ? '' : digit)),
+        )
+      }
+      return
+    }
+
+    const insertedDigits = digits.slice(0, OTP_LENGTH - index).split('')
+    setCodeDigits((current) => {
+      const next = [...current]
+      insertedDigits.forEach((digit, offset) => {
+        next[index + offset] = digit
+      })
+      return next
+    })
+    codeInputs.current[Math.min(index + insertedDigits.length, OTP_LENGTH - 1)]?.focus()
+  }
+
+  function handleCodeKeyDown(event, index) {
+    if (event.key === 'Backspace' && !codeDigits[index] && index > 0) {
+      event.preventDefault()
+      setCodeDigits((current) =>
+        current.map((digit, digitIndex) => (digitIndex === index - 1 ? '' : digit)),
+      )
+      codeInputs.current[index - 1]?.focus()
+    } else if (event.key === 'ArrowLeft' && index > 0) {
+      event.preventDefault()
+      codeInputs.current[index - 1]?.focus()
+    } else if (event.key === 'ArrowRight' && index < OTP_LENGTH - 1) {
+      event.preventDefault()
+      codeInputs.current[index + 1]?.focus()
+    }
+  }
+
+  function handleCodePaste(event, index) {
+    event.preventDefault()
+    const digits = event.clipboardData
+      .getData('text')
+      .replace(/[^0-9]/g, '')
+      .slice(0, OTP_LENGTH - index)
+    if (!digits) return
+
+    const pastedDigits = digits.split('')
+    setCodeDigits((current) => {
+      const next = [...current]
+      pastedDigits.forEach((digit, offset) => {
+        next[index + offset] = digit
+      })
+      return next
+    })
+    codeInputs.current[Math.min(index + pastedDigits.length, OTP_LENGTH - 1)]?.focus()
   }
 
   async function updatePassword(event) {
@@ -131,7 +192,7 @@ export function PasswordRecoveryPage() {
       await updatePasswordRecovery(password)
       setPassword('')
       setConfirmPassword('')
-      setCode('')
+      setCodeDigits(Array(OTP_LENGTH).fill(''))
       setEmail('')
       navigate('/login', {
         replace: true,
@@ -147,12 +208,12 @@ export function PasswordRecoveryPage() {
   function returnToEmail() {
     setError('')
     setMessage('')
-    setCode('')
+    setCodeDigits(Array(OTP_LENGTH).fill(''))
     setStep('email')
   }
 
   const titles = {
-    email: 'Reset Your Password',
+    email: 'Forgot Password?',
     code: 'Verify Your Email',
     password: 'Create a New Password',
   }
@@ -243,7 +304,7 @@ export function PasswordRecoveryPage() {
               </div>
               <Button type="submit" className="w-full" size="lg" disabled={isBusy}>
                 {isBusy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : null}
-                Send Verification Code
+                Send OTP
               </Button>
             </form>
           ) : null}
@@ -251,31 +312,51 @@ export function PasswordRecoveryPage() {
           {step === 'code' ? (
             <form className="space-y-5" onSubmit={verifyCode} noValidate>
               <div className="space-y-2">
-                <label htmlFor="recovery-code" className="text-sm font-medium">
+                <p id="recovery-code-label" className="text-sm font-medium">
                   Six-digit verification code
-                </label>
-                <Input
-                  id="recovery-code"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]{6}"
-                  maxLength={6}
-                  required
-                  value={code}
-                  onChange={(event) =>
-                    setCode(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))
-                  }
-                  disabled={isBusy}
+                </p>
+                <div
+                  className="flex justify-between gap-2"
+                  role="group"
+                  aria-labelledby="recovery-code-label"
                   aria-describedby="recovery-code-help"
-                />
+                >
+                  {codeDigits.map((digit, index) => (
+                    <Input
+                      key={index}
+                      ref={(element) => {
+                        codeInputs.current[index] = element
+                      }}
+                      aria-label={`Verification code digit ${index + 1}`}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                      pattern="[0-9]*"
+                      maxLength={OTP_LENGTH}
+                      required
+                      value={digit}
+                      onChange={(event) =>
+                        updateCodeFromInput(index, event.target.value)
+                      }
+                      onKeyDown={(event) => handleCodeKeyDown(event, index)}
+                      onPaste={(event) => handleCodePaste(event, index)}
+                      disabled={isBusy}
+                      className="size-12 px-0 text-center text-lg font-semibold sm:size-14"
+                    />
+                  ))}
+                </div>
                 <p id="recovery-code-help" className="text-xs text-muted-foreground">
                   Sent to {email}
                 </p>
               </div>
-              <Button type="submit" className="w-full" size="lg" disabled={isBusy}>
+              <Button
+                type="submit"
+                className="w-full"
+                size="lg"
+                disabled={isBusy || code.length !== OTP_LENGTH}
+              >
                 {isBusy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : null}
-                Verify Code
+                Verify OTP
               </Button>
               <div className="flex items-center justify-between text-sm">
                 <button

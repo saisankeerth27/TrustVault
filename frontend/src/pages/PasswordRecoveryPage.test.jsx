@@ -46,7 +46,7 @@ describe('PasswordRecoveryPage', () => {
     fireEvent.change(screen.getByLabelText('Email Address'), {
       target: { value: '  Person@Example.COM ' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send OTP' }))
 
     expect(
       await screen.findByRole('heading', { name: 'Verify Your Email' }),
@@ -58,10 +58,21 @@ describe('PasswordRecoveryPage', () => {
       ),
     ).toBeInTheDocument()
 
-    const codeInput = screen.getByLabelText('Six-digit verification code')
-    fireEvent.change(codeInput, { target: { value: '12a345678' } })
-    expect(codeInput).toHaveValue('123456')
-    fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }))
+    const codeInputs = Array.from({ length: 6 }, (_, index) =>
+      screen.getByLabelText(`Verification code digit ${index + 1}`),
+    )
+    expect(screen.getByRole('button', { name: 'Verify OTP' })).toBeDisabled()
+    fireEvent.change(codeInputs[0], { target: { value: '12a345678' } })
+    expect(codeInputs.map((input) => input.value)).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+    ])
+    expect(screen.getByRole('button', { name: 'Verify OTP' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Verify OTP' }))
     expect(
       await screen.findByRole('heading', { name: 'Create a New Password' }),
     ).toBeInTheDocument()
@@ -93,7 +104,7 @@ describe('PasswordRecoveryPage', () => {
     ).toBeInTheDocument()
   })
 
-  it('rejects invalid email and invalid code without contacting Supabase', async () => {
+  it('rejects invalid email and prevents incomplete OTP verification', async () => {
     render(
       <MemoryRouter>
         <PasswordRecoveryPage />
@@ -102,7 +113,7 @@ describe('PasswordRecoveryPage', () => {
     fireEvent.change(screen.getByLabelText('Email Address'), {
       target: { value: 'not-an-email' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send OTP' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Enter a valid email address.',
     )
@@ -111,15 +122,50 @@ describe('PasswordRecoveryPage', () => {
     fireEvent.change(screen.getByLabelText('Email Address'), {
       target: { value: 'person@example.com' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send OTP' }))
     await screen.findByRole('heading', { name: 'Verify Your Email' })
-    fireEvent.change(screen.getByLabelText('Six-digit verification code'), {
-      target: { value: '123' },
+    fireEvent.change(screen.getByLabelText('Verification code digit 1'), {
+      target: { value: '1' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Enter the six-digit verification code.',
-    )
+    expect(screen.getByRole('button', { name: 'Verify OTP' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Verify OTP' }))
     expect(verifyPasswordRecovery).not.toHaveBeenCalled()
+  })
+
+  it('distributes pasted OTP digits and supports keyboard navigation and deletion', async () => {
+    render(
+      <MemoryRouter initialEntries={['/recover-password']}>
+        <PasswordRecoveryPage />
+      </MemoryRouter>,
+    )
+
+    fireEvent.change(screen.getByLabelText('Email Address'), {
+      target: { value: 'person@example.com' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send OTP' }))
+    const firstDigit = await screen.findByLabelText('Verification code digit 1')
+    const secondDigit = screen.getByLabelText('Verification code digit 2')
+    const thirdDigit = screen.getByLabelText('Verification code digit 3')
+    const fourthDigit = screen.getByLabelText('Verification code digit 4')
+    const fifthDigit = screen.getByLabelText('Verification code digit 5')
+    const sixthDigit = screen.getByLabelText('Verification code digit 6')
+
+    firstDigit.focus()
+    fireEvent.keyDown(firstDigit, { key: 'ArrowRight' })
+    expect(secondDigit).toHaveFocus()
+    fireEvent.keyDown(secondDigit, { key: 'ArrowLeft' })
+    expect(firstDigit).toHaveFocus()
+    fireEvent.paste(firstDigit, {
+      clipboardData: { getData: () => '12a345678' },
+    })
+    expect([firstDigit, secondDigit, thirdDigit, fourthDigit, fifthDigit, sixthDigit].map(
+      (input) => input.value,
+    )).toEqual(['1', '2', '3', '4', '5', '6'])
+    expect(sixthDigit).toHaveFocus()
+
+    fireEvent.change(sixthDigit, { target: { value: '' } })
+    fireEvent.keyDown(sixthDigit, { key: 'Backspace' })
+    expect(fifthDigit).toHaveFocus()
+    expect(fifthDigit).toHaveValue('')
   })
 })
