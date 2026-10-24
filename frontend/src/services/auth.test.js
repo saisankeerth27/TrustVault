@@ -46,9 +46,31 @@ describe('Supabase-backed application authentication', () => {
     expect(apiClient.post).toHaveBeenCalledWith('/api/v1/auth/session')
   })
 
-  it('creates only normal-user metadata and waits for required email confirmation', async () => {
+  it('creates normal-user metadata without confirmation redirect and returns to signed-out state', async () => {
+    supabase.auth.signOut.mockResolvedValue({ error: null })
+    await expect(
+      register({
+        name: 'New User',
+        email: ' Person@Example.COM ',
+        password: 'not-trimmed ',
+      }),
+    ).resolves.toEqual({
+      accountCreated: true,
+      requiresEmailConfirmation: false,
+    })
+
+    expect(supabase.auth.signUp).toHaveBeenCalledWith({
+      email: 'person@example.com',
+      password: 'not-trimmed ',
+      options: { data: { name: 'New User' } },
+    })
+    expect(apiClient.post).toHaveBeenCalledWith('/api/v1/auth/session')
+    expect(supabase.auth.signOut).toHaveBeenCalledWith({ scope: 'local' })
+  })
+
+  it('does not create a TrustVault profile or treat confirmation as completed when no session is returned', async () => {
     supabase.auth.signUp.mockResolvedValue({
-      data: { session: null },
+      data: { session: null, user: { id: 'provider-user' } },
       error: null,
     })
     await expect(
@@ -57,18 +79,19 @@ describe('Supabase-backed application authentication', () => {
         email: ' Person@Example.COM ',
         password: 'not-trimmed ',
       }),
-    ).resolves.toEqual({ requiresEmailConfirmation: true, user: null })
+    ).resolves.toEqual({
+      accountCreated: true,
+      requiresEmailConfirmation: true,
+    })
 
     expect(supabase.auth.signUp).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         email: 'person@example.com',
         password: 'not-trimmed ',
-        options: expect.objectContaining({
-          data: { name: 'New User' },
-          emailRedirectTo: expect.stringMatching(/\/login$/),
-        }),
-      }),
+        options: { data: { name: 'New User' } },
+      },
     )
     expect(apiClient.post).not.toHaveBeenCalled()
+    expect(supabase.auth.signOut).not.toHaveBeenCalled()
   })
 })

@@ -108,11 +108,16 @@ export function RegisterPage() {
       })
       if (registration.requiresEmailConfirmation) {
         setRegistrationMessage(
-          'Check your email to confirm your account, then sign in to continue.',
+          registration.accountCreated
+            ? 'Supabase still requires email confirmation. Ask the project owner to disable Authentication → Providers → Email → Confirm email. The existing account may need an administrator to resolve its unconfirmed status; do not register it again.'
+            : 'Supabase did not create an active session. Ask the project owner to check the email-confirmation setting before trying again.',
         )
         return
       }
-      navigate(destination, { replace: true })
+      navigate('/login', {
+        replace: true,
+        state: { registrationMessage: 'Account created successfully. Please log in.' },
+      })
     } catch (error) {
       setServerError(getApiErrorMessage(error))
     }
@@ -187,8 +192,7 @@ export function RegisterPage() {
             </p>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Create account</h1>
             <p className="text-sm leading-6 text-muted-foreground">
-              Register as a normal user. You will be signed in automatically after creating your
-              account.
+              Create a normal user account, then sign in from the Login page.
             </p>
           </div>
 

@@ -151,6 +151,11 @@ export function LoginPage() {
             </p>
           </div>
 
+          {typeof location.state?.registrationMessage === 'string' ? (
+            <div role="status" className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
+              {location.state.registrationMessage}
+            </div>
+          ) : null}
           {typeof location.state?.recoveryMessage === 'string' ? (
             <div role="status" className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
               {location.state.recoveryMessage}

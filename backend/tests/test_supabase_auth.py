@@ -60,15 +60,19 @@ def test_recovery_uses_supabase_auth_recovery_type_and_never_returns_tokens(
 
 
 def test_missing_supabase_configuration_fails_without_provider_request(monkeypatch) -> None:
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
-    get_settings.cache_clear()
+    class MissingConfiguration:
+        def require_supabase_auth(self) -> None:
+            raise RuntimeError("Supabase Auth is not configured.")
+
+    monkeypatch.setattr(
+        "app.services.supabase_auth.get_settings",
+        lambda: MissingConfiguration(),
+    )
+
     try:
-        try:
-            verify_recovery_otp("person@example.com", "123456")
-        except SupabaseAuthError as exc:
-            assert exc.status_code is None
-        else:
-            raise AssertionError("Missing Supabase configuration must fail closed.")
-    finally:
-        get_settings.cache_clear()
+        verify_recovery_otp("person@example.com", "123456")
+    except SupabaseAuthError as exc:
+        assert exc.status_code is None
+        assert exc.configuration_missing
+    else:
+        raise AssertionError("Missing Supabase configuration must fail closed.")

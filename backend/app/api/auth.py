@@ -260,6 +260,7 @@ def _commit_with_success_audit(
     action: AuditAction,
     actor: User | None,
     details: dict[str, object] | None = None,
+    failure_detail: str = "The request could not be completed.",
 ) -> None:
     try:
         record_event(
@@ -278,7 +279,7 @@ def _commit_with_success_audit(
         logger.error("Authentication action could not be committed with its audit event.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="The request could not be completed.",
+            detail=failure_detail,
         ) from exc
 
 
@@ -565,11 +566,17 @@ def request_recovery(
             get_settings().password_recovery_redirect_url,
         )
     except SupabaseAuthError as exc:
+        failure_reason = (
+            "missing_configuration" if exc.configuration_missing else "provider_error"
+        )
         _record_recovery_event(
             session,
             action=AuditAction.PASSWORD_RESET_REQUEST_FAILED,
             outcome=AuditOutcome.FAILURE,
-            details={"reason": "provider_error", "status_code": exc.status_code or 0},
+            details={
+                "reason": failure_reason,
+                "status_code": exc.status_code or 0,
+            },
         )
         if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
             raise HTTPException(
@@ -577,17 +584,35 @@ def request_recovery(
                 detail="Too many requests. Try again later.",
                 headers={"Retry-After": "60"},
             ) from exc
-        logger.warning("Supabase password recovery request failed.")
+        if exc.configuration_missing:
+            logger.error(
+                "Supabase password recovery is unavailable because auth "
+                "configuration is missing."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Password recovery is not configured. Set SUPABASE_URL and "
+                    "SUPABASE_ANON_KEY in the backend environment, then restart it."
+                ),
+            ) from exc
+        logger.warning(
+            "Supabase password recovery request failed status=%s.",
+            exc.status_code or 0,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Password recovery is temporarily unavailable. Try again later.",
         ) from exc
 
-    _record_recovery_event(
+    _commit_with_success_audit(
         session,
         action=AuditAction.PASSWORD_RESET_REQUESTED,
-        outcome=AuditOutcome.SUCCESS,
-        details={"request_status": "provider_accepted"},
+        actor=None,
+        details={
+            "resource_type": "AUTH",
+            "request_status": "provider_accepted",
+        },
     )
     return {
         "message": (
@@ -613,6 +638,10 @@ def verify_recovery(
             action=AuditAction.PASSWORD_RESET_VERIFICATION_FAILED,
             outcome=AuditOutcome.FAILURE,
             details={"reason": "provider_rejected_or_unavailable"},
+        )
+        logger.warning(
+            "Supabase recovery OTP verification failed status=%s.",
+            exc.status_code or 0,
         )
         if exc.status_code == 429:
             raise HTTPException(
@@ -658,12 +687,11 @@ def verify_recovery(
     if actor is not None:
         actor.supabase_auth_id = UUID(identity_id)
         details["target_user_id"] = str(actor.id)
-    _record_recovery_event(
+    _commit_with_success_audit(
         session,
         action=AuditAction.PASSWORD_RESET_VERIFICATION_SUCCEEDED,
-        outcome=AuditOutcome.SUCCESS,
         actor=actor,
-        details=details,
+        details={"resource_type": "AUTH", **details},
     )
     _set_recovery_cookie(response, access_token)
     _no_store(response)
@@ -733,16 +761,29 @@ def update_recovery(
             detail="The password could not be updated. Check the requirements and retry.",
         ) from exc
 
-    _record_recovery_event(
-        session,
-        action=AuditAction.PASSWORD_CHANGED,
-        outcome=AuditOutcome.SUCCESS,
-        actor=actor,
-        details={
-            "target_user_id": str(actor.id),
-            "source": "verified_account_recovery",
-        },
-    )
+    try:
+        _commit_with_success_audit(
+            session,
+            action=AuditAction.PASSWORD_CHANGED,
+            actor=actor,
+            details={
+                "resource_type": "AUTH",
+                "target_user_id": str(actor.id),
+                "source": "verified_account_recovery",
+            },
+            failure_detail=(
+                "Supabase confirmed the password update, but TrustVault could not "
+                "save its audit event. Contact an administrator before retrying."
+            ),
+        )
+    except HTTPException as exc:
+        headers = _clear_recovery_cookie(response)
+        headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            headers=headers,
+        ) from exc
     _clear_recovery_cookie(response)
     _no_store(response)
     return {"message": "Your password was updated. Sign in with your new password."}

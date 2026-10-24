@@ -178,11 +178,11 @@ The health endpoint reports **process health only**. It does not check the datab
 
 Configure Supabase before enabling the new authentication code:
 
-1. In **Authentication → Providers → Email**, enable email/password sign-in and set your email-confirmation policy.
-2. In **Authentication → Email Templates → Reset Password**, use the six-digit `{{ .Token }}` template. Do not put the OTP in a URL or log it.
-3. In **Project Settings → Authentication → SMTP Settings**, configure a trusted SMTP provider. Keep SMTP credentials in the protected Supabase dashboard only; never put them in source or `VITE_*` variables.
+1. In **Authentication → Sign In / Providers → Email**, keep email/password sign-in enabled and turn **Confirm email** off for the requested no-confirmation signup experience. The application cannot override this project-level setting. Verify it in the dashboard; it has not been changed or checked from this workspace. Do not manually mark existing users confirmed to compensate.
+2. In **Authentication → Email Templates → Reset Password**, use an OTP-only template that displays `{{ .Token }}` as the six-digit code and does not use `{{ .ConfirmationURL }}` as the user-facing recovery mechanism. Review Auth mail logs after a controlled test. The template has not been verified here.
+3. In **Project Settings → Authentication → SMTP Settings**, verify the host/port, sender, authentication, transport security, and delivery logs with a current SMTP credential configured only in the dashboard. Keep SMTP credentials there; never put them in source or `VITE_*` variables. SMTP delivery has not been verified here.
 4. In **Authentication → URL Configuration**, allow the exact frontend `/login` and `/recover-password` redirect URLs for local and deployed environments.
-5. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the matching `PASSWORD_RECOVERY_REDIRECT_URL` on the backend. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend to the same project. Keep the service-role key server-side.
+5. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the matching `PASSWORD_RECOVERY_REDIRECT_URL` in `backend/.env`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `frontend/.env` to the same project. For local development, use the public anon/publishable key from **Project Settings → API Keys** in both places; never use the service-role/secret key for these settings. Restart both servers after changing environment files.
 6. Back up the database and schedule a maintenance window. Stop the old backend before applying migration `0009`: it clears legacy password hashes and revokes old refresh sessions, and it cannot be rolled back to restore credentials.
 7. With the new backend code and migration available, run `alembic upgrade head`, then import existing users:
 
@@ -192,7 +192,7 @@ Configure Supabase before enabling the new authentication code:
 
    The import creates confirmed, passwordless provider identities. Users must use password recovery to set their Supabase Auth password. Resolve any import failure before enabling sign-in.
 8. Provision an initial administrator with `python -m scripts.create_user --email admin@example.com --name "Admin User" --role ADMINISTRATOR`. It creates both the Supabase Auth identity and the TrustVault database row; never grant roles through Supabase user metadata.
-9. Enable the new frontend/backend only after migration, import, provider settings, exact CORS origin, HTTPS cookie settings, and a tested administrator identity are ready.
+9. Review any provider security notification for password changes. Do not try to bypass a notification Supabase requires. Enable the new frontend/backend only after migration, import, provider settings, exact CORS origin, HTTPS cookie settings, and a tested administrator identity are ready.
 
 Recovery request responses intentionally do not reveal whether an email is registered. A successful response means Supabase accepted the request, not that SMTP delivered it. Live email delivery and production browser-cookie behavior still require verification.
 
@@ -222,7 +222,7 @@ The Vite development server is available at <http://localhost:5173>. `VITE_API_B
 | Route | Purpose | Access |
 |-------|---------|--------|
 | `/login` | Login form and session bootstrap | Public |
-| `/register` | Supabase Auth user registration; may require email confirmation | Public |
+| `/register` | Supabase Auth normal-user registration; requires the project Confirm email setting to be off for login-only signup | Public |
 | `/dashboard` | Live document, owned, and shared counts with recent permitted documents | Any signed-in user |
 | `/documents` | Searchable library with name/category/date filters for users and owner filtering for administrator oversight | Any signed-in user; includes owned and directly shared documents |
 | `/upload` | Dedicated validated upload page with progress feedback | Any signed-in active user |

@@ -14,9 +14,15 @@ _TIMEOUT = httpx.Timeout(8.0, connect=3.0)
 class SupabaseAuthError(Exception):
     """A safe-to-report failure from Supabase Auth."""
 
-    def __init__(self, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        status_code: int | None = None,
+        *,
+        configuration_missing: bool = False,
+    ) -> None:
         super().__init__("Supabase Auth request failed.")
         self.status_code = status_code
+        self.configuration_missing = configuration_missing
 
 
 def _request(
@@ -30,7 +36,7 @@ def _request(
     try:
         base_url, anon_key = get_settings().require_supabase_auth()
     except RuntimeError as exc:
-        raise SupabaseAuthError from exc
+        raise SupabaseAuthError(configuration_missing=True) from exc
     headers = {"apikey": anon_key, "Accept": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"

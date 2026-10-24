@@ -7,18 +7,35 @@ export async function register(details) {
   const { data, error } = await supabase.auth.signUp({
     email: details.email.trim().toLowerCase(),
     password: details.password,
-    options: {
-      data: { name: details.name },
-      emailRedirectTo: `${window.location.origin}/login`,
-    },
+    options: { data: { name: details.name } },
   })
   if (error) {
     throw new Error('Unable to create the account. Check the details or try again later.')
   }
   if (!data.session) {
-    return { requiresEmailConfirmation: true, user: null }
+    return {
+      accountCreated: Boolean(data.user),
+      requiresEmailConfirmation: true,
+    }
   }
-  return syncSupabaseSession(data.session)
+
+  await syncSupabaseSession(data.session)
+  let signOutResult
+  try {
+    signOutResult = await supabase.auth.signOut({ scope: 'local' })
+  } catch {
+    setAccessToken(null)
+    throw new Error(
+      'Your account was created, but the temporary session could not be cleared. Reload the page before signing in.',
+    )
+  }
+  setAccessToken(null)
+  if (signOutResult.error) {
+    throw new Error(
+      'Your account was created, but the temporary session could not be cleared. Reload the page before signing in.',
+    )
+  }
+  return { accountCreated: true, requiresEmailConfirmation: false }
 }
 
 export async function login(credentials) {

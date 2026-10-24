@@ -73,15 +73,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   const register = useCallback(async (details) => {
-    const result = await registerRequest(details)
-    if (result.requiresEmailConfirmation) {
-      setUser(null)
-      setStatus('unauthenticated')
-      return result
-    }
-    setUser(result)
-    setStatus('authenticated')
-    return { user: result, requiresEmailConfirmation: false }
+    return registerRequest(details)
   }, [])
 
   const logout = useCallback(async () => {

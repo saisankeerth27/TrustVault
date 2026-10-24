@@ -81,6 +81,36 @@ def test_recovery_request_provider_failure_returns_safe_error_and_audits_failure
     assert event.actor_id is None
 
 
+def test_recovery_request_reports_missing_backend_configuration(
+    api_client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    def missing_configuration(*_args):
+        raise SupabaseAuthError(configuration_missing=True)
+
+    monkeypatch.setattr(
+        "app.api.auth.request_password_recovery",
+        missing_configuration,
+    )
+
+    response = api_client.post(
+        "/api/v1/auth/recovery/request",
+        json={"email": unique_email("recovery_missing_config")},
+    )
+
+    assert response.status_code == 503
+    assert "SUPABASE_URL" in response.json()["error"]["message"]
+    assert "SUPABASE_ANON_KEY" in response.json()["error"]["message"]
+    event = db_session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == AuditAction.PASSWORD_RESET_REQUEST_FAILED.value
+        )
+    )
+    assert event is not None
+    assert event.details["reason"] == "missing_configuration"
+
+
 def test_recovery_request_rate_limit_is_enforced(
     api_client: TestClient,
     monkeypatch,
@@ -263,6 +293,61 @@ def test_verified_recovery_updates_supabase_and_audits_password_changed(
     assert event.actor_id == user.id
     assert event.outcome == AuditOutcome.SUCCESS.value
     assert "A new long secure password 123!" not in str(event.details)
+
+
+def test_password_update_audit_failure_reports_partial_success_and_clears_cookie(
+    api_client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    email = unique_email("recovery_audit_failure")
+    register(api_client, email=email)
+    user = db_session.scalar(select(User).where(User.email == email))
+    assert user is not None
+    monkeypatch.setattr(
+        "app.api.auth.verify_recovery_otp",
+        lambda _email, _token: {
+            "access_token": "recovery-session",
+            "user": {"id": str(user.id), "email": email},
+        },
+    )
+    monkeypatch.setattr(
+        "app.api.auth.get_supabase_user",
+        lambda _token: {"id": str(user.id), "email": email},
+    )
+    updates = []
+    monkeypatch.setattr(
+        "app.api.auth.update_recovery_password",
+        lambda token, password: updates.append((token, password)),
+    )
+    verify_response = api_client.post(
+        "/api/v1/auth/recovery/verify",
+        json={"email": email, "token": "123456"},
+    )
+    assert verify_response.status_code == 200
+
+    def fail_audit(*_args, **_kwargs):
+        raise RuntimeError("audit database unavailable")
+
+    monkeypatch.setattr("app.api.auth.record_event", fail_audit)
+    response = api_client.post(
+        "/api/v1/auth/recovery/update-password",
+        json={"password": "A new long secure password 789!"},
+    )
+
+    assert response.status_code == 500
+    assert (
+        "Supabase confirmed the password update"
+        in response.json()["error"]["message"]
+    )
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert response.headers["cache-control"] == "no-store"
+    assert updates == [("recovery-session", "A new long secure password 789!")]
+    assert db_session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == AuditAction.PASSWORD_CHANGED.value
+        )
+    ) is None
 
 
 def test_expired_recovery_cookie_is_cleared(
