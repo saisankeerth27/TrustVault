@@ -165,11 +165,8 @@ export function AppLayout() {
         </main>
 
         <footer className="border-t bg-muted/40">
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-            <p>TrustVault &mdash; tamper-evident document sharing</p>
-            <p>
-              Administrator audit history, signed checkpoints, and integrity verification.
-            </p>
+          <div className="mx-auto w-full max-w-6xl px-4 py-6 text-xs text-muted-foreground sm:px-6 lg:px-8">
+            <p>TrustVault</p>
           </div>
         </footer>
       </div>

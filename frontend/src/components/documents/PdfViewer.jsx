@@ -21,11 +21,13 @@ export function PdfViewer({ blob, filename }) {
   const [pdfDoc, setPdfDoc] = useState(null)
   const [pageNum, setPageNum] = useState(1)
   const [numPages, setNumPages] = useState(0)
-  const [scale, setScale] = useState(1.2)
+  const [scale, setScale] = useState(0.9)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
   const [renderError, setRenderError] = useState(null)
+  const [textLayerError, setTextLayerError] = useState(null)
   const canvasRef = useRef(null)
+  const textLayerRef = useRef(null)
   const renderTaskRef = useRef(null)
 
   // Load PDF Document from blob
@@ -92,9 +94,10 @@ export function PdfViewer({ blob, filename }) {
 
     async function renderPage() {
       setRenderError(null)
+      setTextLayerError(null)
       try {
         const page = await pdfDoc.getPage(pageNum)
-        if (!isCurrent || !canvasRef.current) {
+        if (!isCurrent || !canvasRef.current || !textLayerRef.current) {
           return
         }
 
@@ -107,6 +110,15 @@ export function PdfViewer({ blob, filename }) {
         canvas.height = Math.floor(viewport.height * pixelRatio)
         canvas.style.width = `${Math.floor(viewport.width)}px`
         canvas.style.height = `${Math.floor(viewport.height)}px`
+        const textLayerContainer = textLayerRef.current
+        textLayerContainer.replaceChildren()
+        textLayerContainer.style.width = canvas.style.width
+        textLayerContainer.style.height = canvas.style.height
+        textLayerContainer.style.setProperty('--scale-factor', String(scale))
+        textLayerContainer.style.setProperty('--total-scale-factor', String(scale))
+        textLayerContainer.style.setProperty('--user-unit', '1')
+        textLayerContainer.style.setProperty('--scale-round-x', '1px')
+        textLayerContainer.style.setProperty('--scale-round-y', '1px')
 
         const transform =
           pixelRatio !== 1 ? [pixelRatio, 0, 0, pixelRatio, 0, 0] : null
@@ -119,6 +131,23 @@ export function PdfViewer({ blob, filename }) {
         renderTaskRef.current = renderTask
 
         await renderTask.promise
+        if (!isCurrent) {
+          return
+        }
+        try {
+          const textLayer = new pdfjsLib.TextLayer({
+            textContentSource: page.streamTextContent(),
+            container: textLayerContainer,
+            viewport,
+          })
+          textLayerContainer.style.width = canvas.style.width
+          textLayerContainer.style.height = canvas.style.height
+          await textLayer.render()
+        } catch {
+          if (isCurrent) {
+            setTextLayerError('Text selection is unavailable for this PDF page.')
+          }
+        }
       } catch (err) {
         if (err?.name === 'RenderingCancelledException') {
           return
@@ -276,6 +305,11 @@ export function PdfViewer({ blob, filename }) {
 
       {/* Canvas container */}
       <div className="flex min-h-[30rem] max-h-[40rem] justify-center overflow-auto p-4 bg-muted/30">
+        {textLayerError ? (
+          <p role="status" className="sr-only">
+            {textLayerError}
+          </p>
+        ) : null}
         {renderError ? (
           <div className="flex flex-col items-center justify-center gap-2 text-destructive">
             <p className="text-sm font-medium">{renderError}</p>
@@ -290,12 +324,19 @@ export function PdfViewer({ blob, filename }) {
             </Button>
           </div>
         ) : (
-          <canvas
-            ref={canvasRef}
-            className="rounded-sm bg-white shadow-md transition-shadow"
-            role="img"
-            aria-label={`PDF page ${pageNum} of ${numPages}`}
-          />
+          <div className="relative h-fit w-fit">
+            <canvas
+              ref={canvasRef}
+              className="rounded-sm bg-white shadow-md transition-shadow"
+              role="img"
+              aria-label={`PDF page ${pageNum} of ${numPages}`}
+            />
+            <div
+              ref={textLayerRef}
+              className="pdfjs-text-layer"
+              aria-label={`Selectable text on PDF page ${pageNum}`}
+            />
+          </div>
         )}
       </div>
     </div>

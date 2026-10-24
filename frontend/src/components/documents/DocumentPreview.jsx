@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Download, FileQuestion, LoaderCircle, RefreshCw } from 'lucide-react'
-import DOMPurify from 'dompurify'
 import { Button } from '@/components/ui/button'
 import { previewKindOf, saveBlob } from '@/lib/documents'
 import { getApiErrorMessage } from '@/services/api'
 import { downloadDocument, previewDocument } from '@/services/documents'
+import { DocxViewer } from './DocxViewer'
 import { PdfViewer } from './PdfViewer'
 
 function isAbortError(error) {
@@ -16,7 +16,6 @@ export function DocumentPreview({ documentRecord }) {
   const [blob, setBlob] = useState(null)
   const [blobUrl, setBlobUrl] = useState(null)
   const [text, setText] = useState(null)
-  const [docxHtml, setDocxHtml] = useState('')
   const [isLoading, setIsLoading] = useState(kind !== 'unsupported')
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState(null)
@@ -39,14 +38,6 @@ export function DocumentPreview({ documentRecord }) {
         setBlob(downloadedBlob)
         if (kind === 'text') {
           setText(await downloadedBlob.text())
-          return
-        }
-        if (kind === 'docx') {
-          const { default: mammoth } = await import('mammoth')
-          const result = await mammoth.convertToHtml({
-            arrayBuffer: await downloadedBlob.arrayBuffer(),
-          })
-          setDocxHtml(DOMPurify.sanitize(result.value))
           return
         }
         if (kind === 'image') {
@@ -98,8 +89,9 @@ export function DocumentPreview({ documentRecord }) {
         <div className="space-y-1">
           <h3 className="font-semibold text-foreground">Preview unavailable</h3>
           <p className="max-w-md text-sm text-muted-foreground">
-            TrustVault can preview DOCX, PDF, plain-text, PNG, and JPEG files. Download
-            this document to review it in an approved application.
+            TrustVault can preview DOCX, PDF, plain-text, PNG, and JPEG files. Legacy
+            Word .doc files are not supported. Download this document to review it in
+            an approved application.
           </p>
         </div>
         {downloadError ? (
@@ -169,12 +161,14 @@ export function DocumentPreview({ documentRecord }) {
   }
 
   if (kind === 'docx') {
-    return (
-      <article
-        className="max-h-[34rem] overflow-auto rounded-lg border bg-background p-5 text-sm leading-6 [&_h1]:mb-4 [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:mb-3 [&_h2]:mt-6 [&_h2]:text-xl [&_h2]:font-semibold [&_li]:ml-6 [&_ol]:my-3 [&_ol]:list-decimal [&_p]:my-3 [&_table]:my-4 [&_table]:w-full [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:bg-muted [&_th]:p-2 [&_ul]:my-3 [&_ul]:list-disc"
-        dangerouslySetInnerHTML={{ __html: docxHtml }}
-      />
-    )
+    if (!blob) {
+      return (
+        <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">
+          DOCX content is unavailable.
+        </div>
+      )
+    }
+    return <DocxViewer blob={blob} filename={documentRecord.name} />
   }
 
   if (kind === 'image') {

@@ -240,15 +240,15 @@ Administrators can also search accounts, inspect last-login/owned-document count
 
 ### Document Content, Previews, and Version History (Verified Locally)
 
-- **MR-2 / MR-7:** Owners, READ recipients, and EDIT recipients can preview supported PDF/text/image content through the authenticated backend. DOCX documents fall back to a secure download. Metadata-only administrators receive 403 for previews and version history.
-- **MR-2 versioning:** Every upload creates version 1. Owners and EDIT recipients can replace a file or edit UTF-8 plain text, creating an immutable new version while retaining all earlier versions. READ recipients cannot modify metadata, content, or versions.
-- **MR-2 concurrency:** Replacement and text editing require `expected_version_number`. A stale write returns 409 and never silently overwrites newer content. Text and PDF editors become stale and require close/reopen instead of allowing another save from an outdated draft.
+- **MR-2 / MR-7:** Owners, READ recipients, and EDIT recipients can preview supported PDF, DOCX, plain-text, PNG, and JPEG content through the authenticated backend. DOCX preview is paginated with page indicators and explicit loading/error/retry states. Legacy binary `.doc` is not supported. Metadata-only administrators receive 403 for previews and version history.
+- **MR-2 versioning:** Every upload creates version 1. Owners and EDIT recipients can replace a file, edit UTF-8 plain text, edit DOCX rich text, or annotate an image, creating an immutable new version while retaining all earlier versions. READ recipients cannot modify metadata, content, or versions.
+- **MR-2 concurrency:** Replacement, text editing, DOCX editing, and image editing require `expected_version_number`. A stale write returns 409 and never silently overwrites newer content. All editors become stale and require close/reopen instead of allowing another save from an outdated draft.
 - **FA-5 / FA-7:** Current and historical objects are streamed only through authorized backend responses; no storage key or presigned URL is exposed. Soft deletion attempts cleanup of every version object.
 - **MR-2 deletion/rollback:** Owners can delete versions while at least one remains. Deleting the current version rolls back to the highest remaining version and updates the active content pointer; the last version cannot be deleted. Persistent `next_version_number` values prevent reuse.
 - **MR-6:** Preview, version download, version creation, and version deletion produce sanitized audit events. Events contain version numbers, sizes, MIME type, source, rollback state, and change summary - never file contents, credentials, or tokens.
-- **Frontend:** Document details integrate preview, paginated version history, historical downloads, text editing, replacement upload, current-version tracking, rollback-aware deletion, paginated owner activity, and stale-editor recovery. The administrator audit viewer renders structured metadata safely with no raw HTML.
-- **Verification:** 269 backend tests pass with 88% statement coverage, including `0007` sequence/backfill/downgrade, version constraints, READ denial, EDIT replacement/text editing, stale writes, last-version rejection, current-version rollback, storage and audit failures, and deletion cleanup. Frontend: 23 tests across 8 files, lint with warnings and no errors, production build successful.
-- **Not yet met / unverified:** Manual browser validation of real PDFs and DOCX, live deployment, live Supabase migration state, and independent container-level object immutability remain outstanding. The repository migration head is `0007`.
+- **Frontend:** Document details integrate preview, paginated version history, historical downloads, text editing, DOCX editing, image editing, replacement upload, current-version tracking, rollback-aware deletion, paginated owner activity, and stale-editor recovery. The administrator audit viewer renders structured metadata safely with no raw HTML.
+- **Verification:** 270 backend tests pass, including `0007` sequence/backfill/downgrade, version constraints, READ denial, EDIT replacement/text/DOCX/image editing, stale writes, last-version rejection, current-version rollback, storage and audit failures, deletion cleanup, and not-visible versus visible denial attribution. Frontend: 54 tests across 16 files, production build successful; `npm run lint` is blocked on machines whose Application Control policy rejects oxlint's native binding.
+- **Not yet met / unverified:** Manual browser validation of real PDFs and DOCX, live deployment, live Supabase migration state, and independent container-level object immutability remain outstanding. The repository migration head is `0007`. DOCX fidelity is browser-side and limited (no full Word layout engine, no legacy `.doc`), and image edits are flattened into the saved revision.
 
 ---
 
@@ -269,7 +269,7 @@ Administrators can also search accounts, inspect last-login/owned-document count
 ### Permissions
 - FA-9: A newly uploaded document's content is accessible only to the owner; administrators may see metadata but require an explicit grant for content.
 - FA-10: Granting READ allows reading, previewing, downloading, and viewing version history but not editing, replacing content, deleting, re-sharing, or managing permissions.
-- FA-11: Granting EDIT allows reading, previewing, downloading, editing metadata or plain text, and uploading replacement versions but not deleting, re-sharing, or managing permissions.
+- FA-11: Granting EDIT allows reading, previewing, downloading, editing metadata, editing plain text, editing DOCX rich text, annotating images, and uploading replacement versions but not deleting, re-sharing, or managing permissions.
 - FA-18: Every replacement or plain-text edit creates a new immutable version; current and historical downloads are authorized by the backend and never expose storage keys.
 - FA-19: Replacement requests must include the expected current version; stale writes return 409 without overwriting newer content.
 - FA-20: Preview and version operations are audited without recording file contents, passwords, tokens, or secrets.
@@ -278,6 +278,7 @@ Administrators can also search accounts, inspect last-login/owned-document count
 
 ### Audit
 - FA-14: Every state-changing action listed in MR-6 produces one audit record; denied attempts and login failures are recorded separately. Idempotent no-ops do not create duplicate state-change events.
+- FA-14a: Denial attribution distinguishes probes against documents the caller cannot see from denials on visible documents. Not-visible probes are global events with `attempted_document_id` and are excluded from owner document activity; visible-but-insufficient denials remain attached to the document. Historical events are retained unchanged, and administrators can still find not-visible probes by document ID.
 - FA-15: Audit records form a verifiable hash chain with a contiguous sequence and canonical hashes.
 - FA-16: No API endpoint allows modification or deletion of audit records.
 - FA-17: Partially met. Administrators can query, filter, and paginate audit data; export is not implemented.

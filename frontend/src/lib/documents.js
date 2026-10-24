@@ -155,6 +155,19 @@ export function canEditPdfContent(documentRecord) {
   return canReplaceDocumentFile(documentRecord) && previewKindOf(documentRecord) === 'pdf'
 }
 
+export function canEditDocxContent(documentRecord) {
+  return canReplaceDocumentFile(documentRecord) && previewKindOf(documentRecord) === 'docx'
+}
+
+export function canEditImageContent(documentRecord) {
+  return canReplaceDocumentFile(documentRecord) && previewKindOf(documentRecord) === 'image'
+}
+
+export function replaceExtension(filename, extension) {
+  const base = String(filename || 'document').replace(/\.[^./\\]+$/, '')
+  return `${base || 'document'}.${extension}`
+}
+
 export function saveBlob(blob, filename) {
   const objectUrl = URL.createObjectURL(blob)
   const anchor = document.createElement('a')

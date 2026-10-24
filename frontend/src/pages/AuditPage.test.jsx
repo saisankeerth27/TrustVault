@@ -112,6 +112,45 @@ describe('AuditPage filters', () => {
     )
   })
 
+  it('debounces actor-name search and combines it with other filters', async () => {
+    const interaction = userEvent.setup()
+    renderAuditPage()
+
+    await screen.findByText('No audit events yet')
+    await interaction.type(screen.getByLabelText('Author Name'), ' Avery ')
+    await interaction.selectOptions(screen.getByLabelText('Outcome'), 'SUCCESS')
+
+    await waitFor(
+      () => {
+        expect(listAuditEvents).toHaveBeenLastCalledWith(
+          {
+            page: 1,
+            page_size: 15,
+            outcome: 'SUCCESS',
+            actor_name: 'Avery',
+          },
+          expect.any(AbortSignal),
+        )
+      },
+      { timeout: 1500 },
+    )
+  })
+
+  it('applies the UTC Occurred Today filter through the API', async () => {
+    const interaction = userEvent.setup()
+    renderAuditPage()
+
+    await screen.findByText('No audit events yet')
+    await interaction.click(screen.getByLabelText('Occurred Today (UTC)'))
+
+    await waitFor(() => {
+      expect(listAuditEvents).toHaveBeenLastCalledWith(
+        { page: 1, page_size: 15, occurred_today: true },
+        expect.any(AbortSignal),
+      )
+    })
+  })
+
   it('shows document names in the table and technical identifiers only in metadata', async () => {
     const interaction = userEvent.setup()
     listAuditEvents.mockResolvedValueOnce({

@@ -120,28 +120,31 @@ function AccountId({ id }) {
   }
 
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-2">
-      <span className="select-all break-all font-mono text-[11px] text-muted-foreground">
+    <div className="mt-1 flex min-w-0 items-center gap-1">
+      <span
+        className="min-w-0 truncate font-mono text-[10px] text-muted-foreground"
+        title={id}
+      >
         {id}
       </span>
       <Button
         type="button"
         size="icon"
         variant="ghost"
-        className="size-7"
+        className="size-6 shrink-0"
         onClick={copyId}
         aria-label={`Copy account ID for ${id}`}
         title="Copy account ID"
       >
         {copyStatus === 'Copied' ? (
-          <Check className="size-3.5 text-emerald-600" aria-hidden="true" />
+          <Check className="size-3 text-emerald-600" aria-hidden="true" />
         ) : (
-          <Copy className="size-3.5" aria-hidden="true" />
+          <Copy className="size-3" aria-hidden="true" />
         )}
       </Button>
       {copyStatus ? (
-        <span className="text-xs text-muted-foreground" role="status">
-          {copyStatus}
+        <span className="shrink-0 text-[10px] text-muted-foreground" role="status">
+          {copyStatus === 'Copied' ? 'Copied' : 'Failed'}
         </span>
       ) : null}
     </div>
@@ -447,87 +450,107 @@ export function AdminPage() {
               No accounts match the current filters.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1080px] text-sm">
-                <thead className="border-b bg-muted/40 text-left text-xs tracking-wide text-muted-foreground uppercase">
-                  <tr>
-                    <th scope="col" className="px-6 py-3 font-medium">Account</th>
-                    <th scope="col" className="px-4 py-3 font-medium">Role</th>
-                    <th scope="col" className="px-4 py-3 font-medium">Status</th>
-                    <th scope="col" className="px-4 py-3 font-medium">Documents</th>
-                    <th scope="col" className="px-4 py-3 font-medium">Last login</th>
-                    <th scope="col" className="px-4 py-3 font-medium">Created</th>
-                    <th scope="col" className="px-6 py-3 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {result.items.map((account) => {
-                    const isSelf = account.id === user?.id
-                    const isPending = pendingUserId === account.id
-                    return (
-                      <tr key={account.id} className="align-top">
-                        <td className="px-6 py-4">
-                          <p className="font-medium">{account.name}</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">{account.email}</p>
-                          <AccountId id={account.id} />
-                          {isSelf ? (
-                            <p className="mt-1 text-xs font-medium text-primary">Current account</p>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-4">
-                          <select
-                            aria-label={`Role for ${account.name}`}
-                            value={account.role}
-                            disabled={isSelf || isPending}
-                            onChange={(event) => changeRole(account, event.target.value)}
-                            className={cn(fieldClassName, 'h-9 min-w-36')}
-                          >
-                            <option value="USER">User</option>
-                            <option value="ADMINISTRATOR">Administrator</option>
-                          </select>
-                        </td>
-                        <td className="px-4 py-4">
+            <table className="w-full table-fixed text-sm">
+              <thead className="border-b bg-muted/40 text-left text-xs tracking-wide text-muted-foreground uppercase">
+                <tr>
+                  <th scope="col" className="w-[36%] px-4 py-3 font-medium sm:px-6">
+                    Account
+                  </th>
+                  <th scope="col" className="w-[22%] px-2 py-3 font-medium">
+                    Access
+                  </th>
+                  <th scope="col" className="w-[24%] px-2 py-3 font-medium">
+                    Activity
+                  </th>
+                  <th scope="col" className="w-[18%] px-4 py-3 text-right font-medium sm:px-6">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {result.items.map((account) => {
+                  const isSelf = account.id === user?.id
+                  const isPending = pendingUserId === account.id
+                  return (
+                    <tr key={account.id} className="align-top">
+                      <td className="min-w-0 px-4 py-4 sm:px-6">
+                        <p className="truncate font-medium" title={account.name}>
+                          {account.name}
+                        </p>
+                        <p
+                          className="mt-0.5 truncate text-xs text-muted-foreground"
+                          title={account.email}
+                        >
+                          {account.email}
+                        </p>
+                        <AccountId id={account.id} />
+                        {isSelf ? (
+                          <p className="mt-1 text-xs font-medium text-primary">Current account</p>
+                        ) : null}
+                      </td>
+                      <td className="px-2 py-4">
+                        <select
+                          aria-label={`Role for ${account.name}`}
+                          value={account.role}
+                          disabled={isSelf || isPending}
+                          onChange={(event) => changeRole(account, event.target.value)}
+                          className={cn(fieldClassName, 'h-9 w-full min-w-0 px-2 text-xs')}
+                        >
+                          <option value="USER">User</option>
+                          <option value="ADMINISTRATOR">Administrator</option>
+                        </select>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusBadge status={account.status} />
-                        </td>
-                        <td className="px-4 py-4">
-                          <span className="font-medium">{account.document_count}</span>
-                          <span className="block text-xs text-muted-foreground">owned</span>
-                        </td>
-                        <td className="px-4 py-4 whitespace-nowrap text-muted-foreground">
+                          <span className="text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground">
+                              {account.document_count}
+                            </span>{' '}
+                            owned
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-2 py-4 text-xs text-muted-foreground">
+                        <p>
+                          <span className="block text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                            Last login
+                          </span>
                           {formatDateTime(account.last_login_at)}
-                        </td>
-                        <td className="px-4 py-4 whitespace-nowrap text-muted-foreground">
+                        </p>
+                        <p className="mt-1.5">
+                          <span className="block text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                            Created
+                          </span>
                           {formatDateTime(account.created_at)}
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex flex-col items-end gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={account.status === 'ACTIVE' ? 'outline' : 'default'}
-                              disabled={isSelf || isPending}
-                              onClick={() => toggleStatus(account)}
-                            >
-                              {isPending
-                                ? 'Saving...'
-                                : account.status === 'ACTIVE'
-                                  ? 'Disable'
-                                  : 'Reactivate'}
-                            </Button>
-                            <Link
-                              to={`/admin/audit?actor_id=${account.id}`}
-                              className="text-xs font-medium text-primary hover:underline"
-                            >
-                              View activity
-                            </Link>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        </p>
+                      </td>
+                      <td className="px-4 py-4 sm:px-6">
+                        <div className="flex flex-col items-end gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={account.status === 'ACTIVE' ? 'outline' : 'default'}
+                            disabled={isSelf || isPending}
+                            onClick={() => toggleStatus(account)}
+                          >
+                            {isPending
+                              ? 'Saving...'
+                              : account.status === 'ACTIVE'
+                                ? 'Disable'
+                                : 'Reactivate'}
+                          </Button>
+                          <Link
+                            to={`/admin/audit?actor_id=${account.id}`}
+                            className="text-xs font-medium text-primary hover:underline"
+                          >
+                            View activity
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           )}
         </CardContent>
       </Card>
@@ -568,8 +591,8 @@ export function AdminPage() {
               Document oversight
             </CardTitle>
             <CardDescription>
-              Review metadata for every active document. Document content remains protected by
-              document-level permissions.
+              Review document metadata and human-readable ownership. Private content and
+              version access remain protected by document-level permissions.
             </CardDescription>
           </CardHeader>
           <CardContent>

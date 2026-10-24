@@ -192,16 +192,21 @@ export function AuditEventDetails({ event = {}, details = event.details }) {
   const popoverRef = useRef(null)
 
   const eventDetails = details && typeof details === 'object' ? details : {}
+  const actorUserId =
+    eventDetails.actor_user_id ?? eventDetails.actor_id ?? event.actor_id
   const metadata = {
     ...eventDetails,
     event_id: event.id,
     chain_index: event.chain_index,
-    actor_id: event.actor_id,
     target_user_id: event.target_user_id,
     document_id: event.document_id,
     request_id: event.request_id,
     hash_schema: event.hash_schema,
     resource_type: event.resource_type,
+  }
+  delete metadata.actor_id
+  if (actorUserId) {
+    metadata.actor_user_id = actorUserId
   }
   for (const key of Object.keys(metadata)) {
     if (metadata[key] === undefined || metadata[key] === null || metadata[key] === '') {

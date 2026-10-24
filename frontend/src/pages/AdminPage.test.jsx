@@ -101,6 +101,16 @@ describe('AdminPage', () => {
     expect(screen.getByLabelText('Role for Morgan User')).toBeEnabled()
     expect(screen.getByText(account.email)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: `Copy account ID for ${account.id}` })).toBeInTheDocument()
+    expect(screen.getAllByText('Last login').length).toBeGreaterThan(0)
+    expect(screen.getByText('Document oversight')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Review document metadata' })).toHaveAttribute(
+      'href',
+      '/documents',
+    )
+    expect(screen.getByRole('link', { name: 'Open audit trail' })).toHaveAttribute(
+      'href',
+      '/admin/audit',
+    )
   })
 
   it('copies an account ID and confirms the action', async () => {

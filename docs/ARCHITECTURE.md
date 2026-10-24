@@ -25,7 +25,7 @@ graph TB
     end
 
     subgraph "Data Zone — Trusted"
-        DB["Supabase PostgreSQL<br/>RLS planned, not enabled"]
+        DB["Supabase PostgreSQL<br/>RLS enabled; direct client roles denied"]
         S3["Supabase Storage<br/>Private Bucket"]
     end
 
@@ -449,7 +449,7 @@ graph LR
     end
 
     subgraph "Supabase"
-        PG["PostgreSQL<br/>RLS planned"]
+        PG["PostgreSQL<br/>default-deny RLS baseline"]
     end
 
     subgraph "Supabase Storage"
@@ -517,17 +517,19 @@ Only non-secret configuration belongs in `VITE_*` variables, because Vite embeds
 
 ---
 
-## 14. Database Security and RLS Planning (Not Enabled)
+## 14. Database Security and RLS
 
 ### Primary Authorization: Application Logic (Authentication, Documents, and Grants Implemented)
 
 The FastAPI backend is the primary enforcement point. Every protected endpoint checks authentication and role. Phase 6 document endpoints resolve metadata visibility and content/edit/delete/share capabilities from current ownership and active grants. Missing/unrelated resources return 404; insufficient capability on a visible resource returns 403.
 
-### Secondary Defense: Row-Level Security (Deferred)
+### Secondary Defense: Default-Deny Row-Level Security
 
-RLS is defense-in-depth, not the primary control. **RLS is not enabled.** Phase 3 keeps the backend on a single privileged database role; authentication issues application-level identities, not per-request PostgreSQL identities. Because that role bypasses RLS, application authorization remains authoritative and policies are deferred until they can be tested meaningfully.
+Migration `0008` enables RLS on application tables and revokes table and sequence access from `PUBLIC` and the Supabase PostgREST `anon` and `authenticated` roles when present. No client-facing RLS policies are created, so PostgreSQL's default-deny behavior blocks those roles from directly reading or changing application data. Apply and verify this migration independently in each deployed database.
 
-Planned policies:
+The backend uses a privileged database connection and continues to enforce user, role, ownership, and document-grant authorization on every request. The migration does not implement per-user database policies, so RLS is defense-in-depth against direct public PostgREST access—not a replacement for application authorization or a claim that the database independently enforces each user's CRUD permissions.
+
+Future per-user policies, if the backend moves to request-scoped database identities:
 
 | Table | Policy |
 |-------|--------|
@@ -537,7 +539,7 @@ Planned policies:
 | `audit_events` | INSERT-only for the backend role; no UPDATE/DELETE |
 | `refresh_tokens` (Phase 3) | Accessible only by the backend role |
 
-**Important:** because the backend uses a privileged role, that role bypasses RLS by design, and application-level authorization remains authoritative. TrustVault must not be described as having database-enforced access control.
+**Important:** verify the effective privileges of the actual deployed backend database role. A privileged or `BYPASSRLS` role is not constrained by this default-deny client-role policy.
 
 ---
 
@@ -657,7 +659,7 @@ Planned policies:
 - **Account status and audit role:** Disabled users are denied document and administrator audit endpoints, and a validly signed administrator role claim cannot read audit data when the database role is `USER`.
 - **Coverage:** The full 269-test suite passes with 88% statement coverage. Authorization and document services remain the most security-sensitive modules; dependency, application, error, and audit-schema modules are at or near full coverage.
 - **CI:** `.github/workflows/backend-tests.yml` runs the full suite and coverage on backend pushes and pull requests. The workflow has not yet run on GitHub.
-- **Honest limitations:** RLS is still not enabled, so there are no database RLS policy tests; application-level authorization remains the primary boundary and is verified directly. Malware scanning and deployment remain outstanding; live private-bucket storage passed its smoke test, and the Supabase database was migrated to `0004` and checked for schema drift. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.
+- **Honest limitations:** Migration `0008` now enables default-deny RLS and revokes direct table privileges, but it has not been applied to the deployed Supabase database; no per-user RLS policies or database RLS policy tests exist. The backend's application-level authorization remains the primary boundary, and the RLS migration provides defense in depth. Malware scanning and deployment remain outstanding; live private-bucket storage passed its smoke test, and the Supabase database was previously migrated to `0004` and checked for schema drift. The security suite does not prove absence of vulnerabilities, and coverage is a diagnostic rather than a security guarantee.
 
 ---
 

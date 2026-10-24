@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
+from app.core.rate_limit import document_write_rate_limiter, enforce_rate_limit
 from app.core.request_limits import UPLOAD_CONTENT_LENGTH_OVERHEAD_BYTES
 from app.db.session import get_db
 from app.models.audit_event import AuditEvent
@@ -137,6 +138,16 @@ def _permission_not_found() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail="Permission not found.",
+    )
+
+
+def _enforce_document_write_rate_limit(user: User) -> None:
+    enforce_rate_limit(
+        document_write_rate_limiter,
+        [f"document-write:{user.id}"],
+        limit=20,
+        window_seconds=60,
+        detail="Too many document changes. Try again in a minute.",
     )
 
 
@@ -286,6 +297,7 @@ def upload_document(
     storage: SupabaseStorage = Depends(get_storage_service),
 ) -> DocumentResponse:
     settings = get_settings()
+    _enforce_document_write_rate_limit(current_user)
     _enforce_request_size(request, settings.max_upload_size_bytes)
 
     try:
@@ -708,6 +720,18 @@ def list_document_activity(
 
     conditions = [
         AuditEvent.document_id == authorized.document.id,
+        # Historical rows may still attach a not-visible probe to a document
+        # because earlier releases recorded every denial with document_id.
+        # Those probes are global security events, not document activity, so
+        # exclude them from the owner view without deleting or rewriting the
+        # original audit records. Genuine denials for a document the caller
+        # can see (for example a READ recipient attempting an edit) remain
+        # visible here.
+        or_(
+            AuditEvent.outcome != AuditOutcome.DENIED.value,
+            AuditEvent.details["reason"].astext.is_(None),
+            AuditEvent.details["reason"].astext != "not_visible",
+        ),
         or_(
             AuditEvent.actor_id.is_(None),
             AuditEvent.actor_id != authorized.document.owner_id,
@@ -776,6 +800,7 @@ def create_document_version(
         logger.warning("Document version creation denied for user %s.", current_user.id)
         raise _access_denied() from exc
 
+    _enforce_document_write_rate_limit(current_user)
     _enforce_request_size(request, settings.max_upload_size_bytes)
     try:
         data = file.file.read(settings.max_upload_size_bytes + 1)
@@ -891,6 +916,7 @@ def update_document_text_content(
         logger.warning("Document content update denied for user %s.", current_user.id)
         raise _access_denied() from exc
 
+    _enforce_document_write_rate_limit(current_user)
     current = get_current_version(session, document_id=authorized.document.id)
     if current is None:
         raise HTTPException(

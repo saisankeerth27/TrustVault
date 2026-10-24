@@ -71,3 +71,52 @@
     color: var(--color-accent-foreground);
   }
 }
+
+.pdfjs-text-layer {
+  color-scheme: only light;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  text-align: initial;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  user-select: text;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdfjs-text-layer span,
+.pdfjs-text-layer br {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  user-select: text;
+}
+
+.pdfjs-text-layer > :not(.markedContent),
+.pdfjs-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+    scale(var(--min-font-size-inv));
+}
+
+.pdfjs-text-layer .markedContent {
+  display: contents;
+}
+
+.pdfjs-text-layer ::selection {
+  background: rgb(0 96 223 / 25%);
+}

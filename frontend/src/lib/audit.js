@@ -60,7 +60,7 @@ export const INTEGRITY_META = {
     label: 'Verification Unavailable',
     tone: 'bg-amber-50 text-amber-900 ring-amber-200',
     description:
-      'The hash chain is consistent, but no usable signed checkpoint is configured or available.',
+      'The hash chain is consistent, but a trusted external checkpoint is unavailable or its signing configuration is missing.',
   },
   INVALID: {
     label: 'Verification Failed',
@@ -78,8 +78,22 @@ export const CHECKPOINT_META = {
   INVALID: { label: 'Invalid', tone: 'text-red-700' },
 }
 
+export const AUDIT_REASON_LABELS = {
+  not_visible: 'Document not visible to this account',
+  insufficient_access: 'Insufficient permission for this action',
+  document_not_available: 'Document unavailable or deleted',
+  only_owner_can_delete_versions: 'Only the document owner can delete versions',
+}
+
 export function formatAuditAction(value) {
   return ACTION_LABELS[value] ?? value
+}
+
+export function formatAuditReason(value) {
+  if (!value) {
+    return null
+  }
+  return AUDIT_REASON_LABELS[value] ?? String(value).replaceAll('_', ' ')
 }
 
 export function outcomeMeta(value) {
@@ -107,6 +121,7 @@ export function checkpointMeta(value) {
 
 const AUDIT_FIELD_LABELS = {
   actor_id: 'Actor ID',
+  actor_user_id: 'Actor user ID',
   access_level: 'Access level',
   actor_name: 'Actor',
   change_summary: 'Change summary',

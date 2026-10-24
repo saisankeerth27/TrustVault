@@ -34,9 +34,11 @@ const EMPTY_FILTERS = {
   action: '',
   outcome: '',
   actorId: '',
+  actorName: '',
   targetUserId: '',
   documentId: '',
   resourceType: '',
+  occurredToday: false,
   dateFrom: '',
   dateTo: '',
 }
@@ -124,7 +126,8 @@ function IntegrityPanel({
             role="alert"
             className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
           >
-            {error}
+            <p className="font-medium">Verification Error</p>
+            <p className="mt-1">{error}</p>
           </div>
         ) : null}
 
@@ -146,8 +149,10 @@ function IntegrityPanel({
                 >
                   {integrity.status === 'INVALID' ? (
                     <ShieldAlert className="size-4" aria-hidden="true" />
-                  ) : (
+                  ) : integrity.status === 'VERIFIED' ? (
                     <ShieldCheck className="size-4" aria-hidden="true" />
+                  ) : (
+                    <ShieldAlert className="size-4" aria-hidden="true" />
                   )}
                   {meta.label}
                 </span>
@@ -220,7 +225,7 @@ function IntegrityPanel({
               key and checkpoint file with the same care as the database.
             </p>
           </>
-        ) : (
+        ) : error ? null : (
           <p className="text-sm text-muted-foreground">
             Integrity status is unavailable. Refresh to try again.
           </p>
@@ -266,11 +271,13 @@ export function AuditPage() {
   useEffect(() => {
     const pendingIds = {
       actorId: draftFilters.actorId.trim(),
+      actorName: draftFilters.actorName.trim(),
       targetUserId: draftFilters.targetUserId.trim(),
       documentId: draftFilters.documentId.trim(),
     }
     if (
       pendingIds.actorId === appliedFilters.actorId &&
+      pendingIds.actorName === appliedFilters.actorName &&
       pendingIds.targetUserId === appliedFilters.targetUserId &&
       pendingIds.documentId === appliedFilters.documentId
     ) {
@@ -282,13 +289,15 @@ export function AuditPage() {
       setEventError(null)
       setPage(1)
       setAppliedFilters((current) => ({ ...current, ...pendingIds }))
-    }, 400)
+    }, 300)
     return () => window.clearTimeout(timer)
   }, [
     appliedFilters.actorId,
+    appliedFilters.actorName,
     appliedFilters.documentId,
     appliedFilters.targetUserId,
     draftFilters.actorId,
+    draftFilters.actorName,
     draftFilters.documentId,
     draftFilters.targetUserId,
   ])
@@ -306,6 +315,9 @@ export function AuditPage() {
     if (appliedFilters.actorId) {
       params.actor_id = appliedFilters.actorId
     }
+    if (appliedFilters.actorName) {
+      params.actor_name = appliedFilters.actorName
+    }
     if (appliedFilters.targetUserId) {
       params.target_user_id = appliedFilters.targetUserId
     }
@@ -314,6 +326,9 @@ export function AuditPage() {
     }
     if (appliedFilters.resourceType) {
       params.resource_type = appliedFilters.resourceType
+    }
+    if (appliedFilters.occurredToday) {
+      params.occurred_today = true
     }
     if (appliedFilters.dateFrom) {
       params.occurred_from = appliedFilters.dateFrom
@@ -382,7 +397,10 @@ export function AuditPage() {
 
   function updateDraft(field, value) {
     setDraftFilters((current) => ({ ...current, [field]: value }))
-    if (['actorId', 'targetUserId', 'documentId'].includes(field) && value) {
+    if (
+      ['actorId', 'actorName', 'targetUserId', 'documentId'].includes(field) &&
+      value
+    ) {
       return
     }
     setIsLoadingEvents(true)
@@ -452,13 +470,13 @@ export function AuditPage() {
         <CardHeader>
           <CardTitle>Filter events</CardTitle>
           <CardDescription>
-            Combine action, outcome, actor, target user, resource, document, and UTC date filters.
+            Combine action, outcome, actor name or ID, target user, resource, document, and UTC date filters.
             Event history is ordered by the append-only chain sequence.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
               <div className="space-y-2">
                 <label htmlFor="audit-action" className="text-sm font-medium">
                   Action
@@ -539,6 +557,22 @@ export function AuditPage() {
               </div>
 
               <div className="space-y-2">
+                <label htmlFor="audit-actor-name" className="text-sm font-medium">
+                  Author Name
+                </label>
+                <input
+                  id="audit-actor-name"
+                  type="search"
+                  value={draftFilters.actorName}
+                  onChange={(event) => updateDraft('actorName', event.target.value)}
+                  placeholder="Name or email"
+                  maxLength={255}
+                  autoComplete="off"
+                  className={fieldClassName}
+                />
+              </div>
+
+              <div className="space-y-2">
                 <label htmlFor="audit-target-user-id" className="text-sm font-medium">
                   Target user ID
                 </label>
@@ -584,6 +618,22 @@ export function AuditPage() {
                   <option value="DOCUMENT_PERMISSION">Document permission</option>
                 </select>
               </div>
+
+              <label
+                htmlFor="audit-occurred-today"
+                className="flex min-h-10 items-center gap-3 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium"
+              >
+                <input
+                  id="audit-occurred-today"
+                  type="checkbox"
+                  checked={draftFilters.occurredToday}
+                  onChange={(event) =>
+                    updateDraft('occurredToday', event.target.checked)
+                  }
+                  className="size-4 accent-primary"
+                />
+                Occurred Today (UTC)
+              </label>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 border-t pt-4">

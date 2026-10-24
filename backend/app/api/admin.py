@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
+from app.core.rate_limit import audit_integrity_rate_limiter, enforce_rate_limit
 from app.db.session import get_db
 from app.models.audit_event import AuditEvent
 from app.models.document import Document
@@ -438,11 +439,13 @@ def list_document_permission_oversight(
 def list_audit_events(
     response: Response,
     actor_id: UUID | None = None,
+    actor_name: Annotated[str | None, Query(max_length=255)] = None,
     target_user_id: UUID | None = None,
     document_id: UUID | None = None,
     resource_type: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
     action: AuditAction | None = None,
     outcome: AuditOutcome | None = None,
+    occurred_today: bool = False,
     occurred_from: date | None = None,
     occurred_to: date | None = None,
     page: Annotated[int, Query(ge=1, le=100_000)] = 1,
@@ -456,12 +459,31 @@ def list_audit_events(
     conditions = []
     if actor_id is not None:
         conditions.append(AuditEvent.actor_id == actor_id)
+    if actor_name and actor_name.strip():
+        actor_pattern = f"%{_escape_like(actor_name.strip())}%"
+        conditions.append(
+            or_(
+                User.name.ilike(actor_pattern, escape="\\"),
+                User.email.ilike(actor_pattern, escape="\\"),
+                AuditEvent.details["actor_name"]
+                .astext.ilike(actor_pattern, escape="\\"),
+            )
+        )
     if target_user_id is not None:
         conditions.append(
             AuditEvent.details["target_user_id"].astext == str(target_user_id)
         )
     if document_id is not None:
-        conditions.append(AuditEvent.document_id == document_id)
+        # Not-visible probes are stored as global events so they do not appear
+        # in the owner's document activity. Administrators can still find them
+        # by the document they attempted to reach.
+        conditions.append(
+            or_(
+                AuditEvent.document_id == document_id,
+                AuditEvent.details["attempted_document_id"].astext
+                == str(document_id),
+            )
+        )
     if resource_type is not None:
         conditions.append(
             func.lower(AuditEvent.details["resource_type"].astext)
@@ -471,6 +493,20 @@ def list_audit_events(
         conditions.append(AuditEvent.action == action.value)
     if outcome is not None:
         conditions.append(AuditEvent.outcome == outcome.value)
+    if occurred_today:
+        today = datetime.now(timezone.utc).date()
+        conditions.extend(
+            (
+                AuditEvent.occurred_at
+                >= datetime.combine(today, time.min, tzinfo=timezone.utc),
+                AuditEvent.occurred_at
+                < datetime.combine(
+                    today + timedelta(days=1),
+                    time.min,
+                    tzinfo=timezone.utc,
+                ),
+            )
+        )
     if occurred_from is not None:
         conditions.append(
             AuditEvent.occurred_at
@@ -488,13 +524,17 @@ def list_audit_events(
 
     total = int(
         session.scalar(
-            select(func.count()).select_from(AuditEvent).where(*conditions)
+            select(func.count())
+            .select_from(AuditEvent)
+            .outerjoin(User, AuditEvent.actor_id == User.id)
+            .where(*conditions)
         )
         or 0
     )
     events = list(
         session.scalars(
             select(AuditEvent)
+            .outerjoin(User, AuditEvent.actor_id == User.id)
             .where(*conditions)
             .options(
                 selectinload(AuditEvent.actor),
@@ -525,7 +565,13 @@ def get_audit_integrity(
     current_user: User = Depends(require_admin_access),
     session: Session = Depends(get_db),
 ) -> AuditIntegrityResponse:
-    del current_user
+    enforce_rate_limit(
+        audit_integrity_rate_limiter,
+        [f"audit-integrity:{current_user.id}"],
+        limit=10,
+        window_seconds=60,
+        detail="Too many integrity checks. Try again in a minute.",
+    )
     verification = verify_audit_trail(session, settings=get_settings())
     response.headers["Cache-Control"] = "no-store"
 

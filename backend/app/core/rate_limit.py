@@ -8,6 +8,8 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Iterable
 
+from fastapi import HTTPException, status
+
 
 class SlidingWindowRateLimiter:
     """A bounded in-memory limiter suitable for a single backend process.
@@ -62,4 +64,27 @@ class SlidingWindowRateLimiter:
             events.popleft()
 
 
+def enforce_rate_limit(
+    limiter: SlidingWindowRateLimiter,
+    keys: Iterable[str],
+    *,
+    limit: int,
+    window_seconds: int,
+    detail: str,
+) -> None:
+    retry_after = limiter.consume(
+        keys,
+        limit=limit,
+        window_seconds=window_seconds,
+    )
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=detail,
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 auth_rate_limiter = SlidingWindowRateLimiter()
+document_write_rate_limiter = SlidingWindowRateLimiter()
+audit_integrity_rate_limiter = SlidingWindowRateLimiter()

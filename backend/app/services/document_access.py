@@ -207,12 +207,24 @@ def _record_access_denial(
     }
     if access_level is not None:
         details["access_level"] = access_level.value
+
+    # A caller who cannot see the document at all has no relationship to it.
+    # Recording that probe against the document would expose another user's
+    # browsing to the owner and make a private document's activity look as if
+    # access had been shared. Keep the evidence global (with the attempted
+    # document ID in details) so administrators can still investigate it,
+    # while denials for visible documents remain attached to the document.
+    attach_to_document = reason != "not_visible"
     record_best_effort(
         session,
         action=_DENIAL_ACTIONS[capability],
         outcome=AuditOutcome.DENIED,
         actor=user,
-        document_id=document.id if document is not None else None,
+        document_id=(
+            document.id
+            if document is not None and attach_to_document
+            else None
+        ),
         details=details,
     )
 

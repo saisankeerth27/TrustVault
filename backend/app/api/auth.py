@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
-from app.core.rate_limit import auth_rate_limiter
+from app.core.rate_limit import auth_rate_limiter, enforce_rate_limit
 from app.core.security import create_access_token
 from app.db.session import get_db
 from app.models.enums import AuditAction, AuditOutcome, UserRole
@@ -67,18 +67,17 @@ def _enforce_allowed_origin(request: Request) -> None:
 
 def _enforce_rate_limit(request: Request, keys: list[str]) -> None:
     settings = get_settings()
-    retry_after = auth_rate_limiter.consume(
-        keys,
-        limit=settings.auth_rate_limit_attempts,
-        window_seconds=settings.auth_rate_limit_window_seconds,
-    )
-    if retry_after is not None:
-        logger.warning("Authentication rate limit exceeded.")
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+    try:
+        enforce_rate_limit(
+            auth_rate_limiter,
+            keys,
+            limit=settings.auth_rate_limit_attempts,
+            window_seconds=settings.auth_rate_limit_window_seconds,
             detail="Too many authentication attempts. Try again later.",
-            headers={"Retry-After": str(retry_after)},
         )
+    except HTTPException:
+        logger.warning("Authentication rate limit exceeded.")
+        raise
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:

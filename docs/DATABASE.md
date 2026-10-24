@@ -249,22 +249,28 @@ The trigram index requires the `pg_trgm` extension, created by the migration bef
 
 **Chain sequence and hashes.** Migration `0003` adds nullable `chain_index`, backfills existing rows deterministically by `(occurred_at, id)`, then enforces `NOT NULL`, `>= 1`, and uniqueness. The writer takes a PostgreSQL advisory transaction lock and appends the next contiguous index with `previous_hash` and a canonical SHA-256 `event_hash`. A hash chain stored alongside the data it protects detects unauthorized changes but cannot prevent a privileged database administrator from rewriting the chain; the signed checkpoint adds detection relative to the last trusted checkpoint. Events appended after the latest checkpoint and then deleted are not detectable by that checkpoint.
 
-**Details metadata.** Event details include action-specific fields plus the validated request ID, direct socket client IP, and length-limited user-agent when available, and an actor-name snapshot. Authentication and administrative events include `target_user_id`, and document/permission/account events include `resource_type`. The audit API promotes these details to response fields and supports filtering by target user and resource type. Passwords, tokens, cookies, authorization headers, session IDs, content, and payloads are rejected by the sanitizer before insert. Details are bounded by depth, item count, and total size.
+**Details metadata.** Event details include action-specific fields plus the validated request ID, direct socket client IP, and length-limited user-agent when available, and an actor-name snapshot. Authentication and administrative events include `target_user_id`, and document/permission/account events include `resource_type`. The administrator audit API filters on the recorded actor (ID, current name/email, or stored actor-name snapshot), target user, resource, document, action, outcome, and UTC dates; `occurred_today` uses the current UTC calendar day. Passwords, tokens, cookies, authorization headers, session IDs, content, and payloads are rejected by the sanitizer before insert. Details are bounded by depth, item count, and total size.
 
 **Immutability is not database-enforced.** A trigger or revoke-based immutability rule would conflict with the `ON DELETE SET NULL` updates that preserve history. The application exposes no audit UPDATE/DELETE endpoint and writes through a single append path, but the database role is not restricted from direct table changes.
 
 **Indexes:** unique `ix_audit_events_chain_index`; `occurred_at`, `actor_id`, `document_id`, `action`, and `outcome`, plus composite `(document_id, occurred_at)` and `(actor_id, occurred_at)` for document- and actor-scoped history views.
 
-## RLS Strategy (Not Enabled)
+## Row-Level Security
 
-Row-Level Security is planned as defense-in-depth, not as the primary authorization mechanism. **No RLS policies are enabled.** Phase 3 keeps the backend on a single privileged database role; authentication establishes an application identity, not a per-request PostgreSQL identity. Because that role bypasses RLS, application-level authorization remains authoritative and policies are deferred until they can be tested meaningfully.
+Migration `0008` enables RLS on `users`, `refresh_tokens`, `documents`,
+`document_permissions`, `document_versions`, and `audit_events`. It deliberately
+adds no client-facing row policies: PostgreSQL's default-deny behavior blocks
+row access, and privileges are revoked from `PUBLIC` and, when present, the
+Supabase PostgREST `anon` and `authenticated` roles. This prevents a public
+Supabase key from bypassing the API to read or mutate application tables.
 
-1. The backend owns authorization and enforces owner, role, per-document grants, and administrator audit access in application code (Phases 3–7).
-2. Phase 3 keeps a single privileged role; per-request database identities and tested RLS policies remain deferred.
-3. The frontend never connects to the database, and the service/privileged credential is never exposed to clients.
-4. In later phases, policies will be additive safety nets (for example, `documents` visible only to owner, administrator, or grant holder) and will be tested before being claimed as active.
-
-Until then, TrustVault must not be described as having database-enforced access control.
+The backend still enforces ownership, roles, per-document grants, and
+administrator-only access on every request. It uses a privileged database
+connection, so the application-level authorization checks remain authoritative
+for API operations; RLS is an additional barrier against direct public
+PostgREST access, not a replacement for those checks or per-user database
+policies. Apply the migration to each deployed database and verify its role
+grants separately before claiming the deployed instance is protected.
 
 ## Migrations
 
@@ -274,6 +280,7 @@ Until then, TrustVault must not be described as having database-enforced access 
 - Phase 7 migration: `backend/alembic/versions/0003_add_audit_chain_index.py` (revision `0003`) adds `chain_index`, backfills existing audit rows, then adds the positive check and unique index.
 - Business-model migration: `backend/alembic/versions/0004_user_roles_and_login_tracking.py` (revision `0004`) adds nullable `last_login_at`, migrates legacy roles, rebuilds `ck_users_role`, and adds role/status/created-at indexes.
 - Content-version migration: `backend/alembic/versions/0005_document_versions.py` (revision `0005`) creates `document_versions`, its checks, unique constraints, and indexes, then backfills every existing document as version 1/current.
+- `backend/alembic/versions/0008_enable_rls.py` (revision `0008`) enables default-deny RLS on all application tables and revokes direct table/sequence access from `PUBLIC` and Supabase PostgREST client roles when present.
 - `0001.downgrade()` drops its tables but deliberately leaves the shared `pg_trgm` extension installed; `0002.downgrade()` drops `refresh_tokens`; `0003.downgrade()` drops the chain index, check, and column; `0004.downgrade()` maps users to `DOCUMENT_OWNER`, restores the legacy role constraint, drops the new indexes, and removes `last_login_at`; `0005.downgrade()` drops the version indexes and table while retaining current-file metadata on `documents`.
 
 Common commands (run from `backend/` with `DATABASE_URL` set):

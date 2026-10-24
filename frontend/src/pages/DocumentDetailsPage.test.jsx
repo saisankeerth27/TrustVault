@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -25,6 +25,20 @@ vi.mock('@/services/documents', () => ({
   listDocumentVersions: vi.fn(),
   previewDocument: vi.fn(),
   updateDocumentTextContent: vi.fn(),
+}))
+
+vi.mock('docx-preview', () => ({
+  renderAsync: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/lib/docx', () => ({
+  DOCX_MIME:
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  buildDocxBlob: vi.fn(),
+  extractDocxHtml: vi.fn().mockResolvedValue({
+    html: '<h1>Quarterly report</h1><p>Report body</p>',
+    messages: [],
+  }),
 }))
 
 const owner = {
@@ -84,7 +98,7 @@ function versionPayload(items, overrides = {}) {
   }
 }
 
-function renderPage() {
+function renderPage(record = textDocument) {
   return render(
     <AuthContext.Provider
       value={{
@@ -95,7 +109,7 @@ function renderPage() {
         logout: vi.fn(),
       }}
     >
-      <MemoryRouter initialEntries={[`/documents/${textDocument.id}`]}>
+      <MemoryRouter initialEntries={[`/documents/${record.id}`]}>
         <Routes>
           <Route path="/documents/:documentId" element={<DocumentDetailsPage />} />
         </Routes>
@@ -122,6 +136,8 @@ describe('DocumentDetailsPage content workflows', () => {
       blob: new Blob(['Initial notes\n'], { type: 'text/plain' }),
       contentType: 'text/plain',
     })
+    URL.createObjectURL = vi.fn(() => 'blob:preview')
+    URL.revokeObjectURL = vi.fn()
   })
 
   it('shows a secure preview and version history to READ-only recipients', async () => {
@@ -131,6 +147,8 @@ describe('DocumentDetailsPage content workflows', () => {
 
     expect(await screen.findByText('Initial notes')).toBeInTheDocument()
     expect(screen.getByText('Secure content preview')).toBeInTheDocument()
+    expect(screen.getByText('Document metadata')).toBeInTheDocument()
+    expect(screen.queryByText('Your access')).toBeNull()
     expect(screen.getByText('Version history')).toBeInTheDocument()
     expect(screen.getByText('Initial upload')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Edit metadata' })).toBeNull()
@@ -449,5 +467,75 @@ describe('DocumentDetailsPage content workflows', () => {
     expect(await screen.findByText('agreement.pdf')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Edit PDF' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull()
+  })
+
+  it('lets an EDIT recipient open the DOCX editor', async () => {
+    const docxDocument = {
+      ...textDocument,
+      name: 'report.docx',
+      mime_type:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      access_level: 'EDIT',
+    }
+    getDocument.mockResolvedValue(docxDocument)
+    renderPage(docxDocument)
+
+    const editButton = await screen.findByRole('button', {
+      name: 'Edit document',
+    })
+    expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edit PDF' })).toBeNull()
+    await waitFor(() => expect(editButton).toBeEnabled())
+
+    fireEvent.click(editButton)
+
+    expect(await screen.findByText('Edit document content')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('textbox', { name: 'Document content' }),
+    ).toBeInTheDocument()
+  })
+
+  it('hides DOCX editing from READ-only recipients', async () => {
+    const docxDocument = {
+      ...textDocument,
+      name: 'report.docx',
+      mime_type:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      access_level: 'READ',
+    }
+    getDocument.mockResolvedValue(docxDocument)
+    renderPage(docxDocument)
+
+    expect(await screen.findByText('report.docx')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit document' })).toBeNull()
+  })
+
+  it('shows the image editor action only for EDIT recipients', async () => {
+    const imageDocument = {
+      ...textDocument,
+      name: 'diagram.png',
+      mime_type: 'image/png',
+      access_level: 'EDIT',
+    }
+    getDocument.mockResolvedValue(imageDocument)
+    renderPage(imageDocument)
+
+    expect(await screen.findByRole('button', { name: 'Edit image' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edit document' })).toBeNull()
+  })
+
+  it('hides image editing from READ-only recipients', async () => {
+    const imageDocument = {
+      ...textDocument,
+      name: 'diagram.png',
+      mime_type: 'image/png',
+      access_level: 'READ',
+    }
+    getDocument.mockResolvedValue(imageDocument)
+    renderPage(imageDocument)
+
+    expect(await screen.findByText('diagram.png')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit image' })).toBeNull()
   })
 })

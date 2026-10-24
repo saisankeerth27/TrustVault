@@ -6,10 +6,14 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.rate_limit import (
+    audit_integrity_rate_limiter,
+    document_write_rate_limiter,
+)
 from app.core.security import create_access_token
 from app.main import app
 from app.models.audit_event import AuditEvent
@@ -22,6 +26,32 @@ from app.services.storage import StorageOperationError, get_storage_service
 from tests.auth_helpers import DEFAULT_PASSWORD, bearer, login, register, unique_email
 
 PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+
+def test_application_tables_have_row_level_security(db_session: Session) -> None:
+    protected_tables = {
+        "users",
+        "refresh_tokens",
+        "documents",
+        "document_permissions",
+        "document_versions",
+        "audit_events",
+    }
+    enabled_tables = set(
+        db_session.scalars(
+            text(
+                """
+                SELECT relation.relname
+                FROM pg_class AS relation
+                JOIN pg_namespace AS schema
+                  ON schema.oid = relation.relnamespace
+                WHERE schema.nspname = 'public'
+                  AND relation.relkind = 'r'
+                  AND relation.relrowsecurity
+                """
+            )
+        ).all()
+    )
+    assert protected_tables <= enabled_tables
 
 
 class FakeStorage:
@@ -744,7 +774,7 @@ def test_threat_4_10_internal_failures_do_not_expose_credentials(
         assert get_settings().require_jwt_secret() not in response.text
 
 
-def test_threat_4_11_application_authorization_is_authoritative_without_rls(
+def test_threat_4_11_application_authorization_remains_authoritative_with_rls(
     api_client: TestClient,
     db_session: Session,
     fake_storage: FakeStorage,
@@ -893,6 +923,39 @@ def test_threat_4_13_brute_force_is_rate_limited_without_disclosure(
     assert int(blocked.headers["retry-after"]) >= 1
     assert email not in blocked.text
     assert DEFAULT_PASSWORD not in blocked.text
+
+
+def test_document_upload_and_audit_integrity_are_rate_limited(
+    api_client: TestClient,
+    db_session: Session,
+    fake_storage: FakeStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_email, _ = _create_role_user(db_session, UserRole.USER)
+    user_token = _token_for(api_client, user_email)
+    monkeypatch.setattr(
+        document_write_rate_limiter,
+        "consume",
+        lambda *_args, **_kwargs: 17,
+    )
+    upload = _upload(api_client, user_token)
+    assert upload.status_code == 429
+    assert upload.headers["retry-after"] == "17"
+    assert fake_storage.uploads == []
+
+    admin_email, _ = _create_role_user(db_session, UserRole.ADMINISTRATOR)
+    admin_token = _token_for(api_client, admin_email)
+    monkeypatch.setattr(
+        audit_integrity_rate_limiter,
+        "consume",
+        lambda *_args, **_kwargs: 29,
+    )
+    integrity = api_client.get(
+        "/api/v1/admin/audit-integrity",
+        headers=bearer(admin_token),
+    )
+    assert integrity.status_code == 429
+    assert integrity.headers["retry-after"] == "29"
 
 
 def test_threat_4_14_oversized_upload_is_rejected_before_storage(

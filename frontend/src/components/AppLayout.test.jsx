@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { AuthContext } from '@/auth/useAuth'
@@ -54,5 +54,14 @@ describe('AppLayout', () => {
     expect(screen.getAllByRole('link', { name: 'Upload document' }).length).toBeGreaterThan(0)
     expect(screen.queryByRole('link', { name: 'Audit trail' })).not.toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: 'Documents' }).length).toBeGreaterThan(0)
+  })
+
+  it('keeps the footer limited to the TrustVault name', () => {
+    renderLayout('USER')
+
+    const footer = screen.getByRole('contentinfo')
+    expect(within(footer).getByText('TrustVault')).toBeInTheDocument()
+    expect(within(footer).queryByText(/tamper-evident document sharing/)).toBeNull()
+    expect(within(footer).queryByText(/signed checkpoints/)).toBeNull()
   })
 })

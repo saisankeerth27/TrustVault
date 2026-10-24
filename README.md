@@ -20,6 +20,8 @@ Provide a document management system where authorization is guaranteed by the ba
 |-------|------------|
 | Frontend | React, JavaScript/JSX, Vite, Tailwind CSS, shadcn/ui |
 | PDF Rendering & Editing | Mozilla PDF.js (`pdfjs-dist`), `pdf-lib` |
+| Word Rendering & Editing | `docx-preview` (Apache-2.0), `mammoth` (BSD-2-Clause), `docx` (MIT) |
+| Image Editing | Native HTML5 canvas (no third-party editor) |
 | Routing | React Router |
 | HTTP client | Axios |
 | Forms / validation | React Hook Form, Zod |
@@ -242,7 +244,7 @@ Phases 5–6 implement the authenticated document library and named-user sharing
 - `GET /api/v1/documents/{id}/preview` streams the current object inline for owners, READ recipients, and EDIT recipients with `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Administrators without a grant receive 403.
 - `GET /api/v1/documents/{id}/versions` returns version metadata paginated five at a time by default, including the current version and page metadata; `GET /api/v1/documents/{id}/versions/{version_number}/download` streams a retained version. Neither exposes storage keys.
 - `PUT /api/v1/documents/{id}/versions` accepts a validated multipart replacement for owners and EDIT recipients and requires `expected_version_number`; stale writes return 409 rather than overwriting newer content.
-- `PUT /api/v1/documents/{id}/content` edits UTF-8 `text/plain` content as a new version for owners and EDIT recipients. Other MIME types return 415.
+- `PUT /api/v1/documents/{id}/content` edits UTF-8 `text/plain` content as a new version for owners and EDIT recipients. Other MIME types return 415. DOCX and image edits use the same `PUT /api/v1/documents/{id}/versions` replacement path, so the backend remains authoritative for authorization, conflict detection, checksums, and audit.
 - `DELETE /api/v1/documents/{id}/versions/{version_number}` is owner-only. Deleting a historical version preserves the current pointer; deleting the current version rolls back to the highest remaining version. The final version cannot be deleted, and version numbers are never reused.
 - `DELETE /api/v1/documents/{id}` is owner-only. It marks `deleted_at`, removes the document from normal reads, then attempts best-effort Supabase Storage cleanup for the current and historical version objects. Metadata is retained for history.
 - `POST /api/v1/documents/upload` is available to every active authenticated user. Ownership is assigned to the uploader, with generated keys, validated content, and a server-computed SHA-256 checksum.
@@ -261,7 +263,7 @@ Storage behavior is covered by a mocked adapter, and a **live private-bucket con
 - **Rendering engine:** Mozilla PDF.js (`pdfjs-dist` v6.x) built into Vite via dynamic worker bundling (`pdf.worker.min.mjs?url`).
 - **Data flow:** PDF bytes are retrieved through the authenticated backend endpoint (`GET /api/v1/documents/{id}/preview`), converted to an `ArrayBuffer`, and rendered directly into HTML5 canvas elements.
 - **Security controls:** `isEvalSupported: false` is configured on the PDF document loading task to prevent arbitrary code execution within the PDF context. The preview endpoint sets `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Private Supabase Storage object keys and signed URLs are never exposed to the client.
-- **Controls & navigation:** Page-by-page navigation with keyboard/button controls, zoom scaling (from 80% to 200%), page-count indicators, and automatic resource disposal (`loadingTask.destroy()`, render task cancellation on unmount).
+- **Controls & navigation:** Page-by-page navigation with keyboard/button controls, zoom scaling (60% to 250%, starting at **90%**), page-count indicators, and automatic resource disposal (`loadingTask.destroy()`, render task cancellation on unmount). Zoom starts at 90% so a full page is readable without manual adjustment; zoom in/out and page navigation remain fully manual.
 
 ### In-Browser PDF Editing Capabilities
 - **SDK & Licensing:** Implemented using open-source `pdf-lib` (MIT License) and `pdfjs-dist` (Apache 2.0 License). No proprietary or commercial license keys (such as Apryse WebViewer) are required.
@@ -287,6 +289,39 @@ Storage behavior is covered by a mocked adapter, and a **live private-bucket con
 - The last remaining version cannot be deleted and returns HTTP 400 Bad Request. This prevents a document from existing without usable content.
 - When a version is deleted, its private Supabase Storage object is deleted, retained storage totals are recalculated, and a `DOCUMENT_VERSION_DELETE` audit event records whether a rollback occurred, the previous/current version numbers, and storage cleanup status.
 
+## Word (DOCX) Preview and Editing
+
+### Paginated preview
+
+- **Rendering engine:** `docx-preview` (Apache-2.0), loaded dynamically so it stays out of the main bundle.
+- **Pages:** The renderer emits one `<section>` per page. The viewer shows a `Page X of Y` indicator, previous/next controls, and tracks the visible page while scrolling.
+- **Page boundaries:** Pages break on manual page breaks, Word's saved `lastRenderedPageBreak` markers, and section changes (`breakPages: true`, `ignoreLastRenderedPageBreak: false`). Tables, embedded images, headers, footers, footnotes, and endnotes are rendered where the library supports them.
+- **Graceful handling:** Loading, empty, single-page, corrupt-package, and retry states are explicit. A single-page document explains that it contains no page-break markers instead of pretending it was paginated.
+- **Limit:** This is a layout renderer, not a Word layout engine. It does not reflow text in real time, so a DOCX saved without page-break hints may appear as one long page. Complex Word constructs can differ from desktop Word.
+
+### Editing
+
+- Owners and `EDIT` recipients see an **Edit document** action; `READ` recipients and metadata-only administrators do not.
+- Content is fetched through the authenticated preview endpoint, converted to semantic HTML with `mammoth` (headings, paragraphs, character formatting, lists, tables, images), edited in a `contenteditable` surface with a formatting toolbar, undo/redo, and an optional change summary, then exported to a real `.docx` with the `docx` package (MIT).
+- Saving calls the normal version endpoint with `expected_version_number`. The backend re-checks ownership/`EDIT`, writes a new immutable version, computes a new SHA-256 checksum, and audits the change. A concurrent edit returns `409`, and the editor becomes stale until it is closed and reopened.
+- **Limits:** This is a rich-text round-trip, not full Word fidelity. Complex styles, text boxes, columns, comments, tracked changes, and some headers/footers may be simplified or dropped. Legacy binary `.doc` files are not supported for preview or editing; only `.docx` is accepted by upload validation.
+
+## Image Editing
+
+- Owners and `EDIT` recipients see an **Edit image** action for PNG/JPEG documents.
+- The editor is a client-side canvas tool with freehand pencil, line, arrow, rectangle, ellipse, and text, configurable colour and stroke width, undo/redo, and a full-size preview dialog.
+- Saving flattens the annotations into the image and uploads it through the version API as a new immutable version (PNG stays PNG, JPEG stays JPEG). The original version is retained.
+- Authorization and conflict handling are identical to DOCX editing: the server enforces `EDIT`/ownership and `expected_version_number`, and a stale save returns `409`. Flattening is destructive to the edited revision only; earlier versions remain unchanged.
+
+## Activity Attribution
+
+- Denials are split by whether the caller could see the document:
+  - **Not visible** (no ownership, no active grant, no metadata-only administrator role): the event is recorded as a **global** security event with `document_id = NULL`, retaining `attempted_document_id`, actor, capability, reason, and request context. It does not appear in the owner's document activity.
+  - **Visible but insufficient** (for example, a `READ` recipient attempting an edit): the event stays attached to the document and appears in owner activity.
+- The owner activity endpoint also excludes historical `DENIED` events whose `details.reason` is `not_visible`, because older releases attached those probes to the document. Historical rows are **not deleted or rewritten**, and their hash-chain/checkpoint evidence is unchanged.
+- Administrators can still find both forms: the audit `document_id` filter matches either `audit_events.document_id` or `details.attempted_document_id`.
+- This corrects the confusing behavior where another user's failed probing made a private document look as if it had been shared or accessed.
+
 ## Administrator Account Management
 
 - `GET /api/v1/admin/summary` returns account, role, document, and active-grant counts.
@@ -303,6 +338,7 @@ Storage behavior is covered by a mocked adapter, and a **live private-bucket con
 - Events are appended under a PostgreSQL advisory transaction lock with a contiguous `chain_index`, `previous_hash`, and SHA-256 `event_hash`. The hashed payload is canonical JSON with a versioned schema and UTC microsecond timestamps.
 - State-changing success events share the protected business transaction: an audit write failure rolls back the change and returns a generic error. Denial events use a best-effort commit and never block the intended 403/404 response.
 - Details are sanitized. Passwords, tokens, cookies, authorization headers, document content, session IDs, and other sensitive keys are rejected; request ID, direct socket client IP, and a length-limited user-agent are attached automatically when available.
+- Denial attribution distinguishes probes against documents the caller cannot see from denials on documents the caller can see. Not-visible probes are stored globally (`document_id = NULL`) with `attempted_document_id` for administrator investigation and are excluded from owner activity; visible-but-insufficient denials remain attached to the document. See [Activity Attribution](#activity-attribution).
 - `GET /api/v1/admin/audit-events` supports filtering by actor ID, target user ID, resource type, document ID, action, outcome, and inclusive UTC date range, with newest-first backend pagination at 15 records per page. The global audit response retains dedicated request/document IDs for administrator investigation; the table shows document names and the metadata dialog provides copyable diagnostic values. `GET /api/v1/admin/audit-integrity` verifies both the chain and the signed checkpoint and returns its server verification timestamp.
 - Both audit endpoints are global-administrator-only. There is no owner-scoped audit view or audit mutation endpoint in Phase 7.
 - The signed checkpoint binds the current chain head with HMAC-SHA256 and is written atomically by `python -m scripts.audit_integrity --create-checkpoint`. Checkpoint creation refuses to replace an invalid or newer checkpoint. It detects database tampering only relative to the last trusted checkpoint; events appended after the latest checkpoint and then deleted are not detectable by that checkpoint, and it does not prevent a privileged attacker from deleting both the database changes and the same-host checkpoint file.
@@ -387,7 +423,7 @@ cd backend
 pytest
 ```
 
-The suite currently has **269 tests**, including **46 threat-mapped security cases** in `backend/tests/test_security.py`, the business-model acceptance suite in `backend/tests/test_business_model.py`, the document-content/version suite in `backend/tests/test_document_versions.py`, and focused request-limit tests in `backend/tests/test_request_limits.py`. It verifies:
+The suite currently has **270 tests**, including **46 threat-mapped security cases** in `backend/tests/test_security.py`, the business-model acceptance suite in `backend/tests/test_business_model.py`, the document-content/version suite in `backend/tests/test_document_versions.py`, and focused request-limit tests in `backend/tests/test_request_limits.py`. It verifies:
 
 - Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
 - Database URL normalization and Supabase pooler/SSL detection.
@@ -413,6 +449,7 @@ The suite currently has **269 tests**, including **46 threat-mapped security cas
 - Shared-with-me filtering of revoked and soft-deleted documents, pagination/sorting, immediate post-revocation denial, access-level reporting, and metadata-only administrator behavior.
 - Audit events for registration, login success/failure, logout, account status/role changes, uploads, metadata updates, downloads, deletes, permission changes, and denied operations.
 - Administrator-only audit query access, filters, pagination, generic denial behavior, request-ID normalization, metadata/request-context sanitization, and denied audit access.
+- Denial attribution: not-visible probes are recorded as global events with `attempted_document_id`, stay out of owner activity, remain discoverable by the administrator document filter, and visible-but-insufficient denials stay attached to the document. Historical not-visible rows are excluded from owner activity without rewriting audit data.
 - Hash-chain verification, middle-event tampering/removal detection, signed-checkpoint success/staleness/truncation/signature failure, refusal to replace invalid/newer checkpoints, and mandatory-audit-write rollback behavior.
 - Threat-model verification for IDOR, cross-user GET/download/edit/delete denial, grant/revoke audit coverage, forged role claims, administrator content boundaries, malicious uploads, malformed multipart, DOCX expansion limits, Unicode format-control filenames, path manipulation, audit API mutation attempts, metadata leakage, secret-safe failures, expired/tampered tokens, logout/disabled-account invalidation, brute-force limits, pre-authentication oversized uploads, and uploads without `Content-Length`.
 
@@ -424,7 +461,7 @@ Coverage is generated separately from test success:
 pytest --cov=app --cov-report=term-missing
 ```
 
-The verified local full-suite run passed **269 tests with 88% statement coverage**. Coverage is a diagnostic, not proof of security.
+The verified local full-suite run passed **270 tests**. Coverage is a diagnostic, not proof of security.
 
 The GitHub Actions workflow `.github/workflows/backend-tests.yml` runs the full backend suite with coverage on pushes and pull requests that change `backend/**`. Remote CI execution is not verified until the workflow runs on GitHub.
 
@@ -437,7 +474,7 @@ npm test
 npm run build
 ```
 
-All three commands pass. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The 23 automated tests across 8 files cover safe API error extraction, role-aware navigation, dashboard API-backed counts and failure handling, upload access for normal users, administrator account oversight/actions, structured audit metadata, READ-only previews/history, plain-text version edits, replacement uploads, version/activity pagination, current-version rollback, and stale-editor protection. A browser-based walkthrough with live accounts and deployment remain unverified.
+All three commands pass, except `npm run lint` when the machine's Application Control policy blocks oxlint's native binding; in that case the build and Vitest suite are the authoritative checks. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The **54 automated tests across 16 files** cover safe API error extraction, role-aware navigation, dashboard API-backed counts and failure handling, upload access for normal users, administrator account oversight/actions, structured audit metadata, READ-only previews/history, plain-text version edits, paginated DOCX preview (single page, 12 pages, corrupt/retry), DOCX editing and conflict handling, image editing with undo/redo/text/preview/save, PDF 90% initial zoom with manual zoom and page navigation, replacement uploads, version/activity pagination, current-version rollback, stale-editor protection, and that READ-only recipients never see DOCX or image edit actions. A browser-based walkthrough with live accounts and deployment remain unverified.
 
 ## API Baseline
 
@@ -523,6 +560,9 @@ See [THREATS.md](THREATS.md) for the full threat model.
 - Audit exports (CSV/JSON download) and owner-scoped audit views are not implemented; audit query access is global-administrator-only.
 - Client IP metadata uses the direct ASGI socket address, not a trusted `X-Forwarded-For` chain, so a reverse proxy may record the proxy address. Forwarded-header trust must be configured deliberately at deployment.
 - Uploads are not virus-scanned; validation covers type/signature/size/structure only.
+- DOCX preview and editing are browser-side and intentionally limited: `docx-preview` is not a Word layout engine and relies on saved page-break/section markers, so documents without those markers render as one continuous page; the editor round-trips headings, paragraphs, basic formatting, lists, tables, and images but can simplify complex styles, text boxes, columns, comments, tracked changes, and some headers/footers. Legacy binary `.doc` is not supported at all.
+- Image editing flattens annotations into the saved revision. Edits cannot be un-flattened after saving, though prior versions remain intact and can be downloaded or rolled back by the owner.
+- Both editors depend on modern browser APIs (`contenteditable`, canvas, `File`, dynamic `import()`); older or restricted browsers may refuse to save and will show an error instead.
 - Upload-to-database consistency is compensating, not transactional: a failed metadata commit triggers best-effort object deletion, which could itself fail.
 - Soft deletion excludes metadata from normal reads but object cleanup occurs after commit; a cleanup failure can leave a private orphan object for later reconciliation.
 - RLS is not enabled; the backend uses a single privileged database role.

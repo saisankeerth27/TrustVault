@@ -11,7 +11,6 @@ import {
   PencilLine,
   RefreshCw,
   ShieldAlert,
-  ShieldCheck,
   Trash2,
   UserRound,
   X,
@@ -19,8 +18,10 @@ import {
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
 import { DocumentActivityHistory } from '@/components/documents/DocumentActivityHistory'
+import { DocumentDocxEditor } from '@/components/documents/DocumentDocxEditor'
 import { DocumentPreview } from '@/components/documents/DocumentPreview'
 import { DocumentTextEditor } from '@/components/documents/DocumentTextEditor'
+import { ImageAnnotationEditor } from '@/components/documents/ImageAnnotationEditor'
 import { PdfAnnotationEditor } from '@/components/documents/PdfAnnotationEditor'
 import { ReplaceDocumentVersion } from '@/components/documents/ReplaceDocumentVersion'
 import { VersionHistory } from '@/components/documents/VersionHistory'
@@ -29,9 +30,10 @@ import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  ACCESS_LEVEL_META,
   canDeleteDocument,
   canDeleteHistoricalVersion,
+  canEditDocxContent,
+  canEditImageContent,
   canEditPdfContent,
   canEditTextContent,
   canManageDocumentPermissions,
@@ -82,12 +84,10 @@ function DocumentDetailsView({ documentId }) {
   const [loadError, setLoadError] = useState(null)
   const [actionError, setActionError] = useState(null)
   const [notice, setNotice] = useState(null)
-  const [isEditingContent, setIsEditingContent] = useState(false)
-  const [isEditingPdf, setIsEditingPdf] = useState(false)
-  const [pdfBlob, setPdfBlob] = useState(null)
-  const [isLoadingPdfBlob, setIsLoadingPdfBlob] = useState(false)
-  const [pdfBlobError, setPdfBlobError] = useState(null)
-  const [isReplacingFile, setIsReplacingFile] = useState(false)
+  const [activeEditor, setActiveEditor] = useState(null)
+  const [editorBlob, setEditorBlob] = useState(null)
+  const [isLoadingEditorBlob, setIsLoadingEditorBlob] = useState(false)
+  const [editorBlobError, setEditorBlobError] = useState(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadingVersion, setDownloadingVersion] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -131,41 +131,45 @@ function DocumentDetailsView({ documentId }) {
   const canRead = canReadDocument(documentRecord)
   const canEditContent = canEditTextContent(documentRecord)
   const canEditPdf = canEditPdfContent(documentRecord)
+  const canEditDocx = canEditDocxContent(documentRecord)
+  const canEditImage = canEditImageContent(documentRecord)
   const canReplaceFile = canReplaceDocumentFile(documentRecord)
   const canDelete = canDeleteDocument(documentRecord)
   const canManagePermissions = canManageDocumentPermissions(documentRecord)
   const canDeleteVersion = canDeleteHistoricalVersion(documentRecord)
   const isMetadataOnly = documentRecord?.access_level === 'ADMINISTRATOR'
-  const accessMeta = ACCESS_LEVEL_META[documentRecord?.access_level]
   const isNotFound = loadError?.response?.status === 404
   const recordId = documentRecord?.id
 
+  const needsEditorBlob =
+    activeEditor === 'pdf' || activeEditor === 'docx' || activeEditor === 'image'
+
   useEffect(() => {
-    if (!isEditingPdf || !recordId || pdfBlob) {
+    if (!needsEditorBlob || !recordId || editorBlob) {
       return undefined
     }
 
     const controller = new AbortController()
-    setIsLoadingPdfBlob(true)
-    setPdfBlobError(null)
+    setIsLoadingEditorBlob(true)
+    setEditorBlobError(null)
 
     previewDocument(recordId, controller.signal)
       .then(({ blob }) => {
-        setPdfBlob(blob)
+        setEditorBlob(blob)
       })
       .catch((err) => {
         if (!isAbortError(err)) {
-          setPdfBlobError(getApiErrorMessage(err))
+          setEditorBlobError(getApiErrorMessage(err))
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) {
-          setIsLoadingPdfBlob(false)
+          setIsLoadingEditorBlob(false)
         }
       })
 
     return () => controller.abort()
-  }, [isEditingPdf, recordId, pdfBlob])
+  }, [needsEditorBlob, recordId, editorBlob])
 
   useEffect(() => {
     if (!recordId || !canRead) {
@@ -219,15 +223,22 @@ function DocumentDetailsView({ documentId }) {
   function applyVersionResult(result) {
     setDocumentRecord(result.document)
     setCurrentVersion(result.version)
-    setIsEditingContent(false)
-    setIsEditingPdf(false)
-    setPdfBlob(null)
-    setIsReplacingFile(false)
+    setActiveEditor(null)
+    setEditorBlob(null)
+    setEditorBlobError(null)
     setActionError(null)
     setNotice(`Version ${result.version.version_number} created.`)
     setVersionPage(1)
     setActivityRefreshKey((key) => key + 1)
     refreshVersions()
+  }
+
+  function toggleEditor(kind) {
+    setActiveEditor((current) => (current === kind ? null : kind))
+    setEditorBlob(null)
+    setEditorBlobError(null)
+    setActionError(null)
+    setNotice(null)
   }
 
   function handleVersionConflict() {
@@ -404,63 +415,75 @@ function DocumentDetailsView({ documentId }) {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => {
-                  setIsEditingContent((editing) => !editing)
-                  setIsEditingPdf(false)
-                  setIsReplacingFile(false)
-                  setActionError(null)
-                  setNotice(null)
-                }}
+                onClick={() => toggleEditor('text')}
                 disabled={!currentVersion || isLoadingVersions}
               >
-                {isEditingContent ? (
+                {activeEditor === 'text' ? (
                   <X className="size-4" aria-hidden="true" />
                 ) : (
                   <PencilLine className="size-4" aria-hidden="true" />
                 )}
-                {isEditingContent ? 'Cancel text edit' : 'Edit text'}
+                {activeEditor === 'text' ? 'Cancel text edit' : 'Edit text'}
               </Button>
             ) : null}
             {canEditPdf ? (
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => {
-                  setIsEditingPdf((editing) => !editing)
-                  setIsEditingContent(false)
-                  setIsReplacingFile(false)
-                  setActionError(null)
-                  setNotice(null)
-                }}
+                onClick={() => toggleEditor('pdf')}
                 disabled={!currentVersion || isLoadingVersions}
               >
-                {isEditingPdf ? (
+                {activeEditor === 'pdf' ? (
                   <X className="size-4" aria-hidden="true" />
                 ) : (
                   <PencilLine className="size-4" aria-hidden="true" />
                 )}
-                {isEditingPdf ? 'Cancel PDF edit' : 'Edit PDF'}
+                {activeEditor === 'pdf' ? 'Cancel PDF edit' : 'Edit PDF'}
+              </Button>
+            ) : null}
+            {canEditDocx ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => toggleEditor('docx')}
+                disabled={!currentVersion || isLoadingVersions}
+              >
+                {activeEditor === 'docx' ? (
+                  <X className="size-4" aria-hidden="true" />
+                ) : (
+                  <PencilLine className="size-4" aria-hidden="true" />
+                )}
+                {activeEditor === 'docx' ? 'Cancel document edit' : 'Edit document'}
+              </Button>
+            ) : null}
+            {canEditImage ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => toggleEditor('image')}
+                disabled={!currentVersion || isLoadingVersions}
+              >
+                {activeEditor === 'image' ? (
+                  <X className="size-4" aria-hidden="true" />
+                ) : (
+                  <PencilLine className="size-4" aria-hidden="true" />
+                )}
+                {activeEditor === 'image' ? 'Cancel image edit' : 'Edit image'}
               </Button>
             ) : null}
             {canReplaceFile ? (
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => {
-                  setIsReplacingFile((replacing) => !replacing)
-                  setIsEditingContent(false)
-                  setIsEditingPdf(false)
-                  setActionError(null)
-                  setNotice(null)
-                }}
+                onClick={() => toggleEditor('replace')}
                 disabled={!currentVersion || isLoadingVersions}
               >
-                {isReplacingFile ? (
+                {activeEditor === 'replace' ? (
                   <X className="size-4" aria-hidden="true" />
                 ) : (
                   <FileUp className="size-4" aria-hidden="true" />
                 )}
-                {isReplacingFile ? 'Cancel new version' : 'New version'}
+                {activeEditor === 'replace' ? 'Cancel new version' : 'New version'}
               </Button>
             ) : null}
             {canManagePermissions ? (
@@ -518,23 +541,23 @@ function DocumentDetailsView({ documentId }) {
         </div>
       ) : null}
 
-      {isEditingContent && canEditContent ? (
+      {activeEditor === 'text' && canEditContent ? (
         <DocumentTextEditor
           documentRecord={documentRecord}
           currentVersion={currentVersion}
           onSaved={applyVersionResult}
           onConflict={handleVersionConflict}
-          onCancel={() => setIsEditingContent(false)}
+          onCancel={() => setActiveEditor(null)}
         />
       ) : null}
 
-      {isReplacingFile && canReplaceFile ? (
+      {activeEditor === 'replace' && canReplaceFile ? (
         <ReplaceDocumentVersion
           documentRecord={documentRecord}
           currentVersion={currentVersion}
           onReplaced={applyVersionResult}
           onConflict={handleVersionConflict}
-          onCancel={() => setIsReplacingFile(false)}
+          onCancel={() => setActiveEditor(null)}
         />
       ) : null}
 
@@ -578,35 +601,59 @@ function DocumentDetailsView({ documentId }) {
         </Card>
       ) : null}
 
-      {isEditingPdf && canEditPdf ? (
-        isLoadingPdfBlob ? (
+      {needsEditorBlob ? (
+        isLoadingEditorBlob ? (
           <Card>
             <CardContent className="flex min-h-48 items-center justify-center gap-3 p-8 text-sm text-muted-foreground">
               <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
-              Loading PDF for editing...
+              Loading editable content...
             </CardContent>
           </Card>
-        ) : pdfBlobError ? (
+        ) : editorBlobError ? (
           <div
             role="alert"
             className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
           >
-            {pdfBlobError}
+            {editorBlobError}
           </div>
-        ) : pdfBlob ? (
-          <PdfAnnotationEditor
-            blob={pdfBlob}
-            filename={documentRecord.name}
-            documentRecord={documentRecord}
-            currentVersion={currentVersion}
-            onSaved={applyVersionResult}
-            onConflict={handleVersionConflict}
-            onCancel={() => setIsEditingPdf(false)}
-          />
+        ) : editorBlob ? (
+          <>
+            {activeEditor === 'pdf' && canEditPdf ? (
+              <PdfAnnotationEditor
+                blob={editorBlob}
+                filename={documentRecord.name}
+                documentRecord={documentRecord}
+                currentVersion={currentVersion}
+                onSaved={applyVersionResult}
+                onConflict={handleVersionConflict}
+                onCancel={() => setActiveEditor(null)}
+              />
+            ) : null}
+            {activeEditor === 'docx' && canEditDocx ? (
+              <DocumentDocxEditor
+                blob={editorBlob}
+                documentRecord={documentRecord}
+                currentVersion={currentVersion}
+                onSaved={applyVersionResult}
+                onConflict={handleVersionConflict}
+                onCancel={() => setActiveEditor(null)}
+              />
+            ) : null}
+            {activeEditor === 'image' && canEditImage ? (
+              <ImageAnnotationEditor
+                blob={editorBlob}
+                documentRecord={documentRecord}
+                currentVersion={currentVersion}
+                onSaved={applyVersionResult}
+                onConflict={handleVersionConflict}
+                onCancel={() => setActiveEditor(null)}
+              />
+            ) : null}
+          </>
         ) : null
       ) : null}
 
-      {!isEditingPdf && canRead ? (
+      {!needsEditorBlob && canRead ? (
         <Card>
           <CardHeader>
             <CardTitle>Secure content preview</CardTitle>
@@ -624,75 +671,45 @@ function DocumentDetailsView({ documentId }) {
         </Card>
       ) : null}
 
-      <div className="grid gap-5 lg:grid-cols-[2fr_1fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Document metadata</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <dl className="grid gap-6 sm:grid-cols-2">
-              <MetadataItem icon={UserRound} label="Owner">
-                {documentRecord.owner_name}
-                {documentRecord.access_level === 'OWNER' ? (
-                  <span className="ml-2 text-xs text-muted-foreground">(you)</span>
-                ) : null}
-              </MetadataItem>
-              <MetadataItem icon={FileText} label="Category">
-                {documentRecord.category || 'Uncategorized'}
-              </MetadataItem>
-              <MetadataItem icon={HardDrive} label="File size">
-                {formatBytes(documentRecord.file_size)}
-              </MetadataItem>
-              <MetadataItem icon={FileText} label="MIME type">
-                {documentRecord.mime_type}
-              </MetadataItem>
-              <MetadataItem icon={CalendarDays} label="Created">
-                {formatDateTime(documentRecord.created_at)}
-              </MetadataItem>
-              <MetadataItem icon={CalendarDays} label="Last updated">
-                {formatDateTime(documentRecord.updated_at)}
-              </MetadataItem>
-              <MetadataItem icon={FileText} label="Description" className="sm:col-span-2">
-                <span className="whitespace-pre-wrap">
-                  {documentRecord.description || 'No description provided.'}
-                </span>
-              </MetadataItem>
-            </dl>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Your access</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm leading-6 text-muted-foreground">
-            <div className="flex items-start gap-3">
-              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-              <div>
-                <p className="font-medium text-foreground">{accessMeta?.label ?? 'No access'}</p>
-                <p>{accessMeta?.description ?? 'Your account cannot access this document.'}</p>
-              </div>
-            </div>
-            <p>
-              The backend resolves ownership and active grants from the database on every request.
-              Revoked access is denied immediately for previews, version history, and downloads.
-            </p>
-            <p>
-              Storage keys and private object URLs are never exposed. Downloads are proxied through
-              the authenticated API.
-            </p>
-            {canManagePermissions ? (
-              <Link
-                to={`/documents/${documentRecord.id}/permissions`}
-                className="inline-flex items-center gap-2 font-medium text-primary underline-offset-4 hover:underline"
-              >
-                <KeyRound className="size-4" aria-hidden="true" />
-                Manage document access
-              </Link>
-            ) : null}
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Document metadata</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <MetadataItem icon={UserRound} label="Owner">
+              {documentRecord.owner_name}
+              {documentRecord.access_level === 'OWNER' ? (
+                <span className="ml-2 text-xs text-muted-foreground">(you)</span>
+              ) : null}
+            </MetadataItem>
+            <MetadataItem icon={FileText} label="Category">
+              {documentRecord.category || 'Uncategorized'}
+            </MetadataItem>
+            <MetadataItem icon={HardDrive} label="File size">
+              {formatBytes(documentRecord.file_size)}
+            </MetadataItem>
+            <MetadataItem icon={FileText} label="MIME type">
+              {documentRecord.mime_type}
+            </MetadataItem>
+            <MetadataItem icon={CalendarDays} label="Created">
+              {formatDateTime(documentRecord.created_at)}
+            </MetadataItem>
+            <MetadataItem icon={CalendarDays} label="Last updated">
+              {formatDateTime(documentRecord.updated_at)}
+            </MetadataItem>
+            <MetadataItem
+              icon={FileText}
+              label="Description"
+              className="sm:col-span-2 lg:col-span-3"
+            >
+              <span className="whitespace-pre-wrap">
+                {documentRecord.description || 'No description provided.'}
+              </span>
+            </MetadataItem>
+          </dl>
+        </CardContent>
+      </Card>
 
       {canRead ? (
         <VersionHistory

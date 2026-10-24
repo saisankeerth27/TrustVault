@@ -29,6 +29,7 @@ import {
   Highlighter,
   LoaderCircle,
   MessageSquare,
+  Move,
   Pen,
   Save,
   ShieldCheck,
@@ -63,6 +64,7 @@ function pdfSafeText(value) {
 }
 
 const TOOL_TYPES = {
+  SELECT: 'select',
   TEXT_NOTE: 'text_note',
   FREE_TEXT: 'free_text',
   HIGHLIGHT: 'highlight',
@@ -70,6 +72,11 @@ const TOOL_TYPES = {
 }
 
 const TOOL_META = {
+  [TOOL_TYPES.SELECT]: {
+    label: 'Select / move',
+    description: 'Select text or drag an existing annotation',
+    Icon: Move,
+  },
   [TOOL_TYPES.TEXT_NOTE]: {
     label: 'Text note',
     description: 'Click to add a sticky-note annotation',
@@ -185,6 +192,9 @@ export function PdfAnnotationEditor({
   const [annotations, setAnnotations] = useState([])
   const [activeTool, setActiveTool] = useState(TOOL_TYPES.TEXT_NOTE)
   const [pendingClick, setPendingClick] = useState(null)
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState(null)
+  const [isDraggingAnnotation, setIsDraggingAnnotation] = useState(false)
+  const [textLayerError, setTextLayerError] = useState(null)
 
   // Highlight drag state
   const [highlightStart, setHighlightStart] = useState(null)
@@ -197,6 +207,8 @@ export function PdfAnnotationEditor({
   const [changeSummary, setChangeSummary] = useState('')
 
   const canvasRef = useRef(null)
+  const textLayerRef = useRef(null)
+  const annotationDragRef = useRef(null)
   const renderTaskRef = useRef(null)
   const loadingTaskRef = useRef(null)
 
@@ -242,10 +254,21 @@ export function PdfAnnotationEditor({
         const pr = window.devicePixelRatio || 1
         const vp = page.getViewport({ scale })
         const canvas = canvasRef.current
+        const textLayerContainer = textLayerRef.current
         canvas.width = Math.floor(vp.width * pr)
         canvas.height = Math.floor(vp.height * pr)
         canvas.style.width = `${Math.floor(vp.width)}px`
         canvas.style.height = `${Math.floor(vp.height)}px`
+        if (textLayerContainer) {
+          textLayerContainer.replaceChildren()
+          textLayerContainer.style.width = canvas.style.width
+          textLayerContainer.style.height = canvas.style.height
+          textLayerContainer.style.setProperty('--scale-factor', String(scale))
+          textLayerContainer.style.setProperty('--total-scale-factor', String(scale))
+          textLayerContainer.style.setProperty('--user-unit', '1')
+          textLayerContainer.style.setProperty('--scale-round-x', '1px')
+          textLayerContainer.style.setProperty('--scale-round-y', '1px')
+        }
         const task = page.render({
           canvasContext: canvas.getContext('2d'),
           viewport: vp,
@@ -253,6 +276,25 @@ export function PdfAnnotationEditor({
         })
         renderTaskRef.current = task
         await task.promise
+        if (active && textLayerContainer) {
+          try {
+            const textLayer = new pdfjsLib.TextLayer({
+              textContentSource: page.streamTextContent(),
+              container: textLayerContainer,
+              viewport: vp,
+            })
+            textLayerContainer.style.width = canvas.style.width
+            textLayerContainer.style.height = canvas.style.height
+            await textLayer.render()
+            setTextLayerError(null)
+          } catch {
+            if (active) {
+              setTextLayerError(
+                'Text selection is unavailable for this PDF page.',
+              )
+            }
+          }
+        }
       } catch (err) {
         if (err?.name !== 'RenderingCancelledException') {
           console.warn('render error', err)
@@ -274,6 +316,7 @@ export function PdfAnnotationEditor({
 
   function handleMouseDown(e) {
     if (e.button !== 0 || isSaving) return
+    if (activeTool === TOOL_TYPES.SELECT) return
     if (activeTool === TOOL_TYPES.HIGHLIGHT) {
       const c = getCanvasRelativeCoords(e)
       setHighlightStart(c)
@@ -325,10 +368,11 @@ export function PdfAnnotationEditor({
 
   function handleAnnotationConfirm(text) {
     if (!pendingClick) return
+    const annotationId = `ann-${Date.now()}`
     setAnnotations((prev) => [
       ...prev,
       {
-        id: `ann-${Date.now()}`,
+        id: annotationId,
         type: activeTool,
         pageIndex: pendingClick.pageIndex,
         x: pendingClick.x,
@@ -336,11 +380,80 @@ export function PdfAnnotationEditor({
         text,
       },
     ])
+    setSelectedAnnotationId(annotationId)
     setPendingClick(null)
   }
 
   function removeAnnotation(id) {
     setAnnotations((prev) => prev.filter((a) => a.id !== id))
+    setSelectedAnnotationId((selected) => selected === id ? null : selected)
+  }
+
+  function beginAnnotationDrag(event, annotation) {
+    if (isSaving || event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const point = getCanvasRelativeCoords(event)
+    annotationDragRef.current = {
+      id: annotation.id,
+      offsetX: point.x - annotation.x,
+      offsetY: point.y - annotation.y,
+    }
+    setSelectedAnnotationId(annotation.id)
+    setIsDraggingAnnotation(true)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  function moveSelectedAnnotation(event) {
+    const drag = annotationDragRef.current
+    if (!drag) return
+    event.preventDefault()
+    const point = getCanvasRelativeCoords(event)
+    const canvas = canvasRef.current
+    const maxX = canvas ? canvas.clientWidth / scale : Number.POSITIVE_INFINITY
+    const maxY = canvas ? canvas.clientHeight / scale : Number.POSITIVE_INFINITY
+    setAnnotations((current) =>
+      current.map((annotation) =>
+        annotation.id === drag.id
+          ? {
+              ...annotation,
+              x: Math.max(0, Math.min(maxX, point.x - drag.offsetX)),
+              y: Math.max(0, Math.min(maxY, point.y - drag.offsetY)),
+            }
+          : annotation,
+      ),
+    )
+  }
+
+  function endAnnotationDrag(event) {
+    if (!annotationDragRef.current) return
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    annotationDragRef.current = null
+    setIsDraggingAnnotation(false)
+  }
+
+  function handleAnnotationKeyDown(event, annotation) {
+    const increments = {
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    }
+    const movement = increments[event.key]
+    if (!movement || isSaving) return
+    event.preventDefault()
+    setSelectedAnnotationId(annotation.id)
+    setAnnotations((current) =>
+      current.map((item) =>
+        item.id === annotation.id
+          ? {
+              ...item,
+              x: Math.max(0, item.x + movement[0]),
+              y: Math.max(0, item.y + movement[1]),
+            }
+          : item,
+      ),
+    )
   }
 
   const currentPageAnnotations = annotations.filter((a) => a.pageIndex === pageNum - 1)
@@ -505,7 +618,7 @@ export function PdfAnnotationEditor({
               new immutable version.
             </p>
             <p className="rounded border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-800">
-              This editor adds visual annotations to the PDF pages. It does not modify underlying body text.
+              Select PDF text where available, or select and drag an annotation. This editor adds visual annotations; it does not modify the PDF's embedded body text.
             </p>
           </div>
           <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={isSaving}>
@@ -534,6 +647,7 @@ export function PdfAnnotationEditor({
                   size="sm"
                   onClick={() => {
                     setActiveTool(type)
+                    setPendingClick(null)
                     setHighlightStart(null)
                     setHighlightPreview(null)
                   }}
@@ -593,15 +707,25 @@ export function PdfAnnotationEditor({
           </div>
 
           <p className="text-xs text-muted-foreground">
-            {activeTool === TOOL_TYPES.HIGHLIGHT
+            {activeTool === TOOL_TYPES.SELECT
+              ? 'Select text, or drag an annotation to reposition it. Use arrow keys to move a focused annotation.'
+              : activeTool === TOOL_TYPES.HIGHLIGHT
               ? 'Click and drag on the document to place a highlight rectangle.'
               : 'Click anywhere on the document to place an annotation at that position.'}
           </p>
+          {textLayerError ? (
+            <p className="text-xs text-amber-800" role="status">
+              {textLayerError}
+            </p>
+          ) : null}
 
           {/* Canvas area */}
           <div
             className="overflow-auto rounded-lg border bg-muted/20 p-2"
-            style={{ maxHeight: '40rem', userSelect: 'none' }}
+            style={{
+              maxHeight: '40rem',
+              userSelect: activeTool === TOOL_TYPES.SELECT ? 'text' : 'none',
+            }}
           >
             <div className="relative inline-block">
               <canvas
@@ -620,12 +744,22 @@ export function PdfAnnotationEditor({
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
               />
+              <div
+                ref={textLayerRef}
+                className="pdfjs-text-layer"
+                aria-label={`Selectable text on PDF page ${pageNum}`}
+                style={{
+                  pointerEvents:
+                    activeTool === TOOL_TYPES.SELECT ? 'auto' : 'none',
+                }}
+              />
 
               {/* Highlight drag preview */}
               {highlightPreview ? (
                 <div
                   style={{
                     position: 'absolute',
+                    zIndex: 2,
                     pointerEvents: 'none',
                     left: highlightPreview.x * scale,
                     top: highlightPreview.y * scale,
@@ -640,23 +774,45 @@ export function PdfAnnotationEditor({
               {/* Annotation overlays for current page */}
               {currentPageAnnotations.map((ann) => {
                 const meta = TOOL_META[ann.type] || {}
+                const isSelected = selectedAnnotationId === ann.id
                 if (ann.type === TOOL_TYPES.HIGHLIGHT) {
                   return (
                     <div
                       key={ann.id}
+                      role="group"
+                      tabIndex={0}
+                      aria-label={`Highlight annotation on page ${pageNum}`}
+                      onKeyDown={(event) =>
+                        handleAnnotationKeyDown(event, ann)
+                      }
+                      onPointerDown={(event) =>
+                        beginAnnotationDrag(event, ann)
+                      }
+                      onPointerMove={moveSelectedAnnotation}
+                      onPointerUp={endAnnotationDrag}
+                      onPointerCancel={endAnnotationDrag}
                       style={{
                         position: 'absolute',
+                        zIndex: 2,
                         left: ann.x * scale,
                         top: ann.y * scale,
                         width: (ann.w || 100) * scale,
                         height: (ann.h || 20) * scale,
                         backgroundColor: 'rgba(251,191,36,0.35)',
-                        border: '1px dashed #f59e0b',
+                        border: isSelected
+                          ? '2px solid #2563eb'
+                          : '1px dashed #f59e0b',
+                        outline: isSelected
+                          ? '2px solid rgb(37 99 235 / 30%)'
+                          : 'none',
+                        cursor: isDraggingAnnotation ? 'grabbing' : 'grab',
+                        touchAction: 'none',
                         pointerEvents: 'auto',
                       }}
                     >
                       <button
                         type="button"
+                        onPointerDown={(event) => event.stopPropagation()}
                         onClick={() => removeAnnotation(ann.id)}
                         style={{
                           position: 'absolute', top: -8, right: -8,
@@ -675,13 +831,33 @@ export function PdfAnnotationEditor({
                 return (
                   <div
                     key={ann.id}
+                    role="group"
+                    tabIndex={0}
+                    aria-label={`${meta.label || 'Text'} annotation on page ${pageNum}: ${ann.text}`}
+                    onKeyDown={(event) =>
+                      handleAnnotationKeyDown(event, ann)
+                    }
+                    onPointerDown={(event) =>
+                      beginAnnotationDrag(event, ann)
+                    }
+                    onPointerMove={moveSelectedAnnotation}
+                    onPointerUp={endAnnotationDrag}
+                    onPointerCancel={endAnnotationDrag}
                     style={{
                       position: 'absolute',
+                      zIndex: 2,
                       left: ann.x * scale,
                       top: ann.y * scale,
                       maxWidth: 200,
                       background: ann.type === TOOL_TYPES.SIGNATURE ? 'transparent' : 'rgba(255,253,230,0.95)',
-                      border: ann.type === TOOL_TYPES.SIGNATURE ? 'none' : '1.5px solid #f59e0b',
+                      border: isSelected
+                        ? '2px solid #2563eb'
+                        : ann.type === TOOL_TYPES.SIGNATURE
+                          ? 'none'
+                          : '1.5px solid #f59e0b',
+                      outline: isSelected
+                        ? '2px solid rgb(37 99 235 / 30%)'
+                        : 'none',
                       borderRadius: 4,
                       padding: ann.type === TOOL_TYPES.SIGNATURE ? 0 : '2px 6px',
                       fontSize: ann.type === TOOL_TYPES.SIGNATURE ? 18 : 11,
@@ -691,6 +867,8 @@ export function PdfAnnotationEditor({
                       fontFamily: ann.type === TOOL_TYPES.SIGNATURE ? 'Georgia, serif' : 'inherit',
                       boxShadow: ann.type !== TOOL_TYPES.SIGNATURE ? '0 1px 4px rgba(0,0,0,0.12)' : 'none',
                       pointerEvents: 'auto',
+                      cursor: isDraggingAnnotation ? 'grabbing' : 'grab',
+                      touchAction: 'none',
                       whiteSpace: 'pre-wrap',
                       wordBreak: 'break-word',
                     }}
@@ -698,6 +876,7 @@ export function PdfAnnotationEditor({
                     {ann.text}
                     <button
                       type="button"
+                      onPointerDown={(event) => event.stopPropagation()}
                       onClick={() => removeAnnotation(ann.id)}
                       style={{
                         position: 'absolute', top: -8, right: -8,

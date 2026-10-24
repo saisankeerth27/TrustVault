@@ -31,6 +31,7 @@ from app.services.audit_integrity import (
 from app.services.auth import create_account
 from app.services.storage import get_storage_service
 from tests.auth_helpers import DEFAULT_PASSWORD, bearer, login, register, unique_email
+from tests.factories import make_audit_event
 
 PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 CHECKPOINT_KEY = "test-audit-checkpoint-signing-key-0123456789"
@@ -363,11 +364,161 @@ def test_denied_actions_are_audited_without_exposing_document_content(
         for event in denied_events
         if event.action != "AUDIT_ACCESS_DENIED"
     ]
-    assert all(event.document_id == UUID(document_id) for event in document_denials)
+    # A caller with no visibility has no relationship to the document. The
+    # probe is retained as a global security event with the attempted target
+    # in details rather than being attached to the owner's document activity.
+    assert all(event.document_id is None for event in document_denials)
+    assert all(
+        event.details.get("attempted_document_id") == document_id
+        for event in document_denials
+    )
+    assert all(
+        event.details.get("reason") == "not_visible"
+        for event in document_denials
+    )
     assert all(
         "payload" not in event.details and "content" not in event.details
         for event in denied_events
     )
+
+
+def test_not_visible_probes_are_global_while_visible_denials_stay_in_activity(
+    api_client: TestClient,
+    db_session: Session,
+    fake_storage: FakeStorage,
+) -> None:
+    owner_email, owner = _create_role_user(
+        db_session,
+        UserRole.USER,
+        name="Sai Owner",
+    )
+    owner_token = _token_for(api_client, owner_email)
+    uploaded = _upload(api_client, owner_token)
+    assert uploaded.status_code == 201
+    document_id = uploaded.json()["id"]
+
+    probe_email, probe = _create_role_user(
+        db_session,
+        UserRole.USER,
+        name="Akash Probe",
+    )
+    probe_token = _token_for(api_client, probe_email)
+
+    # A real unauthorized metadata request must be denied and audited. It is
+    # global because the caller cannot see the document at all.
+    assert (
+        api_client.get(
+            f"/api/v1/documents/{document_id}",
+            headers=bearer(probe_token),
+        ).status_code
+        == 404
+    )
+
+    probe_event = db_session.scalar(
+        select(AuditEvent)
+        .where(
+            AuditEvent.action == "DOCUMENT_ACCESS_DENIED",
+            AuditEvent.actor_id == probe.id,
+        )
+        .order_by(AuditEvent.chain_index.desc())
+    )
+    assert probe_event is not None
+    assert probe_event.document_id is None
+    assert probe_event.details["attempted_document_id"] == document_id
+    assert probe_event.details["reason"] == "not_visible"
+    assert probe_event.details["actor_user_id"] == str(probe.id)
+
+    owner_activity = api_client.get(
+        f"/api/v1/documents/{document_id}/activity",
+        headers=bearer(owner_token),
+    )
+    assert owner_activity.status_code == 200
+    assert owner_activity.json()["total"] == 1
+    assert owner_activity.json()["items"][0]["action"] == "DOCUMENT_UPLOAD"
+
+    # Simulate an event written by an earlier release that attached the same
+    # not-visible probe to the document. It must remain in the immutable audit
+    # chain but must not reappear in the owner's document activity.
+    next_index = int(
+        db_session.scalar(select(func.max(AuditEvent.chain_index))) or 0
+    ) + 1
+    db_session.add(
+        make_audit_event(
+            actor_id=probe.id,
+            document_id=UUID(document_id),
+            action="DOCUMENT_ACCESS_DENIED",
+            outcome="DENIED",
+            details={
+                "attempted_document_id": document_id,
+                "capability": "METADATA",
+                "reason": "not_visible",
+                "resource_type": "DOCUMENT",
+            },
+            chain_index=next_index,
+            event_hash="d" * 64,
+            previous_hash="e" * 64,
+        )
+    )
+    db_session.commit()
+
+    activity_after_history = api_client.get(
+        f"/api/v1/documents/{document_id}/activity",
+        headers=bearer(owner_token),
+    )
+    assert activity_after_history.status_code == 200
+    assert activity_after_history.json()["total"] == 1
+
+    admin_email, _ = _create_role_user(
+        db_session,
+        UserRole.ADMINISTRATOR,
+    )
+    admin_token = _token_for(api_client, admin_email)
+    admin_events = api_client.get(
+        "/api/v1/admin/audit-events",
+        params={"document_id": document_id, "page_size": 100},
+        headers=bearer(admin_token),
+    )
+    assert admin_events.status_code == 200
+    admin_denials = [
+        item
+        for item in admin_events.json()["items"]
+        if item["action"] == "DOCUMENT_ACCESS_DENIED"
+    ]
+    assert len(admin_denials) == 2
+    assert all(item["actor_id"] == str(probe.id) for item in admin_denials)
+
+    # Once the caller can see the document, a genuine insufficient-permission
+    # denial belongs to the document and remains visible to its owner.
+    grant = api_client.post(
+        f"/api/v1/documents/{document_id}/permissions",
+        headers=bearer(owner_token),
+        json={"email": probe_email, "permission": "READ"},
+    )
+    assert grant.status_code == 201
+    assert (
+        api_client.patch(
+            f"/api/v1/documents/{document_id}",
+            headers=bearer(probe_token),
+            json={"description": "Attempted edit"},
+        ).status_code
+        == 403
+    )
+
+    visible_activity = api_client.get(
+        f"/api/v1/documents/{document_id}/activity",
+        headers=bearer(owner_token),
+        params={"page_size": 100},
+    )
+    assert visible_activity.status_code == 200
+    visible_denial = next(
+        item
+        for item in visible_activity.json()["items"]
+        if item["action"] == "DOCUMENT_EDIT_DENIED"
+    )
+    assert visible_denial["actor_name"] == probe.name
+    assert visible_denial["outcome"] == "DENIED"
+    assert visible_denial["details"]["reason"] == "insufficient_access"
+    assert visible_denial["details"]["access_level"] == "READ"
 
 
 def test_admin_audit_listing_filters_pagination_and_authorization(
@@ -410,6 +561,41 @@ def test_admin_audit_listing_filters_pagination_and_authorization(
     assert by_actor.json()["total"] >= 2
     assert all(
         item["actor_id"] == str(owner.id) for item in by_actor.json()["items"]
+    )
+
+    by_actor_name = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+        params={"actor_name": owner.name[:6].lower()},
+    )
+    assert by_actor_name.status_code == 200
+    assert by_actor_name.json()["total"] == by_actor.json()["total"]
+    assert all(
+        item["actor_id"] == str(owner.id)
+        for item in by_actor_name.json()["items"]
+    )
+
+    by_actor_email = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+        params={"actor_name": owner_email[:8].upper()},
+    )
+    assert by_actor_email.status_code == 200
+    assert by_actor_email.json()["total"] == by_actor.json()["total"]
+
+    by_actor_name_and_action = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+        params={
+            "actor_name": owner.name[:6].lower(),
+            "action": "DOCUMENT_UPLOAD",
+        },
+    )
+    assert by_actor_name_and_action.status_code == 200
+    assert by_actor_name_and_action.json()["total"] == 1
+    assert (
+        by_actor_name_and_action.json()["items"][0]["document_id"]
+        == document["id"]
     )
 
     by_document = api_client.get(
@@ -475,6 +661,14 @@ def test_admin_audit_listing_filters_pagination_and_authorization(
     )
     assert by_date.status_code == 200
     assert by_date.json()["total"] == payload["total"] + 1
+
+    by_today = api_client.get(
+        "/api/v1/admin/audit-events",
+        headers=bearer(admin_token),
+        params={"occurred_today": True},
+    )
+    assert by_today.status_code == 200
+    assert by_today.json()["total"] == by_date.json()["total"]
 
     paged = api_client.get(
         "/api/v1/admin/audit-events",

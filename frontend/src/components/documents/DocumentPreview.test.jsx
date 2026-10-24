@@ -3,13 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DocumentPreview } from '@/components/documents/DocumentPreview'
 import { previewDocument } from '@/services/documents'
 import { previewKindOf } from '@/lib/documents'
+import { renderAsync } from 'docx-preview'
 
-vi.mock('mammoth', () => ({
-  default: {
-    convertToHtml: vi.fn().mockResolvedValue({
-      value: '<h1>Quarterly report</h1><p>Confidential content</p>',
-    }),
-  },
+vi.mock('docx-preview', () => ({
+  renderAsync: vi.fn(async (blob, container) => {
+    container.innerHTML = ''
+    for (let index = 1; index <= 10; index += 1) {
+      const page = document.createElement('section')
+      page.className = 'docx'
+      page.textContent = `Page ${index}`
+      container.appendChild(page)
+    }
+  }),
 }))
 
 vi.mock('@/services/documents', () => ({
@@ -33,14 +38,22 @@ describe('DocumentPreview DOCX support', () => {
     })
   })
 
-  it('recognizes and renders DOCX content from the preview response', async () => {
+  it('renders DOCX content as paginated pages from the preview response', async () => {
     expect(previewKindOf(docxDocument)).toBe('docx')
 
     render(<DocumentPreview documentRecord={docxDocument} />)
 
-    expect(await screen.findByRole('heading', { name: 'Quarterly report' }))
-      .toBeInTheDocument()
-    expect(screen.getByText('Confidential content')).toBeInTheDocument()
+    expect(await screen.findByText('Page 1 of 10')).toBeInTheDocument()
+    expect(screen.getByText('report.docx')).toBeInTheDocument()
+    expect(renderAsync).toHaveBeenCalledWith(
+      expect.any(Blob),
+      expect.any(HTMLElement),
+      undefined,
+      expect.objectContaining({
+        breakPages: true,
+        ignoreLastRenderedPageBreak: false,
+      }),
+    )
     expect(previewDocument).toHaveBeenCalledWith(
       docxDocument.id,
       expect.any(AbortSignal),

@@ -13,7 +13,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.core.rate_limit import auth_rate_limiter
+from app.core.rate_limit import (
+    audit_integrity_rate_limiter,
+    auth_rate_limiter,
+    document_write_rate_limiter,
+)
 from app.db.session import get_db
 from app.main import app
 from tests.db_helpers import alembic_config
@@ -29,10 +33,14 @@ def auth_test_settings(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None,
     monkeypatch.setenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "60")
     get_settings.cache_clear()
     auth_rate_limiter.reset()
+    document_write_rate_limiter.reset()
+    audit_integrity_rate_limiter.reset()
 
     yield
 
     auth_rate_limiter.reset()
+    document_write_rate_limiter.reset()
+    audit_integrity_rate_limiter.reset()
     get_settings.cache_clear()
 
 

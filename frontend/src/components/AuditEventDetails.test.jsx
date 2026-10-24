@@ -62,6 +62,24 @@ describe('AuditEventDetails', () => {
     ])
   })
 
+  it('shows a single actor user ID instead of duplicate actor IDs', async () => {
+    const interaction = userEvent.setup()
+    render(
+      <AuditEventDetails
+        event={{
+          id: 'event-123',
+          actor_id: 'actor-uuid',
+          details: { actor_user_id: 'actor-uuid' },
+        }}
+      />,
+    )
+
+    await interaction.click(screen.getByText('View metadata'))
+    expect(screen.getByText('Actor user ID')).toBeInTheDocument()
+    expect(screen.queryByText('Actor ID')).not.toBeInTheDocument()
+    expect(screen.getAllByText('actor-uuid')).toHaveLength(1)
+  })
+
   it('shows dedicated event IDs and request ID in details, not as table fields', async () => {
     const interaction = userEvent.setup()
     render(
@@ -81,6 +99,8 @@ describe('AuditEventDetails', () => {
     await interaction.click(screen.getByText('View metadata'))
     expect(screen.getByText('Audit event ID')).toBeInTheDocument()
     expect(screen.getByText('Audit sequence')).toBeInTheDocument()
+    expect(screen.getByText('Actor user ID')).toBeInTheDocument()
+    expect(screen.getByText('actor-uuid')).toBeInTheDocument()
     expect(screen.getByText('Document ID')).toBeInTheDocument()
     expect(screen.getByText('Request ID / correlation ID')).toBeInTheDocument()
     expect(screen.getByText('document-uuid')).toBeInTheDocument()
