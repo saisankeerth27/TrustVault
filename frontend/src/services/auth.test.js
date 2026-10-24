@@ -7,8 +7,7 @@ vi.mock('@/auth/supabase', () => ({
   isSupabaseConfigured: true,
   supabase: {
     auth: {
-      signInWithPassword: vi.fn(),
-      signUp: vi.fn(),
+      setSession: vi.fn(),
       signOut: vi.fn(),
     },
   },
@@ -21,33 +20,39 @@ vi.mock('@/services/api', () => ({
 describe('Supabase-backed application authentication', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    supabase.auth.signInWithPassword.mockResolvedValue({
-      data: { session: { access_token: 'session-token' } },
-      error: null,
-    })
-    supabase.auth.signUp.mockResolvedValue({
+    supabase.auth.setSession.mockResolvedValue({
       data: { session: { access_token: 'session-token' } },
       error: null,
     })
     apiClient.post.mockResolvedValue({
-      data: { id: 'user-1', role: 'USER', status: 'ACTIVE' },
+      data: {
+        account_created: true,
+        requires_email_confirmation: false,
+        session: {
+          access_token: 'provider-access-token',
+          refresh_token: 'provider-refresh-token',
+        },
+        user: { id: 'user-1', role: 'USER', status: 'ACTIVE' },
+      },
     })
   })
 
-  it('authenticates with Supabase, then loads the database-authoritative account', async () => {
+  it('authenticates through the backend and persists the Supabase session', async () => {
     await expect(
       login({ email: ' Person@Example.COM ', password: 'not-trimmed ' }),
     ).resolves.toEqual({ id: 'user-1', role: 'USER', status: 'ACTIVE' })
 
-    expect(supabase.auth.signInWithPassword).toHaveBeenCalledWith({
+    expect(apiClient.post).toHaveBeenCalledWith('/api/v1/auth/supabase/login', {
       email: 'person@example.com',
       password: 'not-trimmed ',
     })
-    expect(apiClient.post).toHaveBeenCalledWith('/api/v1/auth/session')
+    expect(supabase.auth.setSession).toHaveBeenCalledWith({
+      access_token: 'provider-access-token',
+      refresh_token: 'provider-refresh-token',
+    })
   })
 
-  it('creates normal-user metadata without confirmation redirect and returns to signed-out state', async () => {
-    supabase.auth.signOut.mockResolvedValue({ error: null })
+  it('creates a normal-user profile and returns the authenticated session', async () => {
     await expect(
       register({
         name: 'New User',
@@ -57,21 +62,28 @@ describe('Supabase-backed application authentication', () => {
     ).resolves.toEqual({
       accountCreated: true,
       requiresEmailConfirmation: false,
+      user: { id: 'user-1', role: 'USER', status: 'ACTIVE' },
     })
 
-    expect(supabase.auth.signUp).toHaveBeenCalledWith({
+    expect(apiClient.post).toHaveBeenCalledWith('/api/v1/auth/supabase/register', {
+      name: 'New User',
       email: 'person@example.com',
       password: 'not-trimmed ',
-      options: { data: { name: 'New User' } },
     })
-    expect(apiClient.post).toHaveBeenCalledWith('/api/v1/auth/session')
-    expect(supabase.auth.signOut).toHaveBeenCalledWith({ scope: 'local' })
+    expect(supabase.auth.setSession).toHaveBeenCalledWith({
+      access_token: 'provider-access-token',
+      refresh_token: 'provider-refresh-token',
+    })
+    expect(supabase.auth.signOut).not.toHaveBeenCalled()
   })
 
-  it('does not create a TrustVault profile or treat confirmation as completed when no session is returned', async () => {
-    supabase.auth.signUp.mockResolvedValue({
-      data: { session: null, user: { id: 'provider-user' } },
-      error: null,
+  it('keeps confirmation-required signups signed out and does not create a profile early', async () => {
+    apiClient.post.mockResolvedValue({
+      data: {
+        session: null,
+        account_created: true,
+        requires_email_confirmation: true,
+      },
     })
     await expect(
       register({
@@ -84,14 +96,35 @@ describe('Supabase-backed application authentication', () => {
       requiresEmailConfirmation: true,
     })
 
-    expect(supabase.auth.signUp).toHaveBeenCalledWith(
-      {
-        email: 'person@example.com',
-        password: 'not-trimmed ',
-        options: { data: { name: 'New User' } },
-      },
-    )
-    expect(apiClient.post).not.toHaveBeenCalled()
+    expect(apiClient.post).toHaveBeenCalledWith('/api/v1/auth/supabase/register', {
+      name: 'New User',
+      email: 'person@example.com',
+      password: 'not-trimmed ',
+    })
+    expect(supabase.auth.setSession).not.toHaveBeenCalled()
     expect(supabase.auth.signOut).not.toHaveBeenCalled()
+  })
+
+  it('does not claim a duplicate account was created when Supabase obfuscates the signup response', async () => {
+    apiClient.post.mockResolvedValue({
+      data: {
+        session: null,
+        account_created: false,
+        requires_email_confirmation: true,
+      },
+    })
+
+    await expect(
+      register({
+        name: 'New User',
+        email: ' Person@Example.COM ',
+        password: 'not-trimmed ',
+      }),
+    ).resolves.toEqual({
+      accountCreated: false,
+      requiresEmailConfirmation: true,
+    })
+
+    expect(supabase.auth.setSession).not.toHaveBeenCalled()
   })
 })

@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.rate_limit import auth_rate_limiter, enforce_rate_limit
 from app.core.security import create_access_token
 from app.db.session import get_db
+from app.models.audit_event import AuditEvent
 from app.models.enums import AuditAction, AuditOutcome, UserRole, UserStatus
 from app.models.user import User
 from app.schemas.auth import (
@@ -43,6 +44,8 @@ from app.services.supabase_auth import (
     SupabaseAuthError,
     get_user as get_supabase_user,
     request_password_recovery,
+    sign_in_with_password,
+    sign_up as supabase_sign_up,
     update_recovery_password,
     verify_recovery_otp,
 )
@@ -59,6 +62,34 @@ RECOVERY_COOKIE_MAX_AGE = 600
 
 _INVALID_CREDENTIALS = "Invalid email or password."
 _INVALID_SESSION = "Session is invalid or has expired."
+
+
+def _registration_was_audited(session: Session, provider_uuid: UUID) -> bool:
+    return (
+        session.scalar(
+            select(AuditEvent.id)
+            .where(
+                AuditEvent.action == AuditAction.USER_REGISTERED.value,
+                AuditEvent.outcome == AuditOutcome.SUCCESS.value,
+                AuditEvent.details["provider_user_id"].as_string()
+                == str(provider_uuid),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _verified_identity_matches(
+    identity: dict[str, object],
+    expected_email: str,
+) -> bool:
+    email = identity.get("email")
+    return (
+        isinstance(email, str)
+        and email.strip().lower() == expected_email
+        and bool(identity.get("email_confirmed_at") or identity.get("email_verified"))
+    )
 
 
 @router.post("/session", response_model=UserResponse)
@@ -135,7 +166,7 @@ def sync_supabase_session(
         )
 
     user.supabase_auth_id = provider_uuid
-    if is_new_user:
+    if is_new_user and not _registration_was_audited(session, provider_uuid):
         _commit_with_success_audit(
             session,
             action=AuditAction.USER_REGISTERED,
@@ -303,6 +334,24 @@ def _record_login_failure(
     )
 
 
+def _record_registration_failure(
+    session: Session,
+    *,
+    reason: str,
+    status_code: int = 0,
+) -> None:
+    record_best_effort(
+        session,
+        action=AuditAction.USER_REGISTERED,
+        outcome=AuditOutcome.FAILURE,
+        details={
+            "reason": reason,
+            "resource_type": "AUTH",
+            "status_code": status_code,
+        },
+    )
+
+
 def _record_recovery_event(
     session: Session,
     *,
@@ -360,6 +409,258 @@ def _build_auth_response(user: User, session_id: UUID) -> AuthResponse:
         expires_in=settings.jwt_access_token_expire_minutes * 60,
         user=UserResponse.model_validate(user),
     )
+
+
+@router.post("/supabase/register")
+def register_with_supabase(
+    payload: RegisterRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_db),
+) -> dict[str, object]:
+    _enforce_allowed_origin(request)
+    _no_store(response)
+    _enforce_rate_limit(
+        request,
+        [f"register-ip:{_client_address(request)}", f"register-email:{payload.email}"],
+    )
+    origin = request.headers.get("origin")
+    redirect_to = f"{origin.rstrip('/')}/login" if origin else None
+
+    try:
+        result = supabase_sign_up(
+            str(payload.email),
+            payload.password.get_secret_value(),
+            payload.name,
+            redirect_to,
+        )
+    except SupabaseAuthError as exc:
+        _record_registration_failure(
+            session,
+            reason="provider_rejected_or_unavailable",
+            status_code=exc.status_code or 0,
+        )
+        if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many registration attempts. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        if exc.status_code is None or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Registration is temporarily unavailable. Try again later.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Unable to create the account. If you already have an account, "
+                "sign in or reset your password."
+            ),
+        ) from exc
+
+    provider_user = result.get("user")
+    provider_session = result.get("session")
+    if (
+        not isinstance(provider_session, dict)
+        and isinstance(result.get("access_token"), str)
+        and result["access_token"]
+    ):
+        provider_session = result
+    if isinstance(provider_session, dict):
+        access_token = provider_session.get("access_token")
+        refresh_token = provider_session.get("refresh_token")
+        if (
+            not isinstance(access_token, str)
+            or not access_token
+            or not isinstance(refresh_token, str)
+            or not refresh_token
+        ):
+            _record_registration_failure(
+                session,
+                reason="provider_response_invalid",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Registration is temporarily unavailable. Try again later.",
+            )
+        try:
+            identity = get_supabase_user(access_token)
+            if not _verified_identity_matches(identity, str(payload.email)):
+                raise SupabaseAuthError(401)
+            user = sync_supabase_session(identity=identity, session=session)
+        except SupabaseAuthError as exc:
+            _record_registration_failure(
+                session,
+                reason="provider_identity_unavailable",
+                status_code=exc.status_code or 0,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Registration is temporarily unavailable. Try again later.",
+            ) from exc
+        return {
+            "account_created": True,
+            "requires_email_confirmation": False,
+            "session": {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+            },
+            "user": user.model_dump(mode="json"),
+        }
+
+    identities = provider_user.get("identities") if isinstance(provider_user, dict) else None
+    provider_id = provider_user.get("id") if isinstance(provider_user, dict) else None
+    provider_email = provider_user.get("email") if isinstance(provider_user, dict) else None
+    if (
+        not isinstance(provider_id, str)
+        or not isinstance(provider_email, str)
+        or provider_email.strip().lower() != str(payload.email)
+    ):
+        _record_registration_failure(
+            session,
+            reason="provider_response_invalid",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Registration is temporarily unavailable. Try again later.",
+        )
+
+    if isinstance(identities, list) and identities:
+        try:
+            provider_uuid = UUID(provider_id)
+        except ValueError as exc:
+            _record_registration_failure(
+                session,
+                reason="provider_response_invalid",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Registration is temporarily unavailable. Try again later.",
+            ) from exc
+        _commit_with_success_audit(
+            session,
+            action=AuditAction.USER_REGISTERED,
+            actor=None,
+            details={
+                "provider_user_id": str(provider_uuid),
+                "request_status": "confirmation_pending",
+                "resource_type": "AUTH",
+                "source": "supabase_auth",
+            },
+            failure_detail=(
+                "Supabase created the account, but TrustVault could not record "
+                "the registration. Contact support before retrying."
+            ),
+        )
+        return {
+            "account_created": True,
+            "requires_email_confirmation": True,
+        }
+
+    _record_registration_failure(
+        session,
+        reason="provider_rejected_or_duplicate",
+    )
+    return {
+        "account_created": False,
+        "requires_email_confirmation": True,
+    }
+
+
+@router.post("/supabase/login")
+def login_with_supabase(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_db),
+) -> dict[str, object]:
+    _enforce_allowed_origin(request)
+    _no_store(response)
+    _enforce_rate_limit(
+        request,
+        [
+            f"login-ip:{_client_address(request)}",
+            f"login-email:{str(payload.email)}",
+        ],
+    )
+    try:
+        result = sign_in_with_password(
+            str(payload.email),
+            payload.password.get_secret_value(),
+        )
+    except SupabaseAuthError as exc:
+        _record_login_failure(session, reason="provider_rejected_or_unavailable")
+        logger.warning(
+            "Supabase password login failed status=%s.",
+            exc.status_code or 0,
+        )
+        if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many login attempts. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        if exc.status_code is None or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Login is temporarily unavailable. Try again later.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_INVALID_CREDENTIALS,
+        ) from exc
+
+    access_token = result.get("access_token")
+    refresh_token = result.get("refresh_token")
+    if not isinstance(access_token, str) or not access_token or not isinstance(
+        refresh_token, str
+    ) or not refresh_token:
+        _record_login_failure(session, reason="provider_response_invalid")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login is temporarily unavailable. Try again later.",
+        )
+
+    try:
+        identity = get_supabase_user(access_token)
+        if not _verified_identity_matches(identity, str(payload.email)):
+            raise SupabaseAuthError(401)
+        user = sync_supabase_session(identity=identity, session=session)
+    except SupabaseAuthError as exc:
+        _record_login_failure(session, reason="provider_identity_unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login is temporarily unavailable. Try again later.",
+        ) from exc
+    except HTTPException as exc:
+        _record_login_failure(session, reason="trustvault_account_rejected")
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=_INVALID_CREDENTIALS,
+            ) from exc
+        raise
+
+    actor = session.get(User, user.id)
+    _commit_with_success_audit(
+        session,
+        action=AuditAction.LOGIN_SUCCESS,
+        actor=actor,
+        details={
+            "role": user.role,
+            "resource_type": "USER",
+            "target_user_id": str(user.id),
+            "source": "supabase_auth",
+        },
+    )
+    return {
+        "session": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        },
+        "user": user.model_dump(mode="json"),
+    }
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=AuthResponse)

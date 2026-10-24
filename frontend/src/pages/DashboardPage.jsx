@@ -8,7 +8,7 @@ import {
   ShieldCheck,
   UploadCloud,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import { AccessLevelBadge } from '@/components/documents/AccessLevelBadge'
 import { PageHeader } from '@/components/PageHeader'
@@ -128,6 +128,7 @@ function RecentDocuments({ title, description, documents, isLoading, emptyMessag
 
 export function DashboardPage() {
   const { user } = useAuth()
+  const location = useLocation()
   const [documents, setDocuments] = useState(EMPTY_SUMMARY)
   const [shared, setShared] = useState(EMPTY_SUMMARY)
   const [owned, setOwned] = useState(null)
@@ -215,6 +216,14 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      {typeof location.state?.registrationMessage === 'string' ? (
+        <div
+          role="status"
+          className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm"
+        >
+          {location.state.registrationMessage}
+        </div>
+      ) : null}
       <PageHeader
         eyebrow="Overview"
         title={user ? `Welcome back, ${user.name.split(' ')[0]}` : 'Dashboard'}

@@ -70,6 +70,34 @@ def get_user(access_token: str) -> dict[str, Any]:
     return _request("GET", "user", access_token=access_token)
 
 
+def sign_up(
+    email: str,
+    password: str,
+    name: str,
+    redirect_to: str | None,
+) -> dict[str, Any]:
+    params = {"redirect_to": redirect_to} if redirect_to else None
+    return _request(
+        "POST",
+        "signup",
+        payload={
+            "email": email,
+            "password": password,
+            "data": {"name": name},
+        },
+        params=params,
+    )
+
+
+def sign_in_with_password(email: str, password: str) -> dict[str, Any]:
+    return _request(
+        "POST",
+        "token",
+        payload={"email": email, "password": password},
+        params={"grant_type": "password"},
+    )
+
+
 def request_password_recovery(email: str, redirect_to: str) -> None:
     _request(
         "POST",

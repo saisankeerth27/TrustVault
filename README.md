@@ -178,21 +178,22 @@ The health endpoint reports **process health only**. It does not check the datab
 
 Configure Supabase before enabling the new authentication code:
 
-1. In **Authentication → Sign In / Providers → Email**, keep email/password sign-in enabled and turn **Confirm email** off for the requested no-confirmation signup experience. The application cannot override this project-level setting. Verify it in the dashboard; it has not been changed or checked from this workspace. Do not manually mark existing users confirmed to compensate.
-2. In **Authentication → Email Templates → Reset Password**, use an OTP-only template that displays `{{ .Token }}` as the six-digit code and does not use `{{ .ConfirmationURL }}` as the user-facing recovery mechanism. Review Auth mail logs after a controlled test. The template has not been verified here.
-3. In **Project Settings → Authentication → SMTP Settings**, verify the host/port, sender, authentication, transport security, and delivery logs with a current SMTP credential configured only in the dashboard. Keep SMTP credentials there; never put them in source or `VITE_*` variables. SMTP delivery has not been verified here.
-4. In **Authentication → URL Configuration**, allow the exact frontend `/login` and `/recover-password` redirect URLs for local and deployed environments.
-5. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the matching `PASSWORD_RECOVERY_REDIRECT_URL` in `backend/.env`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `frontend/.env` to the same project. For local development, use the public anon/publishable key from **Project Settings → API Keys** in both places; never use the service-role/secret key for these settings. Restart both servers after changing environment files.
-6. Back up the database and schedule a maintenance window. Stop the old backend before applying migration `0009`: it clears legacy password hashes and revokes old refresh sessions, and it cannot be rolled back to restore credentials.
-7. With the new backend code and migration available, run `alembic upgrade head`, then import existing users:
+1. In **Authentication → Sign In / Providers → Email**, keep email/password sign-in enabled and set **Confirm email** according to the intended project policy. The application handles either result: a returned session is profile-synced and sent to Dashboard; no session leaves the user signed out and asks them to confirm before login. The current setting was not checked from this workspace. Do not manually mark existing users confirmed to compensate.
+2. Keep the **Confirm sign up** template for email confirmation. The app sends confirmation links back to the current frontend origin at `/login`; the Supabase client exchanges the callback and loads the verified session before protected routes are available. The callback path must be in the redirect allowlist.
+3. Password recovery calls Supabase's recovery endpoint (`/auth/v1/recover`) and verifies with recovery type. Supabase's **Reset password** authentication template is the one used for this flow; to show a six-digit code, its body should use `{{ .Token }}` instead of a confirmation link. The separate **Magic link or OTP** template is not used by this recovery request. Check the current template and Auth logs in the dashboard; neither is accessible from this workspace. See [Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates).
+4. The **Password changed** security notification is separate from the recovery template and is sent only when enabled in Supabase project settings. Verify its setting and existing wording in the dashboard. TrustVault does not send a duplicate notification.
+5. In **Authentication → URL Configuration**, set the intended Site URL and allow the exact frontend `/login` and `/recover-password` redirect URLs for local and deployed environments. Only the recovery URL is configured by the backend; production URLs and dashboard allowlist entries have not been verified here.
+6. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the matching `PASSWORD_RECOVERY_REDIRECT_URL` in `backend/.env`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `frontend/.env` to the same project. For local development, use the public anon/publishable key from **Project Settings → API Keys** in both places; never use the service-role/secret key for these settings. Restart both servers after changing environment files.
+7. Back up the database and schedule a maintenance window. Stop the old backend before applying migration `0009`: it clears legacy password hashes and revokes old refresh sessions, and it cannot be rolled back to restore credentials.
+8. With the new backend code and migration available, run `alembic upgrade head`, then import existing users:
 
    ```powershell
    python -m scripts.import_users_to_supabase_auth
    ```
 
    The import creates confirmed, passwordless provider identities. Users must use password recovery to set their Supabase Auth password. Resolve any import failure before enabling sign-in.
-8. Provision an initial administrator with `python -m scripts.create_user --email admin@example.com --name "Admin User" --role ADMINISTRATOR`. It creates both the Supabase Auth identity and the TrustVault database row; never grant roles through Supabase user metadata.
-9. Review any provider security notification for password changes. Do not try to bypass a notification Supabase requires. Enable the new frontend/backend only after migration, import, provider settings, exact CORS origin, HTTPS cookie settings, and a tested administrator identity are ready.
+9. Provision an initial administrator with `python -m scripts.create_user --email admin@example.com --name "Admin User" --role ADMINISTRATOR`. It creates both the Supabase Auth identity and the TrustVault database row; never grant roles through Supabase user metadata.
+10. Enable the new frontend/backend only after migration, import, provider settings, exact CORS origin, HTTPS cookie settings, and a tested administrator identity are ready.
 
 Recovery request responses intentionally do not reveal whether an email is registered. A successful response means Supabase accepted the request, not that SMTP delivered it. Live email delivery and production browser-cookie behavior still require verification.
 
@@ -215,14 +216,14 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-The Vite development server is available at <http://localhost:5173>. `VITE_API_BASE_URL` must point at the running FastAPI backend (default `http://localhost:8000`). Supabase Auth maintains its session through the SDK; the TrustVault access token is kept in memory. Only the short-lived password-recovery token is proxied in a narrowly scoped HttpOnly cookie.
+The Vite development server is available at <http://localhost:5173>. `VITE_API_BASE_URL` must point at the running FastAPI backend (default `http://localhost:8000`). FastAPI proxies signup and password login to Supabase Auth with the public anon key so provider outcomes can be audited server-side; passwords are forwarded to Supabase over HTTPS and are never stored or logged by TrustVault. Supabase sessions are persisted by the frontend SDK, and the TrustVault access token is kept in memory. The short-lived password-recovery token is held only in a narrowly scoped HttpOnly cookie.
 
 ### Frontend routes
 
 | Route | Purpose | Access |
 |-------|---------|--------|
 | `/login` | Login form and session bootstrap | Public |
-| `/register` | Supabase Auth normal-user registration; requires the project Confirm email setting to be off for login-only signup | Public |
+| `/register` | Supabase Auth normal-user registration; routes a returned session to Dashboard or asks the user to confirm email when no session is returned | Public |
 | `/dashboard` | Live document, owned, and shared counts with recent permitted documents | Any signed-in user |
 | `/documents` | Searchable library with name/category/date filters for users and owner filtering for administrator oversight | Any signed-in user; includes owned and directly shared documents |
 | `/upload` | Dedicated validated upload page with progress feedback | Any signed-in active user |
@@ -238,14 +239,15 @@ Protected routes redirect unauthenticated visitors to `/login`. An authenticated
 
 ## Authentication and Authorization
 
-The current source uses Supabase Auth for registration, password login, session refresh, and logout. FastAPI verifies provider access tokens with Supabase Auth and binds the verified provider UUID and email to the TrustVault user record. TrustVault's database remains the sole authority for account status, administrator role, and document permissions; Supabase user metadata and token role claims never grant privileges.
+The current source uses Supabase Auth for registration, password login, session refresh, and logout. FastAPI proxies signup and password login, validates successful provider identities, and binds the verified provider UUID and email to the TrustVault user record. TrustVault's database remains the sole authority for account status, administrator role, and document permissions; Supabase user metadata and token role claims never grant privileges.
 
 - **Password policy:** registration and recovery require at least 12 characters and at most 72 UTF-8 bytes. Supabase Auth stores and verifies credentials.
 - **Verified identities:** protected requests require a provider-verified email, a matching `supabase_auth_id` and normalized email, and an active TrustVault account.
+- **Signup and login audit:** `POST /api/v1/auth/supabase/register` and `/api/v1/auth/supabase/login` perform provider requests server-side. Successful signup/profile linking and login are attributed from the verified provider identity; provider failures use generic responses and failure audit events without recording email addresses or passwords. Confirmation-pending signup events have no TrustVault actor until the account is verified and linked.
 - **Recovery:** the backend sends generic six-digit OTP requests, rate-limits requests and verification, verifies with `type: recovery`, and stores the resulting access token only in a 10-minute HttpOnly cookie scoped to the password-update endpoint.
 - **CSRF and cookies:** recovery POSTs enforce exact configured Origin checks. Production requires HTTPS, `AUTH_COOKIE_SECURE=true`, and a recovery redirect matching an allow-listed CORS origin. Cross-site deployments use `AUTH_COOKIE_SAMESITE=none`.
 - **Rate limiting:** recovery uses process-local per-email and per-IP limits; the general auth limiter is also process-local. Multi-instance deployments need a shared limiter before relying on these as global controls.
-- **Audit:** provider-accepted requests, verification failures/successes, password changes, and update failures use dedicated audit actions. OTPs and passwords are never written to event details.
+- **Audit:** registration, login successes/failures, recovery requests, verification failures/successes, password changes, and update failures use the existing tamper-evident audit writer. OTPs, passwords, access/refresh tokens, and SMTP credentials are never written to event details.
 
 Migration `0009` is an irreversible credential cutover: it clears legacy local password hashes and revokes old refresh sessions. Existing accounts need a provider identity import and must set a provider password through recovery. Do not apply it without a database backup, a maintenance/deployment plan, and tested Supabase Auth configuration.
 
@@ -269,7 +271,7 @@ Phases 5–6 implement the authenticated document library and named-user sharing
 - Owners manage sharing with `GET/POST /api/v1/documents/{id}/permissions` and `PATCH/DELETE /api/v1/documents/{id}/permissions/{permission_id}`. Grants target an active registered account by normalized email and accept only `READ` or `EDIT`.
 - A same-level grant is idempotent (`200`); a different active level returns `409`. Level changes revoke the existing row and insert a replacement, retaining history. Revocation is idempotent (`204`) and takes effect on the recipient's next request.
 - Permission management is owner-only. Administrators do not gain owner or sharing powers. Permission lists include active and revoked rows, with `total` and `active_total`.
-- Successful document, permission, registration, login, and logout actions append audit events in the same database transaction as the protected change. Denials are recorded best-effort so an audit failure cannot turn an authorization denial into a success.
+- Successful document, permission, registration, and login actions append audit events in the same database transaction as the protected change. Denials are recorded best-effort so an audit failure cannot turn an authorization denial into a success.
 
 The frontend provides registration and login, a live dashboard with permitted-document counts and recent activity, a searchable/filterable library with name, category, and date filters, sorting, and pagination; a "Shared with me" view; access-level badges; a dedicated upload page with validation and progress feedback; an access-aware details page with read-only metadata, preview, download, paginated version history, and paginated owner activity; and an owner-only sharing page with grant, level update, revoke confirmation, and history. Administrators get user management with copyable account IDs, summary counts, permission history, metadata oversight, and the audit viewer; administrator metadata and audit access remain read-only, and private content still requires ownership or an explicit grant. Desktop uses a sidebar navigation shell, while mobile uses a compact top bar and scrollable navigation.
 
@@ -507,12 +509,13 @@ npm test
 npm run build
 ```
 
-`npm run lint`, `npm test`, and `npm run build` pass; lint reports existing warnings and the build reports large-chunk advisories. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The **61 automated tests across 19 files** cover safe API errors, role-aware UI, the Supabase auth service, password recovery, document previews/editing, and document history behavior. A browser-based walkthrough with live accounts and deployment remain unverified.
+`npm run lint`, `npm test`, and `npm run build` pass; lint reports existing warnings and the build reports large-chunk advisories. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The **68 frontend tests across 21 files** cover safe API errors, role-aware UI, Supabase authentication, password recovery, document previews/editing, and document history behavior. A browser-based walkthrough with live accounts and deployment remain unverified.
 
 ## API Baseline
 
 - **Health:** `GET /health` → `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`
-- **Register/login/logout/refresh:** handled by Supabase Auth in the frontend SDK; legacy backend endpoints return 410 outside tests.
+- **Register/login:** `POST /api/v1/auth/supabase/register` and `POST /api/v1/auth/supabase/login` proxy to Supabase Auth and record trusted outcomes; the frontend SDK persists returned sessions. Legacy local-auth endpoints return 410 outside tests.
+- **Logout/refresh:** handled by Supabase Auth in the frontend SDK.
 - **Identity sync:** `POST /api/v1/auth/session` → validates the Supabase identity and returns the matching TrustVault user/role.
 - **Recovery request:** `POST /api/v1/auth/recovery/request` → generic six-digit OTP request response.
 - **Recovery verification:** `POST /api/v1/auth/recovery/verify` → verifies an OTP with recovery type and sets the scoped HttpOnly recovery cookie.

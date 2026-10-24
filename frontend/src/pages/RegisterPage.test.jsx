@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
@@ -23,8 +23,21 @@ function renderRegistration() {
       <Routes>
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/dashboard" element={<DashboardDestination />} />
       </Routes>
     </MemoryRouter>,
+  )
+}
+
+function DashboardDestination() {
+  const location = useLocation()
+  return (
+    <>
+      <h1>Dashboard</h1>
+      {location.state?.registrationMessage ? (
+        <div role="status">{location.state.registrationMessage}</div>
+      ) : null}
+    </>
   )
 }
 
@@ -33,7 +46,7 @@ describe('RegisterPage', () => {
     vi.clearAllMocks()
   })
 
-  it('redirects a successfully created account to Login exactly once', async () => {
+  it('redirects a successfully created account to Dashboard with a success message', async () => {
     register.mockResolvedValue({
       accountCreated: true,
       requiresEmailConfirmation: false,
@@ -54,10 +67,8 @@ describe('RegisterPage', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
 
-    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
-    expect(
-      screen.getByRole('status'),
-    ).toHaveTextContent('Account created successfully. Please log in.')
+    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Account created successfully.')
     expect(register).toHaveBeenCalledOnce()
     expect(register).toHaveBeenCalledWith({
       name: 'New User',
@@ -66,7 +77,7 @@ describe('RegisterPage', () => {
     })
   })
 
-  it('does not claim success or navigate when Supabase still requires confirmation', async () => {
+  it('keeps a confirmation-required signup signed out and offers Login', async () => {
     register.mockResolvedValue({
       accountCreated: true,
       requiresEmailConfirmation: true,
@@ -89,9 +100,45 @@ describe('RegisterPage', () => {
 
     expect(
       await screen.findByRole('status'),
-    ).toHaveTextContent('Supabase still requires email confirmation.')
+    ).toHaveTextContent(
+      'Your account has been created. Check your email for confirmation instructions, then sign in.',
+    )
+    expect(screen.getByRole('link', { name: 'Return to Login' })).toHaveAttribute(
+      'href',
+      '/login',
+    )
     expect(screen.getByRole('heading', { name: 'Create account' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Dashboard' })).not.toBeInTheDocument()
     await waitFor(() => expect(register).toHaveBeenCalledOnce())
+  })
+
+  it('uses non-enumerating guidance when Supabase returns an ambiguous no-session result', async () => {
+    register.mockResolvedValue({
+      accountCreated: false,
+      requiresEmailConfirmation: true,
+    })
+    renderRegistration()
+
+    fireEvent.change(screen.getByLabelText('Full name'), {
+      target: { value: 'New User' },
+    })
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'new@example.com' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'a secure password 123' },
+    })
+    fireEvent.change(screen.getByLabelText('Confirm password'), {
+      target: { value: 'a secure password 123' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'If an account exists for this email, check your inbox for confirmation instructions.',
+    )
+    expect(screen.getByRole('link', { name: 'Forgot password?' })).toHaveAttribute(
+      'href',
+      '/recover-password',
+    )
   })
 })

@@ -6,6 +6,8 @@ from app.core.config import get_settings
 from app.services.supabase_auth import (
     SupabaseAuthError,
     request_password_recovery,
+    sign_in_with_password,
+    sign_up,
     update_recovery_password,
     verify_recovery_otp,
 )
@@ -76,3 +78,48 @@ def test_missing_supabase_configuration_fails_without_provider_request(monkeypat
         assert exc.configuration_missing
     else:
         raise AssertionError("Missing Supabase configuration must fail closed.")
+
+
+def test_supabase_signup_and_password_login_use_public_auth_endpoints(monkeypatch) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "public-test-key")
+    get_settings.cache_clear()
+    requests = []
+
+    def fake_request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        return httpx.Response(200, json={"access_token": "provider-access-token"})
+
+    monkeypatch.setattr("app.services.supabase_auth.httpx.request", fake_request)
+    try:
+        sign_up(
+            "person@example.com",
+            "secure password",
+            "Test Person",
+            "http://localhost:5173/login",
+        )
+        sign_in_with_password("person@example.com", "secure password")
+    finally:
+        get_settings.cache_clear()
+
+    assert requests[0][0:2] == (
+        "POST",
+        "https://example.supabase.co/auth/v1/signup",
+    )
+    assert requests[0][2]["json"] == {
+        "email": "person@example.com",
+        "password": "secure password",
+        "data": {"name": "Test Person"},
+    }
+    assert requests[0][2]["params"] == {
+        "redirect_to": "http://localhost:5173/login"
+    }
+    assert requests[1][0:2] == (
+        "POST",
+        "https://example.supabase.co/auth/v1/token",
+    )
+    assert requests[1][2]["json"] == {
+        "email": "person@example.com",
+        "password": "secure password",
+    }
+    assert requests[1][2]["params"] == {"grant_type": "password"}

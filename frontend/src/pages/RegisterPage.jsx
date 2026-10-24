@@ -76,7 +76,7 @@ export function RegisterPage() {
     return <AuthLoadingScreen />
   }
 
-  if (status === 'authenticated') {
+  if (status === 'authenticated' && !isSubmitting) {
     return <Navigate to={destination} replace />
   }
 
@@ -109,14 +109,14 @@ export function RegisterPage() {
       if (registration.requiresEmailConfirmation) {
         setRegistrationMessage(
           registration.accountCreated
-            ? 'Supabase still requires email confirmation. Ask the project owner to disable Authentication → Providers → Email → Confirm email. The existing account may need an administrator to resolve its unconfirmed status; do not register it again.'
-            : 'Supabase did not create an active session. Ask the project owner to check the email-confirmation setting before trying again.',
+            ? 'Your account has been created. Check your email for confirmation instructions, then sign in.'
+            : 'If an account exists for this email, check your inbox for confirmation instructions. You can also sign in or reset your password.',
         )
         return
       }
-      navigate('/login', {
+      navigate('/dashboard', {
         replace: true,
-        state: { registrationMessage: 'Account created successfully. Please log in.' },
+        state: { registrationMessage: 'Account created successfully.' },
       })
     } catch (error) {
       setServerError(getApiErrorMessage(error))
@@ -203,11 +203,30 @@ export function RegisterPage() {
                 className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
               >
                 {serverError}
+                <p className="mt-2">
+                  <Link to="/login" className="underline">
+                    Sign in
+                  </Link>
+                  {' or '}
+                  <Link to="/recover-password" className="underline">
+                    reset your password
+                  </Link>
+                  .
+                </p>
               </div>
             ) : null}
             {registrationMessage ? (
               <div role="status" className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
                 {registrationMessage}
+                <p className="mt-2">
+                  <Link to="/login" className="underline">
+                    Return to Login
+                  </Link>
+                  {' · '}
+                  <Link to="/recover-password" className="underline">
+                    Forgot password?
+                  </Link>
+                </p>
               </div>
             ) : null}
 
