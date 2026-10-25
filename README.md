@@ -1,654 +1,129 @@
 # TrustVault
 
-> **Live:** https://trust-vault-six-ivory.vercel.app/
+Live: https://trust-vault-six-ivory.vercel.app/ | Repo: https://github.com/saisankeerth27/TrustVault
 
-TrustVault is a secure, multi-tenant document vault that lets organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
+TrustVault is a secure document vault for storing, sharing, and auditing documents. Backend enforces all authorization; the frontend never trusts client-side role claims.
 
-> **Status:** the document and version-history features below were implemented previously. A Supabase Auth migration and six-digit recovery flow are currently in source but have **not yet been fully validated or deployed**. Current validation is listed in [Testing and Checks](#testing-and-checks).
-> The existing implementation includes:
-> - **Secure PDF Preview**: Client-side rendering via Mozilla PDF.js (`pdfjs-dist`) with Vite web worker bundling. Documents are streamed through authenticated FastAPI endpoints with `Cache-Control: private, no-store` without exposing private object URLs or service secrets.
-> - **In-Browser PDF Editing**: Authorized EDIT recipients can annotate PDFs with sticky text notes, typewriter free text, area highlights, and typed signatures. Annotations are embedded directly into the PDF binary via `pdf-lib` and saved as a new version with optimistic concurrency (`expected_version_number`).
-> - **Owner-Only Version Deletion and Safe Rollback**: Owners can delete any version while at least one remains (`DELETE /api/v1/documents/{id}/versions/{version_number}`). Deleting the current version rolls the document back to the highest remaining version, updates the active storage pointer, cleans up private storage, and records rollback audit details; deleting the last version returns HTTP 400. A persistent version sequence prevents deleted numbers from being reused.
-> - **Paginated History and Stale-Editor Protection**: Version history and owner activity are server-paginated five at a time, with owner routine preview/download events excluded from the activity timeline. Text and PDF editors become read-only after a 409 conflict and require close/reopen, preventing a refreshed-but-stale editor from overwriting a newer revision.
-> - **Document Activity & Audit Integrity**: Document owners can inspect their document's paginated activity timeline (`GET /api/v1/documents/{id}/activity`), while administrators verify tamper-evident hash chains (`hash_schema: trustvault-audit-event-v1`) and signed HMAC-SHA256 checkpoints.
+## Features
 
-## Project Objective
+- Upload and manage documents with server-side ownership.
+- Share documents with per-user READ or EDIT permissions.
+- Version history with optimistic concurrency.
+- Soft deletion with retained metadata.
+- Tamper-evident audit trail with hash chain.
+- Administrator dashboard for users, accounts, and audit events.
+- Disable/enable accounts (no permanent deletion).
+- Password recovery via Supabase OTP.
 
-Provide a document management system where authorization is guaranteed by the backend, not by hiding frontend controls. Every normal user owns the documents they upload and decides exactly who else can read or edit each document. Administrators manage accounts, oversee document metadata and audit history, and do not automatically receive access to private file content.
-
-## Technology Stack
+## Tech Stack
 
 | Layer | Technology |
-|-------|------------|
-| Frontend | React, JavaScript/JSX, Vite, Tailwind CSS, shadcn/ui |
-| PDF Rendering & Editing | Mozilla PDF.js (`pdfjs-dist`), `pdf-lib` |
-| Word Rendering & Editing | `docx-preview` (Apache-2.0), `mammoth` (BSD-2-Clause), `docx` (MIT) |
-| Image Editing | Native HTML5 canvas (no third-party editor) |
-| Routing | React Router |
-| HTTP client | Axios |
-| Forms / validation | React Hook Form, Zod |
-| Backend | Python, FastAPI |
+|---|---|
+| Frontend | React, Vite, Tailwind CSS |
+| Backend | FastAPI, Python, SQLAlchemy, Alembic |
 | Database | Supabase PostgreSQL |
-| ORM / migrations | SQLAlchemy 2.x (psycopg 3), Alembic |
-| Authentication | Supabase Auth, FastAPI identity binding, database-authoritative roles |
-| Object storage | Supabase Storage private bucket (`httpx`) |
-| Frontend hosting | Vercel |
-| Backend hosting | Render |
-| Testing | pytest, FastAPI TestClient, embedded-postgres, oxlint, Vitest, Vite build |
+| Auth | Supabase Auth |
+| Storage | Supabase private bucket |
+| Hosting | Vercel (frontend), Render (backend) |
 
-## Repository Structure
+## Architecture
 
-```text
+```mermaid
+flowchart LR
+  Browser --> Frontend[React/Vite]
+  Frontend --> API[FastAPI]
+  API --> Auth[Supabase Auth]
+  API --> DB[(PostgreSQL)]
+  API --> Storage[(Private Storage)]
+```
+
+## Roles
+
+| Role | Description |
+|---|---|
+| Document Owner | Manages owned documents, grants/revokes access. |
+| Document Viewer | Reads documents explicitly shared with them. |
+| Administrator | Monitors users, auth activity, and audit events. |
+
+## Authentication & Authorization
+
+| Area | Description |
+|---|---|
+| Authentication | Supabase Auth integration. |
+| Access Control | Server-side authorization plus DB/storage policies. |
+| Disabled Accounts | Cannot access protected resources. |
+| Admin Endpoints | Restricted to administrators. |
+
+## Database & Storage
+
+Six tables (users, documents, document_permissions, document_versions, refresh_tokens, audit_events) with constraints and indexes. Private Supabase Storage bucket; objects accessed only via backend.
+
+## Project Structure
+
+```
 TrustVault/
-├── backend/
-│   ├── alembic/
-│   │   ├── versions/
-│   │   │   ├── 0001_initial_schema.py
-│   │   │   ├── 0002–0008_*.py
-│   │   │   └── 0009_supabase_auth_identity.py
-│   │   ├── env.py
-│   │   └── script.py.mako
-│   ├── app/
-│   │   ├── api/            # Health, auth, document, and administrator routers
-│   │   ├── core/           # Settings, security, request context, rate limiting, logging, errors
-│   │   ├── db/             # Base, URL helpers, engine/session management
-│   │   ├── models/         # SQLAlchemy models and enums
-│   │   ├── schemas/        # Pydantic request/response models
-│   │   ├── services/       # Auth, validation, storage, documents, permissions, admin, audit
-│   │   └── main.py         # FastAPI application factory
-│   ├── scripts/            # Account, storage connectivity, and audit integrity CLIs
-│   ├── tests/              # pytest suite
-│   ├── .env.example
-│   ├── alembic.ini
-│   ├── pytest.ini
-│   ├── requirements.txt
-│   └── requirements-dev.txt
-├── frontend/
-│   ├── src/
-│   │   ├── app/            # Router and application setup
-│   │   ├── auth/           # In-memory token store and auth provider
-│   │   ├── components/     # Layout, guards, upload, access badge, and UI primitives
-│   │   ├── lib/            # Shared utilities, roles, access levels, audit labels, formatting
-│   │   ├── pages/          # Login, dashboard, library, shared, details, permissions, audit, admin
-│   │   └── services/       # Axios client plus auth, document, permission, and audit API functions
-│   ├── .env.example
-│   ├── components.json
-│   ├── package.json
-│   └── vercel.json
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── DATABASE.md
-│   ├── IMPLEMENTATION_PLAN.md
-│   └── REQUIREMENTS.md
-├── THREATS.md
-├── PROMPTS.md
-├── render.yaml
+├── backend/   # FastAPI app, migrations, tests
+├── frontend/  # React app
+├── docs/      # Architecture, DB, requirements
 └── README.md
 ```
 
-## Getting Started
+## Prerequisites
 
-### Requirements
+- Node.js 20+
+- Python 3.11+
+- Supabase project
 
-- **Node.js** 24.16.0 with npm 11.13.0 (the versions used to verify these phases). A current Node.js release should also work.
-- **Python** 3.13.13 (the version used to verify these phases).
-- npm and the Python `venv` module.
+## Local Setup
 
-### 1. Clone and enter the repository
-
-```bash
-git clone https://github.com/saisankeerth27/TrustVault.git
-cd TrustVault
-```
-
-### 2. Backend setup
-
+Backend:
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-Copy-Item .env.example .env
-```
-
-Set `DATABASE_URL` to your Supabase connection string. The direct database host (port 5432) is IPv6-only on some networks; if it is unreachable, use the **session pooler** on port 5432 with username `postgres.YOUR_PROJECT_REF`:
-
-```env
-DATABASE_URL=postgresql://postgres.YOUR_PROJECT_REF:YOUR_PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres
-```
-
-
-```powershell
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
-
-Configure `DATABASE_URL`, Supabase Auth, and a private Storage bucket in `backend/.env`:
-
-```env
-SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
-SUPABASE_STORAGE_BUCKET=trustvault-documents
-SUPABASE_SERVICE_ROLE_KEY=your-server-side-secret-key
-PASSWORD_RECOVERY_REDIRECT_URL=http://localhost:5173/recover-password
-EMAIL_CONFIRMATION_REDIRECT_URL=http://localhost:5173/login
-MAX_UPLOAD_SIZE_BYTES=10485760
-ALLOWED_UPLOAD_EXTENSIONS=pdf,txt,docx,png,jpg,jpeg
-```
-
-Create the bucket in **Supabase Dashboard → Storage** and keep it private. Use a server-side secret/service-role key, never a `VITE_*` variable.
-
-To enable signed external audit checkpoints, also configure both checkpoint settings in `backend/.env`; either both or neither must be set:
-
-```env
-AUDIT_CHECKPOINT_SIGNING_KEY=generate-a-random-secret-of-at-least-32-characters
-AUDIT_CHECKPOINT_PATH=C:/TrustVault/checkpoints/audit-checkpoint.json
-```
-
-The path must be absolute. This same-host file is a tamper-detection control, not an independent immutable store. Apply migrations:
-
-```powershell
+pip install -r requirements-dev.txt
+copy .env.example .env
 alembic upgrade head
+uvicorn app.main:app --reload --port 8000
 ```
 
-Check the bucket connection without printing credentials. The check requires bucket-level `HeadBucket`/list permission:
-
-```powershell
-python -m scripts.check_storage
-```
-
-Verify the audit hash chain, or write a signed checkpoint after the chain verifies:
-
-```powershell
-python -m scripts.audit_integrity
-python -m scripts.audit_integrity --create-checkpoint
-```
-
-The command exits `0` for a verified chain or successfully written checkpoint, `1` when attention is required, and `2` for configuration errors. It never prints the signing key.
-
-Start the API:
-
-```powershell
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-- Health endpoint: <http://127.0.0.1:8000/health>
-- OpenAPI documentation: <http://127.0.0.1:8000/docs>
-- OpenAPI schema: <http://127.0.0.1:8000/openapi.json>
-
-The health endpoint reports **process health only**. It does not check the database or object storage; use `python -m scripts.check_storage` for a server-side Supabase Storage connectivity and private-bucket check.
-
-#### Supabase Auth setup and account cutover
-
-Configure Supabase before enabling the new authentication code:
-
-1. In **Authentication → Sign In / Providers → Email**, keep email/password sign-in enabled and turn on **Confirm email**. This is what makes Supabase send the initial account-confirmation email. Do not manually mark existing users confirmed to compensate.
-2. Keep the **Confirm sign up** template for email confirmation. TrustVault sends confirmation links to `EMAIL_CONFIRMATION_REDIRECT_URL`, normally the frontend `/login` route; the Supabase client exchanges the callback and loads the verified session before protected routes are available. The callback path must be in the redirect allowlist. The Register page also offers a rate-limited, non-enumerating resend action when a user misses that email.
-3. Password recovery calls Supabase's recovery endpoint (`/auth/v1/recover`) and verifies with recovery type. Supabase's **Reset password** authentication template is the one used for this flow; to show a six-digit code, its body should use `{{ .Token }}` instead of a confirmation link. The separate **Magic link or OTP** template is not used by this recovery request. Check the current template and Auth logs in the dashboard; neither is accessible from this workspace. See [Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates).
-4. The **Password changed** security notification is separate from the recovery template and is sent only when enabled in Supabase project settings. Enable the **Password changed** notification and verify its wording in the dashboard. TrustVault does not send a duplicate notification.
-5. Supabase's built-in mailer is intentionally limited to **two authentication emails per project per hour**. That limit is shared by signup confirmations, recovery codes, and security notifications, and produces HTTP 429 when exhausted. Configure custom SMTP or a Send Email hook before testing the complete email workflow or deploying it. TrustVault blocks repeat requests for the same address for 60 seconds, but it cannot raise Supabase's project-wide mail quota. See [Supabase Auth rate limits](https://supabase.com/docs/guides/auth/rate-limits).
-6. In **Authentication → URL Configuration**, set the intended Site URL and allow the exact frontend `/login` and `/recover-password` redirect URLs for local and deployed environments. Both backend redirect settings must exactly match their corresponding allow-list entries.
-6. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `PASSWORD_RECOVERY_REDIRECT_URL`, and `EMAIL_CONFIRMATION_REDIRECT_URL` in `backend/.env`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `frontend/.env` to the same project. For local development, use the public anon/publishable key from **Project Settings → API Keys** in both places; never use the service-role/secret key for these settings. Restart both servers after changing environment files.
-7. Back up the database and schedule a maintenance window. Stop the old backend before applying migration `0009`: it clears legacy password hashes and revokes old refresh sessions, and it cannot be rolled back to restore credentials.
-8. With the new backend code and migration available, run `alembic upgrade head`, then import existing users:
-
-   ```powershell
-   python -m scripts.import_users_to_supabase_auth
-   ```
-
-   The import creates confirmed, passwordless provider identities. Users must use password recovery to set their Supabase Auth password. Resolve any import failure before enabling sign-in.
-9. Provision an initial administrator with `python -m scripts.create_user --email admin@example.com --name "Admin User" --role ADMINISTRATOR`. It creates both the Supabase Auth identity and the TrustVault database row; never grant roles through Supabase user metadata.
-10. Enable the new frontend/backend only after migration, import, provider settings, exact CORS origin, HTTPS cookie settings, and a tested administrator identity are ready.
-
-Recovery request responses intentionally do not reveal whether an email is registered. A successful response means Supabase accepted the request, not that SMTP delivered it. Live email delivery and production browser-cookie behavior still require verification.
-
-### 3. Provision an account
-
-Public registration creates a normal **User** account. Create administrator accounts explicitly from `backend/`:
-
-```powershell
-python -m scripts.create_user --email admin@example.com --name "Admin User" --role ADMINISTRATOR
-```
-
-The script prompts for a password with `getpass`, or reads `TRUSTVAULT_USER_PASSWORD` if set. It never prints the password or hash. Administrator accounts must be provisioned this way; clients cannot request a role.
-
-### 4. Frontend setup
-
+Frontend:
 ```powershell
 cd frontend
 npm install
-Copy-Item .env.example .env
+copy .env.example .env
 npm run dev
-```
-
-The Vite development server is available at <http://localhost:5173>. `VITE_API_BASE_URL` must point at the running FastAPI backend (default `http://localhost:8000`). FastAPI proxies signup and password login to Supabase Auth with the public anon key so provider outcomes can be audited server-side; passwords are forwarded to Supabase over HTTPS and are never stored or logged by TrustVault. Supabase sessions are persisted by the frontend SDK, and the TrustVault access token is kept in memory. The short-lived password-recovery token is held only in a narrowly scoped HttpOnly cookie.
-
-### Frontend routes
-
-| Route | Purpose | Access |
-|-------|---------|--------|
-| `/login` | Login form and session bootstrap | Public |
-| `/register` | Supabase Auth normal-user registration; routes a returned session to Dashboard or asks the user to confirm email when no session is returned | Public |
-| `/dashboard` | Live document, owned, and shared counts with recent permitted documents | Any signed-in user |
-| `/documents` | Searchable library with name/category/date filters for users and owner filtering for administrator oversight | Any signed-in user; includes owned and directly shared documents |
-| `/upload` | Dedicated validated upload page with progress feedback | Any signed-in active user |
-| `/shared-with-me` | Documents with an active READ/EDIT grant for the signed-in user | Any signed-in user |
-| `/documents/:documentId` | Access-aware metadata details and download/edit/delete/manage actions | Any signed-in user with metadata visibility |
-| `/documents/:documentId/permissions` | Owner-only grant, level update, revocation, and grant history | Document owner only |
-| `/admin/audit` | Audit event search/filter/pagination and integrity verification | `ADMINISTRATOR` only |
-| `/admin` | Administrator account, summary, and document-metadata oversight | `ADMINISTRATOR` only |
-| `/` | Redirects to `/dashboard` | Any signed-in user |
-| `*` | Not-found page | Any signed-in user |
-
-Protected routes redirect unauthenticated visitors to `/login`. An authenticated user without the required role sees a 403 state, but the backend remains the security boundary.
-
-## Authentication and Authorization
-
-The current source uses Supabase Auth for registration, password login, session refresh, and logout. FastAPI proxies signup and password login, validates successful provider identities, and binds the verified provider UUID and email to the TrustVault user record. TrustVault's database remains the sole authority for account status, administrator role, and document permissions; Supabase user metadata and token role claims never grant privileges.
-
-- **Password policy:** registration and recovery require at least 12 characters and at most 72 UTF-8 bytes. Supabase Auth stores and verifies credentials.
-- **Verified identities:** protected requests require a provider-verified email, a matching `supabase_auth_id` and normalized email, and an active TrustVault account.
-- **Signup and login audit:** `POST /api/v1/auth/supabase/register` and `/api/v1/auth/supabase/login` perform provider requests server-side. Successful signup/profile linking and login are attributed from the verified provider identity; provider failures use generic responses and failure audit events without recording email addresses or passwords. Confirmation-pending signup events have no TrustVault actor until the account is verified and linked.
-- **Recovery:** the backend sends generic six-digit OTP requests, rate-limits requests and verification, verifies with `type: recovery`, and stores the resulting access token only in a 10-minute HttpOnly cookie scoped to the password-update endpoint.
-- **CSRF and cookies:** recovery POSTs enforce exact configured Origin checks. Production requires HTTPS, `AUTH_COOKIE_SECURE=true`, and a recovery redirect matching an allow-listed CORS origin. Cross-site deployments use `AUTH_COOKIE_SAMESITE=none`.
-- **Rate limiting:** recovery uses process-local per-email and per-IP limits; the general auth limiter is also process-local. Multi-instance deployments need a shared limiter before relying on these as global controls.
-- **Audit:** registration, login successes/failures, recovery requests, verification failures/successes, password changes, and update failures use the existing tamper-evident audit writer. OTPs, passwords, access/refresh tokens, and SMTP credentials are never written to event details.
-
-Migration `0009` is an irreversible credential cutover: it clears legacy local password hashes and revokes old refresh sessions. Existing accounts need a provider identity import and must set a provider password through recovery. Do not apply it without a database backup, a maintenance/deployment plan, and tested Supabase Auth configuration.
-
-## Document Management, Permissions, and Downloads
-
-Phases 5–6 implement the authenticated document library and named-user sharing:
-
-- `GET /api/v1/documents` accepts `q`, `category`, `owner_id`, `created_from`, `created_to`, `page`, `page_size`, `sort_by`, and `order`. Search is name-based, category filtering is case-insensitive, date filters are inclusive UTC calendar days, and pagination is bounded to 100 items.
-- Users can list/read documents they own and documents shared with them by an active grant. Administrators can discover and review metadata for all active documents, but content access still requires ownership or an explicit grant.
-- `GET /api/v1/documents/shared-with-me` returns only active non-deleted documents with an active grant for the caller, with bounded pagination and allow-listed sorting. Responses use `Cache-Control: no-store`.
-- `GET /api/v1/documents/{id}` returns safe metadata plus the caller's `access_level`: `OWNER`, `EDIT`, `READ`, or `ADMINISTRATOR`. Inaccessible and missing IDs return the same generic 404.
-- `PATCH /api/v1/documents/{id}` permits only `name`, `category`, and `description`. Owners and EDIT recipients may update; READ recipients and metadata-only administrators receive 403. Protected fields are rejected.
-- `GET /api/v1/documents/{id}/download` streams the current private object through the backend for owners, READ recipients, and EDIT recipients. It sets a safe attachment filename, `Content-Length`, `Cache-Control: private, no-store`, and `X-Content-Type-Options: nosniff`; it never returns a storage key or presigned URL.
-- `GET /api/v1/documents/{id}/preview` streams the current object inline for owners, READ recipients, and EDIT recipients with `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Administrators without a grant receive 403.
-- `GET /api/v1/documents/{id}/versions` returns version metadata paginated five at a time by default, including the current version and page metadata; `GET /api/v1/documents/{id}/versions/{version_number}/download` streams a retained version. Neither exposes storage keys.
-- `PUT /api/v1/documents/{id}/versions` accepts a validated multipart replacement for owners and EDIT recipients and requires `expected_version_number`; stale writes return 409 rather than overwriting newer content.
-- `PUT /api/v1/documents/{id}/content` edits UTF-8 `text/plain` content as a new version for owners and EDIT recipients. Other MIME types return 415. DOCX and image edits use the same `PUT /api/v1/documents/{id}/versions` replacement path, so the backend remains authoritative for authorization, conflict detection, checksums, and audit.
-- `DELETE /api/v1/documents/{id}/versions/{version_number}` is owner-only. Deleting a historical version preserves the current pointer; deleting the current version rolls back to the highest remaining version. The final version cannot be deleted, and version numbers are never reused.
-- `DELETE /api/v1/documents/{id}` is owner-only. It marks `deleted_at`, removes the document from normal reads, then attempts best-effort Supabase Storage cleanup for the current and historical version objects. Metadata is retained for history.
-- `POST /api/v1/documents/upload` is available to every active authenticated user. Ownership is assigned to the uploader, with generated keys, validated content, and a server-computed SHA-256 checksum.
-- Owners manage sharing with `GET/POST /api/v1/documents/{id}/permissions` and `PATCH/DELETE /api/v1/documents/{id}/permissions/{permission_id}`. Grants target an active registered account by normalized email and accept only `READ` or `EDIT`.
-- A same-level grant is idempotent (`200`); a different active level returns `409`. Level changes revoke the existing row and insert a replacement, retaining history. Revocation is idempotent (`204`) and takes effect on the recipient's next request.
-- Permission management is owner-only. Administrators do not gain owner or sharing powers. Permission lists include active and revoked rows, with `total` and `active_total`.
-- Successful document, permission, registration, and login actions append audit events in the same database transaction as the protected change. Denials are recorded best-effort so an audit failure cannot turn an authorization denial into a success.
-
-The frontend provides registration and login, a live dashboard with permitted-document counts and recent activity, a searchable/filterable library with name, category, and date filters, sorting, and pagination; a "Shared with me" view; access-level badges; a dedicated upload page with validation and progress feedback; an access-aware details page with read-only metadata, preview, download, paginated version history, and paginated owner activity; and an owner-only sharing page with grant, level update, revoke confirmation, and history. Administrators get user management with copyable account IDs, summary counts, permission history, metadata oversight, and the audit viewer; administrator metadata and audit access remain read-only, and private content still requires ownership or an explicit grant. Desktop uses a sidebar navigation shell, while mobile uses a compact top bar and scrollable navigation.
-
-Storage behavior is covered by a mocked adapter, and a **live private-bucket connectivity, upload, download, metadata, and delete smoke test has passed** against the configured Supabase project. The bucket must remain private.
-
-## Secure PDF Preview, Annotation Editing, and Revisions
-
-### PDF Preview Architecture
-- **Rendering engine:** Mozilla PDF.js (`pdfjs-dist` v6.x) built into Vite via dynamic worker bundling (`pdf.worker.min.mjs?url`).
-- **Data flow:** PDF bytes are retrieved through the authenticated backend endpoint (`GET /api/v1/documents/{id}/preview`), converted to an `ArrayBuffer`, and rendered directly into HTML5 canvas elements.
-- **Security controls:** `isEvalSupported: false` is configured on the PDF document loading task to prevent arbitrary code execution within the PDF context. The preview endpoint sets `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Private Supabase Storage object keys and signed URLs are never exposed to the client.
-- **Controls & navigation:** Page-by-page navigation with keyboard/button controls, zoom scaling (60% to 250%, starting at **90%**), page-count indicators, and automatic resource disposal (`loadingTask.destroy()`, render task cancellation on unmount). Zoom starts at 90% so a full page is readable without manual adjustment; zoom in/out and page navigation remain fully manual.
-
-### In-Browser PDF Editing Capabilities
-- **SDK & Licensing:** Implemented using open-source `pdf-lib` (MIT License) and `pdfjs-dist` (Apache 2.0 License). No proprietary or commercial license keys (such as Apryse WebViewer) are required.
-- **Supported Operations:**
-  - **Sticky Text Notes:** Place text note annotations anywhere on the canvas with author attribution and timestamp.
-  - **Free Text (Typewriter):** Type custom text annotations directly onto the PDF document surface at exact coordinates.
-  - **Area Highlights:** Click-and-drag translucent highlight boxes over specific document regions.
-  - **Typed Signatures & Initials:** Insert stylized italicized signatures/initials at user-specified positions.
-- **Limitations:**
-  - Modification of pre-existing PDF font glyphs or body text streams is not supported without commercial font-substitution engines (e.g. Apryse WebViewer with commercial licensing).
-  - TrustVault accurately represents this capability as client-side PDF binary annotation embedding rather than arbitrary document layout reflow.
-
-### Revision Lifecycle & Concurrency
-- When an authorized user with `EDIT` or `OWNER` permissions saves annotations, `pdf-lib` loads the original PDF binary in the browser, draws the requested annotations onto the corresponding PDF pages, and serializes the modified document into a valid binary PDF (`application/pdf`).
-- The new revision is uploaded via `PUT /api/v1/documents/{id}/versions` with `expected_version_number`.
-- If another editor committed a revision concurrently, the server rejects the request with HTTP 409 Conflict. The editor becomes stale and requires close/reopen; refreshing history alone is not sufficient because the in-memory draft could still overwrite a newer revision.
-- Every revision takes the next persistent `next_version_number`, assigns a new unique storage key in private storage, computes a new SHA-256 checksum, logs a `DOCUMENT_VERSION_CREATED` audit event, and preserves the previous version. Deleted version numbers are never reused.
-- PDF annotation coordinates are converted through the PDF.js page viewport so rotated pages retain correct placement; filenames are normalized, and text unsupported by standard PDF fonts is sanitized before embedding.
-
-### Version Deletion and Rollback Policy
-- Document owners can delete any version via `DELETE /api/v1/documents/{id}/versions/{version_number}`, provided at least one version remains.
-- Deleting a non-current version leaves the current pointer unchanged. Deleting the current version rolls back to the highest-numbered remaining version and updates the document's active storage key, MIME type, size, and checksum.
-- The last remaining version cannot be deleted and returns HTTP 400 Bad Request. This prevents a document from existing without usable content.
-- When a version is deleted, its private Supabase Storage object is deleted, retained storage totals are recalculated, and a `DOCUMENT_VERSION_DELETE` audit event records whether a rollback occurred, the previous/current version numbers, and storage cleanup status.
-
-## Word (DOCX) Preview and Editing
-
-### Paginated preview
-
-- **Rendering engine:** `docx-preview` (Apache-2.0), loaded dynamically so it stays out of the main bundle.
-- **Pages:** The renderer emits one `<section>` per page. The viewer shows a `Page X of Y` indicator, previous/next controls, and tracks the visible page while scrolling.
-- **Page boundaries:** Pages break on manual page breaks, Word's saved `lastRenderedPageBreak` markers, and section changes (`breakPages: true`, `ignoreLastRenderedPageBreak: false`). Tables, embedded images, headers, footers, footnotes, and endnotes are rendered where the library supports them.
-- **Graceful handling:** Loading, empty, single-page, corrupt-package, and retry states are explicit. A single-page document explains that it contains no page-break markers instead of pretending it was paginated.
-- **Limit:** This is a layout renderer, not a Word layout engine. It does not reflow text in real time, so a DOCX saved without page-break hints may appear as one long page. Complex Word constructs can differ from desktop Word.
-
-### Editing
-
-- Owners and `EDIT` recipients see an **Edit document** action; `READ` recipients and metadata-only administrators do not.
-- Content is fetched through the authenticated preview endpoint, converted to semantic HTML with `mammoth` (headings, paragraphs, character formatting, lists, tables, images), edited in a `contenteditable` surface with a formatting toolbar, undo/redo, and an optional change summary, then exported to a real `.docx` with the `docx` package (MIT).
-- Saving calls the normal version endpoint with `expected_version_number`. The backend re-checks ownership/`EDIT`, writes a new immutable version, computes a new SHA-256 checksum, and audits the change. A concurrent edit returns `409`, and the editor becomes stale until it is closed and reopened.
-- **Limits:** This is a rich-text round-trip, not full Word fidelity. Complex styles, text boxes, columns, comments, tracked changes, and some headers/footers may be simplified or dropped. Legacy binary `.doc` files are not supported for preview or editing; only `.docx` is accepted by upload validation.
-
-## Image Editing
-
-- Owners and `EDIT` recipients see an **Edit image** action for PNG/JPEG documents.
-- The editor is a client-side canvas tool with freehand pencil, line, arrow, rectangle, ellipse, and text, configurable colour and stroke width, undo/redo, and a full-size preview dialog.
-- Saving flattens the annotations into the image and uploads it through the version API as a new immutable version (PNG stays PNG, JPEG stays JPEG). The original version is retained.
-- Authorization and conflict handling are identical to DOCX editing: the server enforces `EDIT`/ownership and `expected_version_number`, and a stale save returns `409`. Flattening is destructive to the edited revision only; earlier versions remain unchanged.
-
-## Activity Attribution
-
-- Denials are split by whether the caller could see the document:
-  - **Not visible** (no ownership, no active grant, no metadata-only administrator role): the event is recorded as a **global** security event with `document_id = NULL`, retaining `attempted_document_id`, actor, capability, reason, and request context. It does not appear in the owner's document activity.
-  - **Visible but insufficient** (for example, a `READ` recipient attempting an edit): the event stays attached to the document and appears in owner activity.
-- The owner activity endpoint also excludes historical `DENIED` events whose `details.reason` is `not_visible`, because older releases attached those probes to the document. Historical rows are **not deleted or rewritten**, and their hash-chain/checkpoint evidence is unchanged.
-- Administrators can still find both forms: the audit `document_id` filter matches either `audit_events.document_id` or `details.attempted_document_id`.
-- This corrects the confusing behavior where another user's failed probing made a private document look as if it had been shared or accessed.
-
-## Administrator Account Management
-
-- `GET /api/v1/admin/summary` returns account, role, document, and active-grant counts.
-- `GET /api/v1/admin/users` and `GET /api/v1/admin/users/{id}` provide account search/filtering, timestamps, last login, owned-document count, and role/status detail.
-- `PATCH /api/v1/admin/users/{id}/status` disables or reactivates an account; disablement and role changes revoke the target's active refresh sessions.
-- `PATCH /api/v1/admin/users/{id}/role` switches between `USER` and `ADMINISTRATOR`.
-- An administrator cannot change their own role or status, and the last active administrator cannot be disabled or demoted.
-- `GET /api/v1/admin/documents/{id}/permissions` exposes permission history for oversight without granting file content.
-- Every successful account change is audited with `target_user_id` and `resource_type`; denied account changes are also audited. Self-service deletion remains unavailable.
-
-## Audit Trail and Integrity
-
-- The audit writer records authentication, account status/role changes, upload, metadata update, download, delete, permission grant/update/revoke, and their denial outcomes. Read-only audit views and integrity checks are not themselves audited.
-- Events are appended under a PostgreSQL advisory transaction lock with a contiguous `chain_index`, `previous_hash`, and SHA-256 `event_hash`. The hashed payload is canonical JSON with a versioned schema and UTC microsecond timestamps.
-- State-changing success events share the protected business transaction: an audit write failure rolls back the change and returns a generic error. Denial events use a best-effort commit and never block the intended 403/404 response.
-- Details are sanitized. Passwords, tokens, cookies, authorization headers, document content, session IDs, and other sensitive keys are rejected; request ID, direct socket client IP, and a length-limited user-agent are attached automatically when available.
-- Denial attribution distinguishes probes against documents the caller cannot see from denials on documents the caller can see. Not-visible probes are stored globally (`document_id = NULL`) with `attempted_document_id` for administrator investigation and are excluded from owner activity; visible-but-insufficient denials remain attached to the document. See [Activity Attribution](#activity-attribution).
-- `GET /api/v1/admin/audit-events` supports filtering by actor ID, target user ID, resource type, document ID, action, outcome, and inclusive UTC date range, with newest-first backend pagination at 15 records per page. The global audit response retains dedicated request/document IDs for administrator investigation; the table shows document names and the metadata dialog provides copyable diagnostic values. `GET /api/v1/admin/audit-integrity` verifies both the chain and the signed checkpoint and returns its server verification timestamp.
-- Both audit endpoints are global-administrator-only. There is no owner-scoped audit view or audit mutation endpoint in Phase 7.
-- The signed checkpoint binds the current chain head with HMAC-SHA256 and is written atomically by `python -m scripts.audit_integrity --create-checkpoint`. Checkpoint creation refuses to replace an invalid or newer checkpoint. It detects database tampering only relative to the last trusted checkpoint; events appended after the latest checkpoint and then deleted are not detectable by that checkpoint, and it does not prevent a privileged attacker from deleting both the database changes and the same-host checkpoint file.
-- The audit dashboard at `/admin/audit` provides automatic filters, event detail expansion, 15-record pagination, and an integrity panel showing backend chain/checkpoint statuses. A same-host checkpoint file is not independent protection; missing configuration or checkpoint evidence remains visible as unverified.
-
-## Database
-
-The schema has six tables — `users`, `refresh_tokens`, `documents`, `document_permissions`, `document_versions`, and `audit_events` — with UUID primary keys, enforced checks, foreign keys, partial unique indexes, and a `pg_trgm` index for document name search. Migration `0003` adds the audit chain sequence; `0004` adds `users.last_login_at`, migrates legacy roles, and adds role/status index support; `0005` adds content versions and backfills existing documents as version 1; `0006` versions the audit hash schema; `0007` adds `documents.next_version_number`; `0009` links Supabase Auth identities and clears obsolete local password hashes. Highlighted decisions:
-
-- Roles and statuses are constrained strings; no native PostgreSQL enums. The current role constraint allows only `ADMINISTRATOR` and `USER`.
-- Emails are stored lowercased and uniquely constrained.
-- Refresh tokens are stored only as SHA-256 hashes, grouped by session family, with expiry and revocation timestamps.
-- Document permissions keep a full grant/revoke history with a partial unique index allowing only one active grant per user/document pair.
-- Audit events reference users and documents with `ON DELETE SET NULL` so history survives deletion.
-- Audit events use a positive, unique `chain_index` populated in migration `0003`; the application appends the hash chain and does not expose update/delete endpoints.
-- Documents use soft deletion (`deleted_at`). Current-file columns remain denormalized for compatibility, while `document_versions` retains content history with one current version per document.
-- `documents.next_version_number` is a persistent sequence so deleting a version cannot cause its number to be reused. Deleting the current version atomically moves the pointer and denormalized content columns to the highest remaining version.
-- Version uniqueness is enforced on `(document_id, version_number)` and `storage_key`; a partial unique index permits exactly one current version, and `storage_key` is never returned by the API.
-
-Full column, constraint, and index detail, plus RLS planning and connection management, is in [docs/DATABASE.md](docs/DATABASE.md). Migrations are applied only through Alembic; `alembic upgrade head` is a manual deployment step.
-
-Alembic commands (from `backend/`):
-
-```powershell
-alembic current
-alembic upgrade head
-alembic downgrade -1
-alembic check
 ```
 
 ## Environment Variables
 
-Templates are committed; real values are not.
+Backend (required): `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`, `CORS_ALLOWED_ORIGINS`, `PASSWORD_RECOVERY_REDIRECT_URL`. Optional: `AUTH_COOKIE_SECURE`, `AUTH_COOKIE_SAMESITE`, `AUDIT_CHECKPOINT_SIGNING_KEY`, `AUDIT_CHECKPOINT_PATH`.
 
-### Backend — `backend/.env.example`
+Frontend (required): `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
 
-| Variable | Purpose | Required |
-|----------|---------|----------|
-| `APP_NAME` | API display name | No (default provided) |
-| `APP_VERSION` | API version | No (default provided) |
-| `APP_ENV` | `development`, `test`, or `production` | No (default `development`) |
-| `LOG_LEVEL` | Logging verbosity | No (default `INFO`) |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated exact frontend origins | Yes for frontend calls |
-| `DATABASE_URL` | PostgreSQL/Supabase connection string; direct or session pooler (5432) for migrations, transaction pooler (6543) for runtime | Yes for database work |
-| `DB_POOL_SIZE` | SQLAlchemy pool size | No (default `5`) |
-| `DB_MAX_OVERFLOW` | SQLAlchemy overflow allowance | No (default `10`) |
-| `JWT_*` / `BCRYPT_ROUNDS` | Legacy custom-auth settings; retained only for test-only route coverage | No (not used for production auth) |
-| `AUTH_COOKIE_SECURE` | Require HTTPS for the recovery cookie | No (default `false`; must be `true` in production) |
-| `AUTH_COOKIE_SAMESITE` | `lax`, `strict`, or `none` (`none` requires Secure) | No (default `lax`) |
-| `AUTH_RATE_LIMIT_ATTEMPTS` | Attempts per sliding window | No (default `10`) |
-| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Sliding-window length | No (default `60`) |
-| `AUTH_EMAIL_COOLDOWN_SECONDS` | Per-address wait before another signup, resend, or recovery email is requested | No (default `60`) |
-| `AUDIT_CHECKPOINT_SIGNING_KEY` | HMAC key for signed audit checkpoints; at least 32 characters, set with the path | No (both checkpoint settings optional) |
-| `AUDIT_CHECKPOINT_PATH` | Absolute path for the signed checkpoint file; configure both or neither | No (both checkpoint settings optional) |
-| `SUPABASE_URL` | HTTPS Supabase project URL without a path | Yes for Auth and uploads |
-| `SUPABASE_ANON_KEY` | Public Supabase Auth client key used server-side for verified Auth API calls | Yes for authentication |
-| `SUPABASE_STORAGE_BUCKET` | Private Supabase Storage bucket name | Yes for uploads |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server-side secret or legacy service-role key | Yes for uploads |
-| `PASSWORD_RECOVERY_REDIRECT_URL` | Allow-listed callback URL used by password recovery | Yes for recovery |
-| `EMAIL_CONFIRMATION_REDIRECT_URL` | Allow-listed frontend login URL used by sign-up and resend-confirmation emails; derived from the recovery URL when omitted | Recommended |
-| `MAX_UPLOAD_SIZE_BYTES` | Upload limit, 1–104,857,600 bytes | No (default `10485760`) |
-| `ALLOWED_UPLOAD_EXTENSIONS` | Comma-separated extension allow-list | No (default `pdf,txt,docx,png,jpg,jpeg`) |
+Never commit real secrets.
 
-`CORS_ALLOWED_ORIGINS` defaults to `http://localhost:5173`. A wildcard is rejected outside `development`. Supabase Storage credentials are server-side only and must never be placed in `VITE_*` variables.
+## Deployment
 
-### Frontend — `frontend/.env.example`
+- Frontend: Vercel, root `frontend/`, build `npm run build`, output `dist`.
+- Backend: Render, root `backend/`, start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+- Set env vars in both platforms; run `alembic upgrade head` on production DB.
 
-| Variable | Purpose |
-|----------|---------|
-| `VITE_API_BASE_URL` | Base URL for the FastAPI backend |
-| `VITE_SUPABASE_URL` | Public Supabase project URL for Supabase Auth |
-| `VITE_SUPABASE_ANON_KEY` | Public Supabase publishable/anon key; never use the service-role key |
+## Testing
 
-Only non-secret configuration belongs in `VITE_*` variables, because Vite embeds them in the browser bundle. Never place database passwords, service-role keys, storage secrets, or JWT secrets in frontend environment variables.
+- Backend: `pytest` — 287 tests passed.
+- Frontend: `npm run lint`, `npm test`, `npm run build` — all pass.
+- Security: IDOR, permission, audit, and auth boundary tests included.
 
-## Supabase Auth and Password Recovery
+Unverified: live Supabase SMTP delivery and production cookie behavior.
 
-The source migration uses Supabase Auth for passwords and browser sessions; TrustVault's database remains authoritative for account roles, disabled status, ownership, and document permissions. The cutover is not complete until deployment configuration, migration `0009`, SMTP/template setup, and the existing-user import are complete. After an approved maintenance window and database backup, apply `alembic upgrade head`, then run `python -m scripts.import_users_to_supabase_auth` from `backend/` using the protected `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`. The import sends existing account emails and display names to Supabase Auth, does not send password hashes or roles, and prints aggregate counts only. It creates confirmed users without passwords; existing users must set a password using recovery. Migration `0009` clears local password hashes and revokes legacy refresh sessions, and downgrade cannot restore them.
+## Known Limitations
 
-Configure these public frontend values in Vercel or `frontend/.env`: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL`. Configure `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `PASSWORD_RECOVERY_REDIRECT_URL`, and `EMAIL_CONFIRMATION_REDIRECT_URL` on the backend. The service-role key stays only in protected backend configuration and is needed for the one-off identity import as well as the existing Storage integration. Never place SMTP credentials or service-role keys in frontend environment variables.
+- No MFA or account lockout.
+- In-memory rate limiting (per process).
+- Audit checkpoint is same-host file.
+- Supabase Auth SMTP not verified live.
 
-In Supabase Dashboard:
+## Security Notes
 
-1. Under **Project Settings → Authentication → SMTP Settings**, configure and verify the SMTP provider, sender, TLS, and rate limits. Rotate any SMTP App Password previously exposed outside Supabase; do not enter it in this repository.
-2. Under **Authentication → Email Templates → Reset Password**, configure the message to contain the six-digit OTP using `{{ .Token }}`; do not rely on a link-only reset template.
-3. Verify the email OTP length is six digits and the provider's expiry/rate limits are appropriate.
-4. Under **Authentication → URL Configuration**, add the deployed `/recover-password` URL and `/login` confirmation redirect to Redirect URLs. Set `PASSWORD_RECOVERY_REDIRECT_URL` and `EMAIL_CONFIRMATION_REDIRECT_URL` to the exact allowed frontend URLs, and set `CORS_ALLOWED_ORIGINS` to the frontend origin.
-5. Under **Authentication → Email Templates → Password changed**, enable the security notification and use the supplied template (or equivalent wording). Supabase sends this email after TrustVault successfully updates the password; TrustVault intentionally does not send a duplicate message.
-6. Ensure the frontend and backend reference the same Supabase project and that the public key is the anon/publishable key, not a service-role key.
-
-The recovery audit records provider acceptance, not confirmed email delivery. Invalid OTP failures remain unattributed; verified OTP and password-change events are linked to the TrustVault account only after the identity is verified. The repository's automated tests do not verify access to the Supabase dashboard, SMTP delivery, or the live OTP template.
-
-## Testing and Checks
-
-### Backend
-
-```powershell
-cd backend
-.\.venv\Scripts\Activate.ps1
-pytest
-```
-
-The suite has **287 tests**, including threat-mapped security cases in `backend/tests/test_security.py`, the business-model acceptance suite in `backend/tests/test_business_model.py`, the document-content/version suite in `backend/tests/test_document_versions.py`, and focused request-limit tests in `backend/tests/test_request_limits.py`. The current local run passed all **287 tests**. It verifies:
-
-- Application metadata, health endpoint behavior, JSON error envelopes, and CORS.
-- Database URL normalization and Supabase pooler/SSL detection.
-- Models, tables, columns, indexes, and constraints for all six tables, including immutable version history and one-current/version uniqueness constraints.
-- Migrations `0001`–`0009`: schema upgrades/drift checks, legacy-role data migration, version backfills, Supabase identity linkage, legacy credential clearing, and refusal to downgrade the irreversible auth cutover.
-- Registration, login, refresh rotation, reuse detection, logout, and current-user behavior.
-- Expired, tampered, wrong-issuer/audience/type, disabled-account, and revoked-session rejection.
-- Role authorization helpers and fail-closed unknown-role handling.
-- Login/registration rate limiting and `Retry-After` behavior.
-- Production authentication configuration validators.
-- Auth logging that does not include passwords, tokens, or email addresses.
-- Upload validation for supported file types, MIME/signature mismatches, unsafe filenames, empty files, and oversized requests.
-- Normal-user upload success with server-decided ownership, generated storage keys, computed SHA-256 checksums, and persisted metadata.
-- Anonymous denial, storage failure mapping, database-failure object cleanup, and secret-safe errors/logs.
-- Supabase Storage configuration validators, private-bucket enforcement, header handling, and safe storage error mapping without live network access.
-- Document list authorization/scoping, name search with literal wildcard escaping, category/owner/date filters, sorting, pagination boundaries, and invalid query parameters.
-- Owner/shared/metadata-only visibility, owner/EDIT updates, READ/administrator denial, protected-field rejection, and generic 404 IDOR behavior.
-- Streamed download and inline-preview headers, UTF-8/header-injection-safe filenames, storage-not-found/storage-failure mapping, and READ/EDIT/owner access rules.
-- Version listing pagination and deduplication, current/historical downloads, READ denial of writes, EDIT replacement and text editing, stale-write conflicts, plain-text-only enforcement, history retained across replacement, persistent version numbering after deletion, last-version rejection, current-version rollback, storage-failure rollback safety, and owner activity filtering/pagination.
-- Soft deletion, list/detail exclusion, retained metadata, mocked object cleanup, cleanup-failure logging, and repeat/other-user delete denial.
-- Owner-only permission grant/list/update/revoke, idempotent same-level grants, conflict handling, active/revoked history, retained revocation rows, and revoke-and-regrant behavior.
-- Active excluded (disabled/missing) recipients, endpoint-forged identity rejection, owner self-grant conflict, and authenticated but unauthorized document manipulation.
-- Shared-with-me filtering of revoked and soft-deleted documents, pagination/sorting, immediate post-revocation denial, access-level reporting, and metadata-only administrator behavior.
-- Audit events for registration, login success/failure, logout, account status/role changes, uploads, metadata updates, downloads, deletes, permission changes, and denied operations.
-- Administrator-only audit query access, filters, pagination, generic denial behavior, request-ID normalization, metadata/request-context sanitization, and denied audit access.
-- Denial attribution: not-visible probes are recorded as global events with `attempted_document_id`, stay out of owner activity, remain discoverable by the administrator document filter, and visible-but-insufficient denials stay attached to the document. Historical not-visible rows are excluded from owner activity without rewriting audit data.
-- Hash-chain verification, middle-event tampering/removal detection, signed-checkpoint success/staleness/truncation/signature failure, refusal to replace invalid/newer checkpoints, and mandatory-audit-write rollback behavior.
-- Threat-model verification for IDOR, cross-user GET/download/edit/delete denial, grant/revoke audit coverage, forged role claims, administrator content boundaries, malicious uploads, malformed multipart, DOCX expansion limits, Unicode format-control filenames, path manipulation, audit API mutation attempts, metadata leakage, secret-safe failures, expired/tampered tokens, logout/disabled-account invalidation, brute-force limits, pre-authentication oversized uploads, and uploads without `Content-Length`.
-
-Database tests start an **embedded PostgreSQL** instance in a temporary directory and never contact Supabase or read `DATABASE_URL`. Storage tests use a fake HTTP client; no test contacts Supabase Storage.
-
-Coverage is generated separately from test success:
-
-```powershell
-pytest --cov=app --cov-report=term-missing
-```
-
-The verified local full-suite run passed **287 tests**. Coverage is a diagnostic, not proof of security.
-
-The GitHub Actions workflow `.github/workflows/backend-tests.yml` runs the full backend suite with coverage on pushes and pull requests that change `backend/**`. Remote CI execution is not verified until the workflow runs on GitHub.
-
-### Frontend
-
-```powershell
-cd frontend
-npm run lint
-npm test
-npm run build
-```
-
-`npm run lint`, `npm test`, and `npm run build` pass; lint reports existing warnings and the build reports large-chunk advisories. The frontend is JavaScript/JSX only; `npm test` runs the Vitest/React Testing Library suite, and `npm run build` runs the Vite production build. The suite covers safe API errors, role-aware UI, Supabase authentication, password recovery, document previews/editing, and document history behavior. A browser-based walkthrough with live accounts and deployment remain unverified.
-
-## API Baseline
-
-- **Health:** `GET /health` → `{"status":"ok","service":"TrustVault API","version":"0.1.0"}`
-- **Register/login:** `POST /api/v1/auth/supabase/register` and `POST /api/v1/auth/supabase/login` proxy to Supabase Auth and record trusted outcomes; the frontend SDK persists returned sessions. Legacy local-auth endpoints return 410 outside tests.
-- **Confirmation resend:** `POST /api/v1/auth/supabase/resend-confirmation` asks Supabase to resend a pending sign-up email while returning a generic result for every address.
-- **Logout/refresh:** handled by Supabase Auth in the frontend SDK.
-- **Identity sync:** `POST /api/v1/auth/session` → validates the Supabase identity and returns the matching TrustVault user/role.
-- **Recovery request:** `POST /api/v1/auth/recovery/request` → generic six-digit OTP request response.
-- **Recovery verification:** `POST /api/v1/auth/recovery/verify` → verifies an OTP with recovery type and sets the scoped HttpOnly recovery cookie.
-- **Password update:** `POST /api/v1/auth/recovery/update-password` → changes the provider password using the verified recovery session.
-- **Current user:** `GET /api/v1/auth/me` → returns the authenticated user
-- **Upload:** `POST /api/v1/documents/upload` → validates and stores a document owned by the authenticated user and returns safe metadata (no storage key)
-- **List/search:** `GET /api/v1/documents` → scoped, filtered, sorted, paginated metadata (`items`, `total`, `page`, `page_size`, `pages`, `has_next`, `has_previous`)
-- **Details:** `GET /api/v1/documents/{id}` → safe metadata plus the caller's `access_level`
-- **Shared with me:** `GET /api/v1/documents/shared-with-me` → active documents explicitly shared with the caller
-- **Update:** `PATCH /api/v1/documents/{id}` → updates to `name`, `category`, and `description` for owners and EDIT recipients
-- **Download:** `GET /api/v1/documents/{id}/download` → private object stream for owners, READ recipients, and EDIT recipients
-- **Preview:** `GET /api/v1/documents/{id}/preview` → authorized inline content for owners, READ, and EDIT recipients
-- **Versions:** `GET /api/v1/documents/{id}/versions` and `GET /api/v1/documents/{id}/versions/{version_number}/download` → safe history metadata and retained-version downloads
-- **Replace version:** `PUT /api/v1/documents/{id}/versions` → owner/EDIT multipart replacement with optimistic version check
-- **Edit text:** `PUT /api/v1/documents/{id}/content` → owner/EDIT plain-text edit that creates a new version
-- **Delete:** `DELETE /api/v1/documents/{id}` → owner-only soft deletion and best-effort cleanup of every version object; returns 204
-- **List permissions:** `GET /api/v1/documents/{id}/permissions` → owner-only active and revoked grant history
-- **Grant permission:** `POST /api/v1/documents/{id}/permissions` → owner-only `READ`/`EDIT` grant; returns 201, or 200 for an idempotent same-level grant
-- **Update permission:** `PATCH /api/v1/documents/{id}/permissions/{permission_id}` → revoke-and-regrant level change with retained history
-- **Revoke permission:** `DELETE /api/v1/documents/{id}/permissions/{permission_id}` → idempotent immediate revocation; returns 204
-- **Admin summary:** `GET /api/v1/admin/summary` → administrator-only account, role, document, and grant counts
-- **Admin users:** `GET /api/v1/admin/users` and `GET /api/v1/admin/users/{id}` → administrator-only account search/detail
-- **Admin status:** `PATCH /api/v1/admin/users/{id}/status` → disable/reactivate with session revocation and audit
-- **Admin role:** `PATCH /api/v1/admin/users/{id}/role` → `USER`/`ADMINISTRATOR` change with session revocation and audit
-- **Admin document permissions:** `GET /api/v1/admin/documents/{id}/permissions` → metadata-only permission oversight
-- **List audit events:** `GET /api/v1/admin/audit-events` → administrator-only filtered/paginated audit history
-- **Audit integrity:** `GET /api/v1/admin/audit-integrity` → administrator-only hash-chain and signed-checkpoint status
-- **Errors:** JSON envelope `{"error":{"code":"...","message":"...","details":"..."}}` where applicable.
-- **CORS:** Loaded from `CORS_ALLOWED_ORIGINS`; production wildcards are rejected.
-- **OpenAPI:** Enabled at `/docs` and `/openapi.json`.
-
-There are no audit mutation endpoints.
-
-## Deployment Preparation
-
-No deployment has been performed or verified. The repository migration head is `0009`; the live Supabase migration state and drift were not re-verified during this local run.
-
-### Vercel (frontend)
-
-- Project root: `frontend/`
-- Build command: `npm run build`
-- Output directory: `dist`
-- SPA rewrite: configured in `frontend/vercel.json` so deep links serve `index.html`
-- Environment: set `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, and `VITE_SUPABASE_ANON_KEY`
-
-### Render (backend)
-
-- Configuration: `render.yaml`
-- Root directory: `backend/`
-- Build command: `pip install -r requirements.txt`
-- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Health check path: `/health`
-- Environment: `APP_ENV=production`, `LOG_LEVEL=INFO`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `PASSWORD_RECOVERY_REDIRECT_URL`, a real `CORS_ALLOWED_ORIGINS`, the secure cookie/rate-limit settings, the Supabase Storage/upload settings, and optional `AUDIT_CHECKPOINT_SIGNING_KEY`/`AUDIT_CHECKPOINT_PATH` in `render.yaml`. Render supplies `PORT`.
-- The checkpoint path must be on persistent, access-controlled storage. A Render ephemeral filesystem is not suitable for durable checkpoint retention; use a persistent volume or external checkpoint store and run the CLI after deployment changes.
-- Storage variables are marked `sync: false` in `render.yaml`; set them in the Render dashboard as secrets. Keep the bucket private and grant only the operations the API needs (`PutObject`, `GetObject`, `HeadBucket`, `DeleteObject`; listing only if you use the connectivity check).
-- Migrations are **not** run automatically. Run `alembic upgrade head` from a trusted shell with the production `DATABASE_URL` before or after deploying schema changes.
-
-`render.yaml` configures `AUTH_COOKIE_SECURE=true` and `AUTH_COOKIE_SAMESITE=none` for cross-site Vercel → Render cookies. This configuration has **not** been deployed. Third-party cookie blocking, custom-domain requirements, and a shared rate limiter must be evaluated during deployment hardening.
-
-Deployment requires access to the Vercel, Render, and Supabase accounts and has not been authorized or attempted.
-
-## Security Principles
-
-- **Backend is authoritative.** Hiding a UI control is not authorization; every request is verified server-side.
-- **Deny by default.** Access requires explicit ownership, role, or permission grant.
-- **Defense in depth.** Application checks, default-deny Supabase RLS, private storage, and append-only hash-chained audit events layer together.
-- **Tamper evidence.** Audit records are append-only through the application, hash-chained, and compared with an HMAC-signed checkpoint. An independent immutable checkpoint store is still required to fully address a privileged same-host attacker.
-- **Secrets never touch source control.** Only `.env.example` templates with placeholders are committed.
-- **Fail closed.** Production authentication settings reject missing secrets, insecure cookies, and wildcard CORS.
-- **Restricted CORS.** Production CORS allows only configured origins; credentials are never combined with a wildcard.
-
-See [THREATS.md](THREATS.md) for the full threat model.
-
-## Current Limitations
-
-- Live Supabase Storage connectivity and private-bucket behavior are verified only when `SUPABASE_SERVICE_ROLE_KEY` is configured; automated upload/download/delete tests use a fake HTTP client.
-- Audit history is append-only at the application layer, but database roles are not restricted from direct UPDATE/DELETE. The hash chain and signed checkpoint detect modifications only relative to a trusted checkpoint; events appended after the latest checkpoint and then deleted are not detected by that checkpoint. The checkpoint is a same-host file, not an independent immutable store.
-- The audit checkpoint is not written automatically on a schedule. Operators must run `python -m scripts.audit_integrity --create-checkpoint` and retain the signed file outside the application database.
-- Audit exports (CSV/JSON download) and owner-scoped audit views are not implemented; audit query access is global-administrator-only.
-- Client IP metadata uses the direct ASGI socket address, not a trusted `X-Forwarded-For` chain, so a reverse proxy may record the proxy address. Forwarded-header trust must be configured deliberately at deployment.
-- Uploads are not virus-scanned; validation covers type/signature/size/structure only.
-- DOCX preview and editing are browser-side and intentionally limited: `docx-preview` is not a Word layout engine and relies on saved page-break/section markers, so documents without those markers render as one continuous page; the editor round-trips headings, paragraphs, basic formatting, lists, tables, and images but can simplify complex styles, text boxes, columns, comments, tracked changes, and some headers/footers. Legacy binary `.doc` is not supported at all.
-- Image editing flattens annotations into the saved revision. Edits cannot be un-flattened after saving, though prior versions remain intact and can be downloaded or rolled back by the owner.
-- Both editors depend on modern browser APIs (`contenteditable`, canvas, `File`, dynamic `import()`); older or restricted browsers may refuse to save and will show an error instead.
-- Upload-to-database consistency is compensating, not transactional: a failed metadata commit triggers best-effort object deletion, which could itself fail.
-- Soft deletion excludes metadata from normal reads but object cleanup occurs after commit; a cleanup failure can leave a private orphan object for later reconciliation.
-- Migration `0008` enables default-deny RLS, but it has not been applied to a deployed database; the backend uses a privileged database role.
-- Supabase Auth SMTP delivery and the recovery template have not been verified against the live project. Apply migration `0009` and run the protected account-import script before existing TrustVault users rely on password recovery.
-- The repository migration head is `0009`; live Supabase migration state and `alembic check` were not re-verified, and no deployment has been verified.
-- Version objects are immutable in normal application flows, but the backend has no object-lock or retention policy; a privileged storage operator could still alter or delete private content.
-- Authentication rate limiting is in-memory and per process; a multi-instance deployment needs a shared store.
-- There is no MFA, account-lockout policy, or idle-timeout mechanism.
-- Cross-site recovery cookies require Secure/SameSite=None and may be affected by browser third-party cookie policies; this is untested in production.
-- Auth CSRF protection is origin-based; a per-session CSRF token is not implemented.
-- The backend health check is process-only.
-- No production CSP or HSTS configuration yet (planned for Phase 10).
-
-## Project Status
-
-| Phase | Status |
-|-------|--------|
-| 0 — Requirements and Repository Foundation | Complete |
-| 1 — Project Scaffold and Early Deployment | Partial — local scaffold complete; live deployment deferred to Phase 10 |
-| 2 — Database Schema and Migrations | Complete |
-| 3 — Supabase Authentication and Roles | In progress — source cutover implemented; deployment pending |
-| 4 — Private Storage and Validated Uploads | Complete |
-| 5 — Document Management and Search | Complete |
-| 6 — Document Permissions and Revocation | Complete |
-| 7 — Audit Trail and Administrator Activity | Complete |
-| 8 — Security Tests and Threat-Model Verification | Complete |
-| 9 — Complete Frontend | Complete — awaiting review |
-| 9.1 — Business-Model Correction | Complete — committed as `77af2dc` |
-| 9.2 — Document Content, Previews, and Version History | Complete — pending review |
-| 10 — Deployment Hardening and End-to-End Verification | In progress — provider setup and production verification pending |
-| 11 — Final Submission and Demo | Not started |
-
-## Planning Documents
-
-- [Requirements](docs/REQUIREMENTS.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Database Design](docs/DATABASE.md)
-- [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
-- [Threat Model](THREATS.md)
-- [AI Development Log](PROMPTS.md)
-
-## Security Note for Contributors
-
-Never commit credentials, database passwords, service-role keys, access tokens, JWT secrets, or private keys. If a secret is exposed, treat it as compromised and rotate it immediately.
+Backend is authoritative. Deny by default. Private storage. No secrets in source. Fail closed in production.
