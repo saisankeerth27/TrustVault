@@ -151,7 +151,7 @@ def test_confirmation_pending_signup_is_audited_without_claiming_delivery(
         "account_created": True,
         "requires_email_confirmation": True,
     }
-    assert otp_calls == [(email, "http://localhost:5173/verify-account")]
+    assert otp_calls == [(email, "http://localhost:5173/login")]
     event = db_session.scalar(
         select(AuditEvent).where(
             AuditEvent.action == AuditAction.USER_REGISTERED.value,
@@ -206,7 +206,7 @@ def test_confirmation_resend_uses_the_configured_redirect_and_is_generic(
         "message": "If an account is awaiting confirmation, a new email will be sent."
     }
     assert response.headers["cache-control"] == "no-store"
-    assert calls == [(email, "http://localhost:5173/verify-account")]
+    assert calls == [(email, "http://localhost:5173/login")]
     event = db_session.scalar(
         select(AuditEvent).where(
             AuditEvent.action == AuditAction.USER_REGISTERED.value,
@@ -558,7 +558,7 @@ def test_registration_resends_the_code_for_an_unconfirmed_provider_account(
         "account_created": False,
         "requires_email_confirmation": True,
     }
-    assert resend_calls == [(email, "http://localhost:5173/verify-account")]
+    assert resend_calls == [(email, "http://localhost:5173/login")]
     event = db_session.scalar(
         select(AuditEvent).where(
             AuditEvent.action == AuditAction.USER_REGISTERED.value,
@@ -650,7 +650,7 @@ def test_registration_recovers_when_the_provider_reports_an_existing_account(
         "account_created": False,
         "requires_email_confirmation": True,
     }
-    assert resend_calls == [(email, "http://localhost:5173/verify-account")]
+    assert resend_calls == [(email, "http://localhost:5173/login")]
     event = db_session.scalar(
         select(AuditEvent).where(
             AuditEvent.action == AuditAction.USER_REGISTERED.value,
