@@ -10,7 +10,6 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
-  Trash2,
   Users,
   X,
 } from 'lucide-react'
@@ -25,7 +24,6 @@ import { formatRole } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { getApiErrorMessage } from '@/services/api'
 import {
-  deleteAdminUser,
   getAdminSummary,
   listAdminUsers,
   updateAdminUserRole,
@@ -289,30 +287,6 @@ export function AdminPage() {
     }
   }
 
-  async function handleDeleteUser(account) {
-    if (
-      !window.confirm(
-        `Are you sure you want to permanently delete ${account.name} (${account.email})? This action cannot be undone.`,
-      )
-    ) {
-      return
-    }
-    setPendingUserId(account.id)
-    setActionError(null)
-    setNotice(null)
-    try {
-      await deleteAdminUser(account.id)
-      setNotice(
-        `Account ${account.name} (${account.email}) has been permanently deleted.`,
-      )
-      setRefreshKey((key) => key + 1)
-    } catch (requestError) {
-      setActionError(getApiErrorMessage(requestError))
-    } finally {
-      setPendingUserId(null)
-    }
-  }
-
   const hasFilters = Boolean(filters.q.trim() || filters.status || filters.role)
   const rangeStart =
     result.total === 0 ? 0 : (result.page - 1) * result.page_size + 1
@@ -540,7 +514,7 @@ export function AdminPage() {
                           <span className="block text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
                             Last login
                           </span>
-                          {formatDateTime(account.last_login_at)}
+                          {account.last_login_at ? formatDateTime(account.last_login_at) : 'Never logged in'}
                         </p>
                         <p className="mt-1.5">
                           <span className="block text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
@@ -564,16 +538,6 @@ export function AdminPage() {
                                 : account.status === 'ACTIVE'
                                   ? 'Disable'
                                   : 'Reactivate'}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="destructive"
-                              disabled={isSelf || isPending}
-                              onClick={() => handleDeleteUser(account)}
-                            >
-                              <Trash2 className="size-3.5" aria-hidden="true" />
-                              Delete
                             </Button>
                           </div>
                           <Link

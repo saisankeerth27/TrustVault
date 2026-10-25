@@ -29,11 +29,6 @@ export async function updateAdminUserRole(userId, role) {
   return data
 }
 
-export async function deleteAdminUser(userId) {
-  const { data } = await apiClient.delete(`/api/v1/admin/users/${userId}`)
-  return data
-}
-
 export async function listAdminDocumentPermissions(documentId, signal) {
   const { data } = await apiClient.get(
     `/api/v1/admin/documents/${documentId}/permissions`,

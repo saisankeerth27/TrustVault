@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { LoginPage } from '@/pages/LoginPage'
+import { DashboardPage } from '@/pages/DashboardPage'
 import { PasswordRecoveryPage } from '@/pages/PasswordRecoveryPage'
 import {
   requestPasswordRecovery,
@@ -38,7 +38,7 @@ describe('PasswordRecoveryPage', () => {
       <MemoryRouter initialEntries={['/recover-password']}>
         <Routes>
           <Route path="/recover-password" element={<PasswordRecoveryPage />} />
-          <Route path="/login" element={<LoginPage />} />
+          <Route path="/dashboard" element={<div>Dashboard</div>} />
         </Routes>
       </MemoryRouter>,
     )
@@ -102,7 +102,7 @@ describe('PasswordRecoveryPage', () => {
     await waitFor(() => expect(updatePasswordRecovery).toHaveBeenCalledOnce())
     expect(updatePasswordRecovery).toHaveBeenCalledWith('New secure password 123!')
     expect(
-      await screen.findByRole('heading', { name: 'Sign in' }),
+      await screen.findByText('Dashboard'),
     ).toBeInTheDocument()
   })
 

@@ -38,7 +38,7 @@ function recoveryRetryAfter(error) {
 }
 
 export function PasswordRecoveryPage() {
-  const { status } = useAuth()
+  const { status, login } = useAuth()
   const navigate = useNavigate()
   const [step, setStep] = useState('email')
   const [email, setEmail] = useState('')
@@ -201,14 +201,13 @@ export function PasswordRecoveryPage() {
     setIsBusy(true)
     try {
       await updatePasswordRecovery(password)
+      const recoveryEmail = email
       setPassword('')
       setConfirmPassword('')
       setCodeDigits(Array(OTP_LENGTH).fill(''))
       setEmail('')
-      navigate('/login', {
-        replace: true,
-        state: { recoveryMessage: 'Password updated. Sign in with your new password.' },
-      })
+      await login({ email: recoveryEmail, password })
+      navigate('/dashboard', { replace: true })
     } catch (updateError) {
       setError(recoveryError(updateError))
     } finally {

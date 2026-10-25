@@ -185,6 +185,7 @@ def sync_supabase_session(
         )
 
     user.supabase_auth_id = provider_uuid
+    user.last_login_at = datetime.now(timezone.utc)
     if is_new_user and not _registration_was_audited(session, provider_uuid):
         _commit_with_success_audit(
             session,
