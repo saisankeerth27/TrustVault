@@ -117,7 +117,42 @@ Never commit real secrets.
 
 Unverified: live Supabase SMTP delivery and production cookie behavior.
 
-## Known Limitations
+## Demo Accounts and Website Login
+
+| Account | Email | Password |
+|---|---|---|
+| Administrator | saisankeerth459@gmail.com | MainAdmin@12345 |
+| Demo User 1 | 23jr1a05a7@gmail.com | Sankeerth@123 |
+| Demo User 2 | saisankeerthhh123@gmail.com | Sankeerth@123 |
+| Demo User 3 | sreedevi4789@gmail.com | Sreedevi@12345 |
+
+Live site: https://trust-vault-six-ivory.vercel.app/
+
+## Creating a New Account
+
+1. Open the deployed site.
+2. Register with email and password.
+3. Complete email verification.
+4. Sign in.
+
+## Administrator Account Creation
+
+Use terminal command from backend/:
+```
+python -m scripts.create_user --email admin@example.com --name "Admin User" --role ADMINISTRATOR
+```
+Prompts for password (or TRUSTVAULT_USER_PASSWORD env). Creates Supabase Auth identity + TrustVault row. Never grant roles via frontend.
+
+## How to Use
+
+| User type | How to use TrustVault |
+|---|---|
+| Document Owner | Sign in, upload documents, grant/revoke access. |
+| Document Viewer | Sign in, access shared documents. |
+| Administrator | Sign in with admin account, review dashboard. |
+
+Note: Administrator is system-level; ownership/viewer apply per document.
+
 
 - No MFA or account lockout.
 - In-memory rate limiting (per process).
