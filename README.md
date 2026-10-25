@@ -1,5 +1,7 @@
 # TrustVault
 
+> **Live:** https://trust-vault-six-ivory.vercel.app/
+
 TrustVault is a secure, multi-tenant document vault that lets organizations store, organize, share, and audit access to sensitive documents. The design enforces named-user, per-document READ and EDIT permissions in the backend, records significant actions in a tamper-evident audit trail, and gives administrators visibility into document activity.
 
 > **Status:** the document and version-history features below were implemented previously. A Supabase Auth migration and six-digit recovery flow are currently in source but have **not yet been fully validated or deployed**. Current validation is listed in [Testing and Checks](#testing-and-checks).
