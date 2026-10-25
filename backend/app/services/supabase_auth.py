@@ -295,13 +295,13 @@ def verify_signup_otp(email: str, token: str) -> dict[str, Any]:
     """Confirm a new account with the code issued by ``POST /otp``.
 
     Accounts are created unconfirmed through the admin API and the code is
-    issued as a magic-link token, so GoTrue expects type ``magiclink``.
+    issued as an email confirmation token, so GoTrue expects type ``email``.
     Verifying it also sets ``email_confirmed_at`` and returns a session.
     """
     return _request(
         "POST",
         "verify",
-        payload={"email": email, "token": token, "type": "magiclink"},
+        payload={"email": email, "token": token, "type": "email"},
     )
 
 
@@ -317,7 +317,7 @@ def sign_in_with_otp(email: str, redirect_to: str | None = None) -> None:
     _request(
         "POST",
         "otp",
-        payload={"email": email, "create_user": False},
+        payload={"email": email, "create_user": False, "type": "email"},
         params=params,
     )
 
