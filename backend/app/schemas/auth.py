@@ -70,9 +70,10 @@ class PasswordRecoveryVerifyRequest(PasswordRecoveryRequest):
     @field_validator("token")
     @classmethod
     def validate_recovery_token(cls, value: str) -> str:
-        if len(value) != 6 or not value.isascii() or not value.isdigit():
-            raise ValueError("Enter the six-digit verification code.")
-        return value
+        stripped = value.strip()
+        if len(stripped) not in (6, 8) or not stripped.isascii() or not stripped.isdigit():
+            raise ValueError("Enter the eight-digit verification code.")
+        return stripped
 
 
 class PasswordRecoveryUpdateRequest(BaseModel):
@@ -86,6 +87,40 @@ class PasswordRecoveryUpdateRequest(BaseModel):
         validate_password_strength(value.get_secret_value())
         return value
 
+
+class OtpLoginRequest(BaseModel):
+    """Email-only request to trigger a passwordless OTP sign-in."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+
+class OtpVerifyRequest(BaseModel):
+    """Email + OTP token to verify a passwordless sign-in or signup confirmation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    token: str
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, value: str) -> str:
+        stripped = value.strip()
+        if len(stripped) != 8 or not stripped.isascii() or not stripped.isdigit():
+            raise ValueError("Enter the eight-digit verification code.")
+        return stripped
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

@@ -43,10 +43,22 @@ def get_supabase_identity(
             detail="Authentication is temporarily unavailable.",
         ) from exc
 
+    user_metadata = identity.get("user_metadata")
+    meta_verified = (
+        user_metadata.get("email_verified")
+        if isinstance(user_metadata, dict)
+        else False
+    )
+    is_verified = bool(
+        identity.get("email_confirmed_at")
+        or identity.get("confirmed_at")
+        or identity.get("email_verified")
+        or meta_verified
+    )
     if (
         not isinstance(identity.get("id"), str)
         or not isinstance(identity.get("email"), str)
-        or not (identity.get("email_confirmed_at") or identity.get("email_verified"))
+        or not is_verified
     ):
         raise _unauthorized("A verified email address is required.")
     return identity

@@ -8,10 +8,12 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.document import Document
 from app.models.enums import AuditAction, AuditOutcome, UserRole, UserStatus
 from app.models.user import User
 from app.services.audit import record_event
 from app.services.auth import revoke_user_sessions
+from app.services.supabase_auth import delete_supabase_user
 
 logger = logging.getLogger(__name__)
 
@@ -157,3 +159,54 @@ def update_account_role(
     )
     session.refresh(target)
     return target, True
+
+
+def delete_account(
+    session: Session,
+    *,
+    actor: User,
+    target_user_id: UUID,
+) -> None:
+    target = _locked_user(session, target_user_id)
+    if target.id == actor.id:
+        raise SelfAccountChangeError
+    if (
+        target.role == UserRole.ADMINISTRATOR.value
+        and target.status == UserStatus.ACTIVE.value
+        and _active_administrator_count(session, excluding=target.id) == 0
+    ):
+        raise LastActiveAdministratorError
+
+    target_email = target.email
+    target_name = target.name
+    supabase_auth_id = target.supabase_auth_id
+
+    revoke_user_sessions(session, user_id=target.id)
+
+    # Delete any documents owned by the target user
+    owned_docs = session.scalars(
+        select(Document).where(Document.owner_id == target.id)
+    ).all()
+    for doc in owned_docs:
+        session.delete(doc)
+    session.flush()
+
+    _commit_account_change(
+        session,
+        action=AuditAction.USER_DELETED,
+        actor=actor,
+        target=target,
+        details={
+            "target_email": target_email,
+            "target_name": target_name,
+        },
+    )
+
+    refetched = session.get(User, target.id)
+    if refetched is not None:
+        session.delete(refetched)
+        session.commit()
+
+    if supabase_auth_id:
+        delete_supabase_user(supabase_auth_id)
+

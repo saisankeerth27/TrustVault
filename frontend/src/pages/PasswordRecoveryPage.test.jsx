@@ -33,7 +33,7 @@ describe('PasswordRecoveryPage', () => {
     updatePasswordRecovery.mockResolvedValue({})
   })
 
-  it('requests a generic code, verifies six digits, and updates matching passwords', async () => {
+  it('requests a generic code, verifies eight digits, and updates matching passwords', async () => {
     render(
       <MemoryRouter initialEntries={['/recover-password']}>
         <Routes>
@@ -58,7 +58,7 @@ describe('PasswordRecoveryPage', () => {
       ),
     ).toBeInTheDocument()
 
-    const codeInputs = Array.from({ length: 6 }, (_, index) =>
+    const codeInputs = Array.from({ length: 8 }, (_, index) =>
       screen.getByLabelText(`Verification code digit ${index + 1}`),
     )
     expect(screen.getByRole('button', { name: 'Verify OTP' })).toBeDisabled()
@@ -70,6 +70,8 @@ describe('PasswordRecoveryPage', () => {
       '4',
       '5',
       '6',
+      '7',
+      '8',
     ])
     expect(screen.getByRole('button', { name: 'Verify OTP' })).toBeEnabled()
     fireEvent.click(screen.getByRole('button', { name: 'Verify OTP' }))
@@ -78,7 +80,7 @@ describe('PasswordRecoveryPage', () => {
     ).toBeInTheDocument()
     expect(verifyPasswordRecovery).toHaveBeenCalledWith(
       'person@example.com',
-      '123456',
+      '12345678',
     )
 
     fireEvent.change(screen.getByLabelText('New Password'), {
@@ -172,6 +174,8 @@ describe('PasswordRecoveryPage', () => {
     const fourthDigit = screen.getByLabelText('Verification code digit 4')
     const fifthDigit = screen.getByLabelText('Verification code digit 5')
     const sixthDigit = screen.getByLabelText('Verification code digit 6')
+    const seventhDigit = screen.getByLabelText('Verification code digit 7')
+    const eighthDigit = screen.getByLabelText('Verification code digit 8')
 
     firstDigit.focus()
     fireEvent.keyDown(firstDigit, { key: 'ArrowRight' })
@@ -181,14 +185,14 @@ describe('PasswordRecoveryPage', () => {
     fireEvent.paste(firstDigit, {
       clipboardData: { getData: () => '12a345678' },
     })
-    expect([firstDigit, secondDigit, thirdDigit, fourthDigit, fifthDigit, sixthDigit].map(
+    expect([firstDigit, secondDigit, thirdDigit, fourthDigit, fifthDigit, sixthDigit, seventhDigit, eighthDigit].map(
       (input) => input.value,
-    )).toEqual(['1', '2', '3', '4', '5', '6'])
-    expect(sixthDigit).toHaveFocus()
+    )).toEqual(['1', '2', '3', '4', '5', '6', '7', '8'])
+    expect(eighthDigit).toHaveFocus()
 
-    fireEvent.change(sixthDigit, { target: { value: '' } })
-    fireEvent.keyDown(sixthDigit, { key: 'Backspace' })
-    expect(fifthDigit).toHaveFocus()
-    expect(fifthDigit).toHaveValue('')
+    fireEvent.change(eighthDigit, { target: { value: '' } })
+    fireEvent.keyDown(eighthDigit, { key: 'Backspace' })
+    expect(seventhDigit).toHaveFocus()
+    expect(seventhDigit).toHaveValue('')
   })
 })

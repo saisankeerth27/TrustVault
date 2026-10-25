@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Trash2,
   Users,
   X,
 } from 'lucide-react'
@@ -24,6 +25,7 @@ import { formatRole } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { getApiErrorMessage } from '@/services/api'
 import {
+  deleteAdminUser,
   getAdminSummary,
   listAdminUsers,
   updateAdminUserRole,
@@ -287,6 +289,30 @@ export function AdminPage() {
     }
   }
 
+  async function handleDeleteUser(account) {
+    if (
+      !window.confirm(
+        `Are you sure you want to permanently delete ${account.name} (${account.email})? This action cannot be undone.`,
+      )
+    ) {
+      return
+    }
+    setPendingUserId(account.id)
+    setActionError(null)
+    setNotice(null)
+    try {
+      await deleteAdminUser(account.id)
+      setNotice(
+        `Account ${account.name} (${account.email}) has been permanently deleted.`,
+      )
+      setRefreshKey((key) => key + 1)
+    } catch (requestError) {
+      setActionError(getApiErrorMessage(requestError))
+    } finally {
+      setPendingUserId(null)
+    }
+  }
+
   const hasFilters = Boolean(filters.q.trim() || filters.status || filters.role)
   const rangeStart =
     result.total === 0 ? 0 : (result.page - 1) * result.page_size + 1
@@ -453,16 +479,16 @@ export function AdminPage() {
             <table className="w-full table-fixed text-sm">
               <thead className="border-b bg-muted/40 text-left text-xs tracking-wide text-muted-foreground uppercase">
                 <tr>
-                  <th scope="col" className="w-[36%] px-4 py-3 font-medium sm:px-6">
+                  <th scope="col" className="w-[34%] px-4 py-3 font-medium sm:px-6">
                     Account
                   </th>
-                  <th scope="col" className="w-[22%] px-2 py-3 font-medium">
+                  <th scope="col" className="w-[20%] px-2 py-3 font-medium">
                     Access
                   </th>
-                  <th scope="col" className="w-[24%] px-2 py-3 font-medium">
+                  <th scope="col" className="w-[22%] px-2 py-3 font-medium">
                     Activity
                   </th>
-                  <th scope="col" className="w-[18%] px-4 py-3 text-right font-medium sm:px-6">
+                  <th scope="col" className="w-[24%] px-4 py-3 text-right font-medium sm:px-6">
                     Actions
                   </th>
                 </tr>
@@ -525,19 +551,31 @@ export function AdminPage() {
                       </td>
                       <td className="px-4 py-4 sm:px-6">
                         <div className="flex flex-col items-end gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={account.status === 'ACTIVE' ? 'outline' : 'default'}
-                            disabled={isSelf || isPending}
-                            onClick={() => toggleStatus(account)}
-                          >
-                            {isPending
-                              ? 'Saving...'
-                              : account.status === 'ACTIVE'
-                                ? 'Disable'
-                                : 'Reactivate'}
-                          </Button>
+                          <div className="flex flex-wrap items-center justify-end gap-1.5">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={account.status === 'ACTIVE' ? 'outline' : 'default'}
+                              disabled={isSelf || isPending}
+                              onClick={() => toggleStatus(account)}
+                            >
+                              {isPending
+                                ? 'Saving...'
+                                : account.status === 'ACTIVE'
+                                  ? 'Disable'
+                                  : 'Reactivate'}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={isSelf || isPending}
+                              onClick={() => handleDeleteUser(account)}
+                            >
+                              <Trash2 className="size-3.5" aria-hidden="true" />
+                              Delete
+                            </Button>
+                          </div>
                           <Link
                             to={`/admin/audit?actor_id=${account.id}`}
                             className="text-xs font-medium text-primary hover:underline"

@@ -105,3 +105,32 @@ export async function updatePasswordRecovery(password) {
   )
   return data
 }
+
+export async function verifySignupOtp(email, token) {
+  requireSupabase()
+  const { data } = await apiClient.post('/api/v1/auth/supabase/verify-signup', {
+    email,
+    token,
+  })
+  if (data.session) {
+    await persistSupabaseSession(data.session)
+  }
+  return data
+}
+
+export async function requestOtpLogin(email) {
+  const { data } = await apiClient.post('/api/v1/auth/otp/request', {
+    email: email.trim().toLowerCase(),
+  })
+  return data
+}
+
+export async function verifyOtpLogin(email, token) {
+  requireSupabase()
+  const { data } = await apiClient.post('/api/v1/auth/otp/verify', {
+    email,
+    token,
+  })
+  await persistSupabaseSession(data.session)
+  return data.user
+}

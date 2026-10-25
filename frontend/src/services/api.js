@@ -131,6 +131,9 @@ export function getApiErrorMessage(error) {
         ? `${data.error.message} ${details.join(' ')}`
         : data.error.message
     }
+    if (data?.detail) {
+      return data.detail
+    }
     if (error.code === 'ECONNABORTED') {
       return 'The request timed out. Please try again.'
     }

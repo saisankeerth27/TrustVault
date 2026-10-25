@@ -16,7 +16,7 @@ import { getApiErrorMessage } from '@/services/api'
 
 const PASSWORD_MIN_LENGTH = 12
 const PASSWORD_MAX_BYTES = 72
-const OTP_LENGTH = 6
+const OTP_LENGTH = 8
 const emailSchema = z.string().trim().email('Enter a valid email address.')
 const passwordSchema = z
   .string()
@@ -111,8 +111,8 @@ export function PasswordRecoveryPage() {
   async function verifyCode(event) {
     event.preventDefault()
     setError('')
-    if (!/^[0-9]{6}$/.test(code)) {
-      setError('Enter the six-digit verification code.')
+    if (!/^[0-9]{8}$/.test(code)) {
+      setError('Enter the eight-digit verification code.')
       return
     }
 
@@ -229,8 +229,8 @@ export function PasswordRecoveryPage() {
     password: 'Create a New Password',
   }
   const descriptions = {
-    email: 'Enter your registered email address to receive a six-digit verification code.',
-    code: 'Enter the six-digit code sent to your email address.',
+    email: 'Enter your registered email address to receive an eight-digit verification code.',
+    code: 'Enter the eight-digit code sent to your email address.',
     password: 'Choose a new password for your TrustVault account.',
   }
 
@@ -329,10 +329,10 @@ export function PasswordRecoveryPage() {
             <form className="space-y-5" onSubmit={verifyCode} noValidate>
               <div className="space-y-2">
                 <p id="recovery-code-label" className="text-sm font-medium">
-                  Six-digit verification code
+                  Eight-digit verification code
                 </p>
                 <div
-                  className="flex justify-between gap-2"
+                  className="flex justify-between gap-1.5 sm:gap-2"
                   role="group"
                   aria-labelledby="recovery-code-label"
                   aria-describedby="recovery-code-help"
@@ -357,7 +357,7 @@ export function PasswordRecoveryPage() {
                       onKeyDown={(event) => handleCodeKeyDown(event, index)}
                       onPaste={(event) => handleCodePaste(event, index)}
                       disabled={isBusy}
-                      className="size-12 px-0 text-center text-lg font-semibold sm:size-14"
+                      className="size-9 px-0 text-center text-base font-semibold sm:size-11 sm:text-lg"
                     />
                   ))}
                 </div>

@@ -51,6 +51,10 @@ def test_production_cookie_flags(
         "PASSWORD_RECOVERY_REDIRECT_URL",
         "https://app.example.com/recover-password",
     )
+    monkeypatch.setenv(
+        "EMAIL_CONFIRMATION_REDIRECT_URL",
+        "https://app.example.com/verify-account",
+    )
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "public-test-key")
     monkeypatch.setenv(

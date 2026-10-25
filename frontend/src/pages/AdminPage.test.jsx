@@ -5,12 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthContext } from '@/auth/useAuth'
 import { AdminPage } from '@/pages/AdminPage'
 import {
+  deleteAdminUser,
   getAdminSummary,
   listAdminUsers,
   updateAdminUserStatus,
 } from '@/services/admin'
 
 vi.mock('@/services/admin', () => ({
+  deleteAdminUser: vi.fn(),
   getAdminSummary: vi.fn(),
   listAdminUsers: vi.fn(),
   updateAdminUserStatus: vi.fn(),
@@ -97,6 +99,11 @@ describe('AdminPage', () => {
     expect(disableButtons).toHaveLength(2)
     expect(disableButtons[0]).toBeDisabled()
     expect(disableButtons[1]).toBeEnabled()
+
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete' })
+    expect(deleteButtons).toHaveLength(2)
+    expect(deleteButtons[0]).toBeDisabled()
+    expect(deleteButtons[1]).toBeEnabled()
     expect(screen.getByLabelText('Role for Avery Admin')).toBeDisabled()
     expect(screen.getByLabelText('Role for Morgan User')).toBeEnabled()
     expect(screen.getByText(account.email)).toBeInTheDocument()
@@ -141,6 +148,20 @@ describe('AdminPage', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(
       'Session revocation and the audit record were applied',
     )
+  })
+
+  it('deletes an account through the admin API after confirmation', async () => {
+    const interaction = userEvent.setup()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    deleteAdminUser.mockResolvedValue({})
+    renderAdminPage()
+
+    await screen.findByText('Morgan User')
+    await interaction.click(screen.getAllByRole('button', { name: 'Delete' })[1])
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(deleteAdminUser).toHaveBeenCalledWith(account.id)
+    expect(await screen.findByRole('status')).toHaveTextContent('permanently deleted')
   })
 
   it('auto-applies search with debounce and without an Apply button', async () => {

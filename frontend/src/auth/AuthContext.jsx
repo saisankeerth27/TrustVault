@@ -7,6 +7,8 @@ import {
   login as loginRequest,
   logout as logoutRequest,
   register as registerRequest,
+  verifyOtpLogin,
+  verifySignupOtp,
 } from '@/services/auth'
 
 export function AuthProvider({ children }) {
@@ -81,6 +83,22 @@ export function AuthProvider({ children }) {
     return registration
   }, [])
 
+  const verifySignup = useCallback(async (email, token) => {
+    const result = await verifySignupOtp(email, token)
+    if (result.session && result.user) {
+      setUser(result.user)
+      setStatus('authenticated')
+    }
+    return result
+  }, [])
+
+  const verifyLoginOtp = useCallback(async (email, token) => {
+    const account = await verifyOtpLogin(email, token)
+    setUser(account)
+    setStatus('authenticated')
+    return account
+  }, [])
+
   const logout = useCallback(async () => {
     try {
       await logoutRequest()
@@ -92,8 +110,8 @@ export function AuthProvider({ children }) {
   }, [])
 
   const value = useMemo(
-    () => ({ status, user, login, register, logout }),
-    [status, user, login, register, logout],
+    () => ({ status, user, login, register, logout, verifySignup, verifyLoginOtp }),
+    [status, user, login, register, logout, verifySignup, verifyLoginOtp],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

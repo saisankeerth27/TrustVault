@@ -20,6 +20,8 @@ from app.models.user import User
 from app.schemas.auth import (
     AuthResponse,
     LoginRequest,
+    OtpLoginRequest,
+    OtpVerifyRequest,
     PasswordRecoveryRequest,
     PasswordRecoveryUpdateRequest,
     PasswordRecoveryVerifyRequest,
@@ -42,13 +44,17 @@ from app.services.auth import (
 )
 from app.services.supabase_auth import (
     SupabaseAuthError,
+    create_user as create_supabase_user,
+    find_user_by_email as find_supabase_user_by_email,
     get_user as get_supabase_user,
+    is_email_confirmed as is_supabase_email_confirmed,
     request_password_recovery,
-    resend_signup_confirmation,
+    sign_in_with_otp as supabase_sign_in_with_otp,
     sign_in_with_password,
-    sign_up as supabase_sign_up,
     update_recovery_password,
+    verify_otp_login as supabase_verify_otp_login,
     verify_recovery_otp,
+    verify_signup_otp as supabase_verify_signup_otp,
 )
 
 logger = logging.getLogger("trustvault.auth")
@@ -86,10 +92,22 @@ def _verified_identity_matches(
     expected_email: str,
 ) -> bool:
     email = identity.get("email")
+    user_metadata = identity.get("user_metadata")
+    meta_verified = (
+        user_metadata.get("email_verified")
+        if isinstance(user_metadata, dict)
+        else False
+    )
+    is_verified = bool(
+        identity.get("email_confirmed_at")
+        or identity.get("confirmed_at")
+        or identity.get("email_verified")
+        or meta_verified
+    )
     return (
         isinstance(email, str)
-        and email.strip().lower() == expected_email
-        and bool(identity.get("email_confirmed_at") or identity.get("email_verified"))
+        and email.strip().lower() == expected_email.strip().lower()
+        and is_verified
     )
 
 
@@ -430,6 +448,173 @@ def _build_auth_response(user: User, session_id: UUID) -> AuthResponse:
     )
 
 
+def _ensure_user_profile(
+    session: Session,
+    identity: dict[str, object],
+    email: str,
+    name: str,
+) -> None:
+    """Create or link an application User profile from a Supabase identity.
+
+    Called during registration when Supabase creates the account but the
+    email hasn't been confirmed yet.  The profile is committed with an
+    audit record so that `sync_supabase_session` can find the user after
+    the confirmation click.
+    """
+    provider_id = identity.get("id")
+    if not isinstance(provider_id, str):
+        return
+    try:
+        provider_uuid = UUID(provider_id)
+    except ValueError:
+        return
+
+    normalized_email = normalize_email(email)
+    user = session.scalar(
+        select(User)
+        .where(User.supabase_auth_id == provider_uuid)
+        .with_for_update()
+    )
+    if user is None:
+        user = session.scalar(
+            select(User)
+            .where(User.email == normalized_email)
+            .with_for_update()
+        )
+    if user is None:
+        candidate_name = name.strip() if isinstance(name, str) and name.strip() else None
+        if not candidate_name or len(candidate_name) > 255:
+            candidate_name = normalized_email.split("@", maxsplit=1)[0][:255]
+        user = User(
+            name=candidate_name,
+            email=normalized_email,
+            password_hash=None,
+            role=UserRole.USER.value,
+            status=UserStatus.ACTIVE.value,
+        )
+        session.add(user)
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            return
+
+    if user.supabase_auth_id is None:
+        user.supabase_auth_id = provider_uuid
+
+    if not _registration_was_audited(session, provider_uuid):
+        _commit_with_success_audit(
+            session,
+            action=AuditAction.USER_REGISTERED,
+            actor=None,
+            details={
+                "provider_user_id": str(provider_uuid),
+                "request_status": "confirmation_pending",
+                "resource_type": "AUTH",
+                "source": "supabase_auth",
+            },
+            failure_detail=(
+                "Supabase created the account, but TrustVault could not record "
+                "the registration. Contact support before retrying."
+            ),
+        )
+    else:
+        session.commit()
+
+
+_ALREADY_REGISTERED_MARKERS = (
+    "already registered",
+    "already been registered",
+    "already exists",
+    "user already exists",
+    "user_already_exists",
+    "email exists",
+    "email_exists",
+)
+
+
+def _provider_says_already_registered(exc: SupabaseAuthError) -> bool:
+    """Detect Supabase's "this account already exists" rejection."""
+
+    message = (exc.provider_error or "").strip().lower()
+    return bool(message) and any(
+        marker in message for marker in _ALREADY_REGISTERED_MARKERS
+    )
+
+
+def _resend_signup_code(
+    session: Session,
+    *,
+    email: str,
+    provider_user: dict[str, object] | None,
+) -> dict[str, object]:
+    """Re-send the signup code for an existing unconfirmed account.
+
+    Supabase refuses to create a second account for an address that already
+    exists, even when that account was never confirmed. Re-sending the code
+    through ``POST /otp`` keeps the user moving forward instead of trapping
+    them in a permanent 400, and uses the project's *Magic Link* template so
+    the 8-digit code and the link are both delivered.
+    """
+
+    try:
+        supabase_sign_in_with_otp(
+            email,
+            get_settings().confirmation_redirect_url,
+        )
+    except SupabaseAuthError as exc:
+        logger.warning(
+            "Supabase confirmation resend rejected status=%s.",
+            exc.status_code or 0,
+        )
+        _record_registration_failure(
+            session,
+            reason="confirmation_resend_failed",
+            status_code=exc.status_code or 0,
+        )
+        if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many email requests. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        if exc.status_code is None or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Registration is temporarily unavailable. Try again later.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This email is already registered. Sign in, or reset your "
+                "password if you have forgotten it."
+            ),
+        ) from exc
+
+    provider_id = (
+        provider_user.get("id") if isinstance(provider_user, dict) else None
+    )
+    _commit_with_success_audit(
+        session,
+        action=AuditAction.USER_REGISTERED,
+        actor=None,
+        details={
+            "provider_user_id": str(provider_id) if provider_id else None,
+            "request_status": "confirmation_resent",
+            "resource_type": "AUTH",
+            "source": "supabase_auth",
+        },
+        failure_detail=(
+            "Supabase accepted the confirmation resend, but TrustVault could "
+            "not record it. Contact support before retrying."
+        ),
+    )
+    return {
+        "account_created": False,
+        "requires_email_confirmation": True,
+    }
+
+
 @router.post("/supabase/register")
 def register_with_supabase(
     payload: RegisterRequest,
@@ -444,14 +629,123 @@ def register_with_supabase(
         [f"register-ip:{_client_address(request)}", f"register-email:{payload.email}"],
     )
     _enforce_email_delivery_cooldown(str(payload.email))
+
+    normalized_email = normalize_email(payload.email)
+
+    # A TrustVault profile is only a usable account when Supabase Auth also
+    # holds the identity behind it, so both stores have to agree before we
+    # tell someone their email is taken.
+    existing_user = session.scalar(
+        select(User).where(User.email == normalized_email)
+    )
+
     try:
-        result = supabase_sign_up(
+        provider_user = find_supabase_user_by_email(normalized_email)
+        provider_checked = True
+    except SupabaseAuthError as exc:
+        logger.warning(
+            "Supabase user lookup failed status=%s configuration_missing=%s.",
+            exc.status_code or 0,
+            exc.configuration_missing,
+        )
+        provider_user = None
+        provider_checked = False
+
+    if provider_user is not None:
+        if is_supabase_email_confirmed(provider_user):
+            _record_registration_failure(
+                session,
+                reason="email_already_registered",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "This email is already registered. Sign in, or reset your "
+                    "password if you have forgotten it."
+                ),
+            )
+        # The provider holds an unconfirmed account for this address. Send the
+        # signup code again instead of trying to create a duplicate.
+        return _resend_signup_code(
+            session,
+            email=str(payload.email),
+            provider_user=provider_user,
+        )
+
+    if existing_user is not None:
+        if not provider_checked:
+            # Never claim a profile is unusable (or recreate it) when the
+            # provider could not be reached.
+            _record_registration_failure(
+                session,
+                reason="provider_lookup_unavailable",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Registration is temporarily unavailable. Try again later.",
+            )
+        # The local profile has no Supabase Auth identity behind it: a legacy
+        # row or an account deleted outside TrustVault. Clear the stale link so
+        # the new provider account can be linked once the emailed code is
+        # verified, instead of reporting a false "already registered".
+        if existing_user.supabase_auth_id is not None:
+            existing_user.supabase_auth_id = None
+            session.flush()
+            logger.info(
+                "Cleared stale Supabase link for local profile user_id=%s.",
+                existing_user.id,
+            )
+
+    try:
+        # Create the account with the submitted password but do not let
+        # Supabase pick the template. ``admin/users`` sends nothing, so the
+        # code below is delivered by ``POST /otp`` (the Magic Link template),
+        # which carries both the 8-digit {{ .Token }} and {{ .ConfirmationURL }}.
+        # The account stays unconfirmed until that code is verified.
+        result = create_supabase_user(
             str(payload.email),
             payload.password.get_secret_value(),
             payload.name,
-            get_settings().confirmation_redirect_url,
         )
     except SupabaseAuthError as exc:
+        logger.warning(
+            "Supabase user creation rejected status=%s configuration_missing=%s provider_error=%s.",
+            exc.status_code or 0,
+            exc.configuration_missing,
+            exc.provider_error,
+        )
+        if exc.status_code in {
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_409_CONFLICT,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        } and _provider_says_already_registered(exc):
+            # The account appeared between our lookup and the create call, or
+            # the provider did not disclose it through the admin API.
+            try:
+                provider_user = find_supabase_user_by_email(normalized_email)
+            except SupabaseAuthError:
+                provider_user = None
+            if provider_user is not None and is_supabase_email_confirmed(
+                provider_user
+            ):
+                _record_registration_failure(
+                    session,
+                    reason="email_already_registered",
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "This email is already registered. Sign in, or reset "
+                        "your password if you have forgotten it."
+                    ),
+                ) from exc
+            # Otherwise resend the code rather than trapping the user in a
+            # permanent 400.
+            return _resend_signup_code(
+                session,
+                email=str(payload.email),
+                provider_user=provider_user,
+            )
         _record_registration_failure(
             session,
             reason="provider_rejected_or_unavailable",
@@ -471,62 +765,17 @@ def register_with_supabase(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Unable to create the account. If you already have an account, "
-                "sign in or reset your password."
+                f"Unable to create the account. {exc.provider_error or ''}"
+                if exc.provider_error
+                else (
+                    "Unable to create the account. If you already have an account, "
+                    "sign in or reset your password."
+                )
             ),
         ) from exc
 
-    provider_user = result.get("user")
-    provider_session = result.get("session")
-    if (
-        not isinstance(provider_session, dict)
-        and isinstance(result.get("access_token"), str)
-        and result["access_token"]
-    ):
-        provider_session = result
-    if isinstance(provider_session, dict):
-        access_token = provider_session.get("access_token")
-        refresh_token = provider_session.get("refresh_token")
-        if (
-            not isinstance(access_token, str)
-            or not access_token
-            or not isinstance(refresh_token, str)
-            or not refresh_token
-        ):
-            _record_registration_failure(
-                session,
-                reason="provider_response_invalid",
-            )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Registration is temporarily unavailable. Try again later.",
-            )
-        try:
-            identity = get_supabase_user(access_token)
-            if not _verified_identity_matches(identity, str(payload.email)):
-                raise SupabaseAuthError(401)
-            user = sync_supabase_session(identity=identity, session=session)
-        except SupabaseAuthError as exc:
-            _record_registration_failure(
-                session,
-                reason="provider_identity_unavailable",
-                status_code=exc.status_code or 0,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Registration is temporarily unavailable. Try again later.",
-            ) from exc
-        return {
-            "account_created": True,
-            "requires_email_confirmation": False,
-            "session": {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-            },
-            "user": user.model_dump(mode="json"),
-        }
-
-    identities = provider_user.get("identities") if isinstance(provider_user, dict) else None
+    # GoTrue may nest user data under "user" or return it at root level.
+    provider_user = result.get("user") if isinstance(result.get("user"), dict) else result
     provider_id = provider_user.get("id") if isinstance(provider_user, dict) else None
     provider_email = provider_user.get("email") if isinstance(provider_user, dict) else None
     if (
@@ -543,44 +792,49 @@ def register_with_supabase(
             detail="Registration is temporarily unavailable. Try again later.",
         )
 
-    if isinstance(identities, list) and identities:
-        try:
-            provider_uuid = UUID(provider_id)
-        except ValueError as exc:
-            _record_registration_failure(
-                session,
-                reason="provider_response_invalid",
-            )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Registration is temporarily unavailable. Try again later.",
-            ) from exc
-        _commit_with_success_audit(
-            session,
-            action=AuditAction.USER_REGISTERED,
-            actor=None,
-            details={
-                "provider_user_id": str(provider_uuid),
-                "request_status": "confirmation_pending",
-                "resource_type": "AUTH",
-                "source": "supabase_auth",
-            },
-            failure_detail=(
-                "Supabase created the account, but TrustVault could not record "
-                "the registration. Contact support before retrying."
-            ),
+    # The account exists but is unconfirmed. Issue the code/link now. If this
+    # call fails the account remains unconfirmed, and a retry takes the
+    # "unconfirmed provider account" branch above and resends it.
+    try:
+        supabase_sign_in_with_otp(
+            str(payload.email),
+            get_settings().confirmation_redirect_url,
         )
-        return {
-            "account_created": True,
-            "requires_email_confirmation": True,
-        }
+    except SupabaseAuthError as exc:
+        logger.warning(
+            "Supabase signup email rejected status=%s.", exc.status_code or 0
+        )
+        _record_registration_failure(
+            session,
+            reason="confirmation_send_failed",
+            status_code=exc.status_code or 0,
+        )
+        if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many email requests. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Registration is temporarily unavailable. Try again later.",
+        ) from exc
 
-    _record_registration_failure(
+    # Note: the TrustVault profile is NOT created here - it is created later
+    # in verify_signup via sync_supabase_session once the OTP is validated.
+    _commit_with_success_audit(
         session,
-        reason="provider_rejected_or_duplicate",
+        action=AuditAction.USER_REGISTERED,
+        actor=None,
+        details={
+            "provider_user_id": str(provider_id) if provider_id else None,
+            "request_status": "confirmation_pending",
+            "resource_type": "AUTH",
+            "source": "supabase_auth",
+        },
     )
     return {
-        "account_created": False,
+        "account_created": True,
         "requires_email_confirmation": True,
     }
 
@@ -605,7 +859,7 @@ def resend_confirmation_with_supabase(
     )
     _enforce_email_delivery_cooldown(str(payload.email))
     try:
-        resend_signup_confirmation(
+        supabase_sign_in_with_otp(
             str(payload.email),
             get_settings().confirmation_redirect_url,
         )
@@ -1185,6 +1439,223 @@ def update_recovery(
     _clear_recovery_cookie(response)
     _no_store(response)
     return {"message": "Your password was updated. Sign in with your new password."}
+
+
+@router.post("/supabase/verify-signup")
+def verify_signup(
+    payload: OtpVerifyRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Verify a new account using the signup confirmation OTP from Supabase."""
+    _enforce_allowed_origin(request)
+    _enforce_rate_limit(
+        request,
+        [
+            f"verify-signup-ip:{_client_address(request)}",
+            f"verify-signup-email:{payload.email}",
+        ],
+    )
+    try:
+        auth_result = supabase_verify_signup_otp(payload.email, payload.token)
+    except SupabaseAuthError as exc:
+        logger.warning(
+            "Signup OTP verification failed status=%s.", exc.status_code or 0
+        )
+        if exc.status_code == 429:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many verification attempts. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        if exc.status_code is None or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Verification is temporarily unavailable. Try again later.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The code is invalid or expired. Check it and try again.",
+        ) from exc
+
+    access_token = auth_result.get("access_token")
+    refresh_token = auth_result.get("refresh_token")
+    identity = auth_result.get("user")
+    if (
+        not isinstance(access_token, str)
+        or not access_token
+        or not isinstance(refresh_token, str)
+        or not refresh_token
+        or not isinstance(identity, dict)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The code is invalid or expired. Check it and try again.",
+        )
+
+    try:
+        user = sync_supabase_session(identity=identity, session=session)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The code is invalid or expired. Check it and try again.",
+        ) from exc
+
+    return {
+        "verified": True,
+        "session": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        },
+        "user": user.model_dump(mode="json"),
+    }
+
+
+def _otp_rate_limit(request: Request, email: str, *, verification: bool) -> None:
+    email_key = f"otp-login-email:{email}"
+    ip_key = f"otp-login-ip:{_client_address(request)}"
+    enforce_rate_limit(
+        auth_rate_limiter,
+        [email_key, ip_key],
+        limit=5 if verification else 3,
+        window_seconds=900,
+        detail="Too many OTP attempts. Try again later.",
+    )
+
+
+@router.post("/otp/request")
+def request_otp_login(
+    payload: OtpLoginRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Send a passwordless sign-in OTP to the given email address.
+
+    Only sends to email addresses that already have an active TrustVault account.
+    Returns the same response regardless to avoid email enumeration.
+    """
+    _enforce_allowed_origin(request)
+    _otp_rate_limit(request, payload.email, verification=False)
+    _enforce_email_delivery_cooldown(str(payload.email))
+
+    user = session.scalar(
+        select(User).where(User.email == payload.email)
+    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This email is not registered. Please create a new TrustVault account.",
+        )
+    if user.status != UserStatus.ACTIVE.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is not eligible for sign-in.",
+        )
+
+    try:
+        supabase_sign_in_with_otp(payload.email)
+    except SupabaseAuthError as exc:
+        if exc.status_code == 429:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        if exc.status_code is None or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="OTP login is temporarily unavailable. Try again later.",
+            ) from exc
+        logger.warning(
+            "Supabase OTP request rejected for existing account status=%s.",
+            exc.status_code or 0,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to send sign-in code. Please try again later.",
+        ) from exc
+
+    return {
+        "message": "A one-time code has been sent to your email address."
+    }
+
+
+@router.post("/otp/verify")
+def verify_otp_login(
+    payload: OtpVerifyRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Verify a passwordless sign-in OTP and return an authenticated session."""
+    _enforce_allowed_origin(request)
+    _otp_rate_limit(request, payload.email, verification=True)
+    try:
+        auth_result = supabase_verify_otp_login(payload.email, payload.token)
+    except SupabaseAuthError as exc:
+        logger.warning(
+            "Passwordless OTP verification failed status=%s.", exc.status_code or 0
+        )
+        if exc.status_code == 429:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many verification attempts. Try again later.",
+                headers={"Retry-After": "60"},
+            ) from exc
+        if exc.status_code is None or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Code verification is temporarily unavailable. Try again later.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The code is invalid or expired. Check it and try again.",
+        ) from exc
+
+    access_token = auth_result.get("access_token")
+    refresh_token = auth_result.get("refresh_token")
+    identity = auth_result.get("user")
+    if (
+        not isinstance(access_token, str)
+        or not access_token
+        or not isinstance(refresh_token, str)
+        or not refresh_token
+        or not isinstance(identity, dict)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The code is invalid or expired. Check it and try again.",
+        )
+
+    try:
+        user = sync_supabase_session(identity=identity, session=session)
+    except HTTPException as exc:
+        _record_login_failure(session, reason="trustvault_account_rejected")
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=_INVALID_CREDENTIALS,
+            ) from exc
+        raise
+
+    actor = session.get(User, user.id)
+    _commit_with_success_audit(
+        session,
+        action=AuditAction.LOGIN_SUCCESS,
+        actor=actor,
+        details={
+            "role": user.role,
+            "resource_type": "USER",
+            "target_user_id": str(user.id),
+            "source": "otp_login",
+        },
+    )
+    return {
+        "session": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        },
+        "user": user.model_dump(mode="json"),
+    }
 
 
 @router.get("/me", response_model=UserResponse)

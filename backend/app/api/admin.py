@@ -37,6 +37,7 @@ from app.services.admin_accounts import (
     AdminAccountOperationError,
     LastActiveAdministratorError,
     SelfAccountChangeError,
+    delete_account,
     update_account_role,
     update_account_status,
 )
@@ -401,6 +402,37 @@ def change_user_role(
         ),
         changed=changed,
     )
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_admin_user(
+    user_id: UUID,
+    current_user: User = Depends(require_admin_access),
+    session: Session = Depends(get_db),
+) -> Response:
+    try:
+        delete_account(
+            session,
+            actor=current_user,
+            target_user_id=user_id,
+        )
+    except (
+        AdminAccountNotFoundError,
+        SelfAccountChangeError,
+        LastActiveAdministratorError,
+        AdminAccountOperationError,
+    ) as exc:
+        if not isinstance(exc, AdminAccountOperationError):
+            _record_account_change_denial(
+                session,
+                actor=current_user,
+                target_user_id=user_id,
+                action=AuditAction.USER_DELETED,
+                reason=type(exc).__name__,
+            )
+        raise _account_error(exc) from exc
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

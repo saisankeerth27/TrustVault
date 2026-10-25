@@ -11,10 +11,12 @@ import { DocumentPermissionsPage } from '@/pages/DocumentPermissionsPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+import { OtpLoginPage } from '@/pages/OtpLoginPage'
 import { PasswordRecoveryPage } from '@/pages/PasswordRecoveryPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { SharedDocumentsPage } from '@/pages/SharedDocumentsPage'
 import { UploadPage } from '@/pages/UploadPage'
+import { VerifyAccountPage } from '@/pages/VerifyAccountPage'
 
 export function App() {
   return (
@@ -23,6 +25,9 @@ export function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/verify-account" element={<VerifyAccountPage />} />
+          <Route path="/otp-login" element={<OtpLoginPage />} />
+          <Route path="/login-otp" element={<OtpLoginPage />} />
           <Route path="/recover-password" element={<PasswordRecoveryPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>

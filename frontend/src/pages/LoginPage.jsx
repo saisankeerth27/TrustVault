@@ -211,10 +211,16 @@ export function LoginPage() {
               ) : null}
             </div>
 
-            <div className="-mt-2 text-right">
+            <div className="-mt-2 flex items-center justify-between text-sm">
+              <Link
+                to="/otp-login"
+                className="font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Sign in with OTP
+              </Link>
               <Link
                 to="/recover-password"
-                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                className="font-medium text-primary underline-offset-4 hover:underline"
               >
                 Forgot Password?
               </Link>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { ArrowRight, History, LoaderCircle, LockKeyhole, Share2, ShieldCheck } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
@@ -9,7 +9,6 @@ import { BrandMark } from '@/components/BrandMark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getApiErrorMessage } from '@/services/api'
-import { resendEmailConfirmation } from '@/services/auth'
 
 const PASSWORD_MIN_LENGTH = 12
 const PASSWORD_MAX_BYTES = 72
@@ -70,10 +69,6 @@ export function RegisterPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState(null)
-  const [registrationMessage, setRegistrationMessage] = useState(null)
-  const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState(null)
-  const [isResendingConfirmation, setIsResendingConfirmation] = useState(false)
-  const [emailRequestCooldown, setEmailRequestCooldown] = useState(0)
   const {
     register,
     handleSubmit,
@@ -86,15 +81,6 @@ export function RegisterPage() {
 
   const destination = redirectPathFrom(location.state)
 
-  useEffect(() => {
-    if (emailRequestCooldown <= 0) return undefined
-
-    const timer = window.setInterval(() => {
-      setEmailRequestCooldown((seconds) => Math.max(0, seconds - 1))
-    }, 1000)
-    return () => window.clearInterval(timer)
-  }, [emailRequestCooldown])
-
   if (status === 'loading') {
     return <AuthLoadingScreen />
   }
@@ -106,8 +92,6 @@ export function RegisterPage() {
   const onSubmit = async (values) => {
     clearErrors()
     setServerError(null)
-    setRegistrationMessage(null)
-    setPendingConfirmationEmail(null)
     const result = registerSchema.safeParse(values)
 
     if (!result.success) {
@@ -132,13 +116,14 @@ export function RegisterPage() {
         password: result.data.password,
       })
       if (registration.requiresEmailConfirmation) {
-        setPendingConfirmationEmail(result.data.email.toLowerCase())
-        setEmailRequestCooldown(DEFAULT_EMAIL_REQUEST_COOLDOWN_SECONDS)
-        setRegistrationMessage(
-          registration.accountCreated
-            ? 'Your account has been created. Check your email for confirmation instructions, then sign in.'
-            : 'If an account exists for this email, check your inbox for confirmation instructions. You can also sign in or reset your password.',
-        )
+        navigate('/verify-account', {
+          replace: true,
+          state: {
+            email: result.data.email.toLowerCase(),
+            name: result.data.name,
+            accountCreated: registration.accountCreated,
+          },
+        })
         return
       }
       navigate('/dashboard', {
@@ -146,29 +131,7 @@ export function RegisterPage() {
         state: { registrationMessage: 'Account created successfully.' },
       })
     } catch (error) {
-      const retryAfter = emailRequestRetryAfter(error)
-      if (retryAfter) setEmailRequestCooldown(retryAfter)
       setServerError(getApiErrorMessage(error))
-    }
-  }
-
-  async function resendConfirmation() {
-    if (!pendingConfirmationEmail || isResendingConfirmation) return
-
-    setServerError(null)
-    setIsResendingConfirmation(true)
-    try {
-      await resendEmailConfirmation(pendingConfirmationEmail)
-      setEmailRequestCooldown(DEFAULT_EMAIL_REQUEST_COOLDOWN_SECONDS)
-      setRegistrationMessage(
-        'If your account is awaiting confirmation, a new email has been requested. Check your inbox and spam folder.',
-      )
-    } catch (error) {
-      const retryAfter = emailRequestRetryAfter(error)
-      if (retryAfter) setEmailRequestCooldown(retryAfter)
-      setServerError(getApiErrorMessage(error))
-    } finally {
-      setIsResendingConfirmation(false)
     }
   }
 
@@ -262,34 +225,6 @@ export function RegisterPage() {
                   </Link>
                   .
                 </p>
-              </div>
-            ) : null}
-            {registrationMessage ? (
-              <div role="status" className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
-                {registrationMessage}
-                <p className="mt-2">
-                  <Link to="/login" className="underline">
-                    Return to Login
-                  </Link>
-                  {' · '}
-                  <Link to="/recover-password" className="underline">
-                    Forgot password?
-                  </Link>
-                </p>
-                {pendingConfirmationEmail ? (
-                  <button
-                    type="button"
-                    className="mt-3 font-medium text-primary underline underline-offset-4 disabled:text-muted-foreground"
-                    onClick={resendConfirmation}
-                    disabled={isResendingConfirmation || emailRequestCooldown > 0}
-                  >
-                    {isResendingConfirmation
-                      ? 'Requesting confirmation email…'
-                      : emailRequestCooldown > 0
-                        ? `Resend confirmation email in ${emailRequestCooldown}s`
-                      : 'Resend confirmation email'}
-                  </button>
-                ) : null}
               </div>
             ) : null}
 
@@ -390,15 +325,13 @@ export function RegisterPage() {
               type="submit"
               className="w-full"
               size="lg"
-              disabled={isSubmitting || emailRequestCooldown > 0}
+              disabled={isSubmitting}
             >
               {isSubmitting ? (
                 <>
                   <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
                   Creating account...
                 </>
-              ) : emailRequestCooldown > 0 ? (
-                `Try again in ${emailRequestCooldown}s`
               ) : (
                 <>
                   Create account
